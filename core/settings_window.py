@@ -1,19 +1,16 @@
 """
-设置窗口 - 左导航 + 工具栏 + 右卡片
-折叠动画、图标+文字→纯图标、搜索/折叠按钮换位
+设置窗口 - 折叠按钮在左侧导航栏顶部
+ZcChat 风格：收拢→导航上移+搜索图标左移
 """
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QWidget,
     QLabel, QSlider, QCheckBox, QComboBox, QPushButton,
-    QListWidget, QListWidgetItem, QScrollArea, QFrame,
-    QLineEdit, QSizePolicy, QToolButton
+    QListWidget, QListWidgetItem, QScrollArea, QFrame, QLineEdit
 )
-from PySide6.QtCore import (
-    Qt, QPropertyAnimation, QEasingCurve, QSize, QParallelAnimationGroup
-)
+from PySide6.QtCore import Qt, QPropertyAnimation, QEasingCurve
+from PySide6.QtGui import QPixmap, QPainter, QFont, QIcon
 
 
-# (图标, 文字, key, 启用)
 NAV_DATA = [
     ("⚙", "通用设置", "general", True),
     ("🤖", "AI模型", "ai_model", False),
@@ -24,7 +21,7 @@ NAV_DATA = [
 
 NAV_EXPANDED = 152
 NAV_COLLAPSED = 48
-ANIM_DURATION = 200  # ms
+ANIM_MS = 220
 
 
 class SettingsWindow(QDialog):
@@ -53,24 +50,24 @@ class SettingsWindow(QDialog):
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
 
-        # ─── 工具栏 ───
+        # 工具栏（只有搜索，没有折叠按钮）
         root.addWidget(self._build_toolbar())
 
-        # ─── 内容区 ───
-        content = QHBoxLayout()
-        content.setContentsMargins(0, 0, 0, 0)
-        content.setSpacing(0)
+        # 内容区
+        c = QHBoxLayout()
+        c.setContentsMargins(0, 0, 0, 0)
+        c.setSpacing(0)
 
         self.nav_frame = self._build_nav()
-        content.addWidget(self.nav_frame)
+        c.addWidget(self.nav_frame)
 
         self.right_area = self._build_right()
-        content.addWidget(self.right_area, 1)
+        c.addWidget(self.right_area, 1)
 
-        root.addLayout(content, 1)
+        root.addLayout(c, 1)
 
     # ═══════════════════════════════════════════
-    # 工具栏
+    # 工具栏——只有搜索
     # ═══════════════════════════════════════════
 
     def _build_toolbar(self):
@@ -78,21 +75,11 @@ class SettingsWindow(QDialog):
         bar.setFixedHeight(38)
         bar.setStyleSheet("QFrame{background:#e6e9ef;border-bottom:1px solid #d3d7de;}")
 
-        self.toolbar_layout = QHBoxLayout(bar)
-        self.toolbar_layout.setContentsMargins(8, 4, 10, 4)
-        self.toolbar_layout.setSpacing(6)
+        self.tbar_layout = QHBoxLayout(bar)
+        self.tbar_layout.setContentsMargins(10, 4, 10, 4)
+        self.tbar_layout.setSpacing(6)
 
-        # 折叠按钮（初始位置：左边第一个）
-        self.collapse_btn = QPushButton("☰")
-        self.collapse_btn.setFixedSize(28, 28)
-        self.collapse_btn.setToolTip("收起导航")
-        self.collapse_btn.setStyleSheet(
-            "QPushButton{background:transparent;border:none;font-size:16px;color:#555;border-radius:4px}"
-            "QPushButton:hover{background:rgba(0,0,0,0.08)}")
-        self.collapse_btn.clicked.connect(self._toggle_nav)
-        self.toolbar_layout.addWidget(self.collapse_btn)
-
-        # 搜索框
+        # 搜索框（初始显示）
         self.search_box = QLineEdit()
         self.search_box.setPlaceholderText("查找设置...")
         self.search_box.setClearButtonEnabled(True)
@@ -101,9 +88,9 @@ class SettingsWindow(QDialog):
             "QLineEdit{border:1px solid #d3d7de;border-radius:6px;padding:2px 8px;font-size:12px;background:#fff}"
             "QLineEdit:focus{border-color:#3b82f6}")
         self.search_box.textChanged.connect(self._on_search)
-        self.toolbar_layout.addWidget(self.search_box, 1)
+        self.tbar_layout.addWidget(self.search_box, 1)
 
-        # 搜索图标按钮（初始隐藏→收拢后显示在折叠按钮原位置）
+        # 搜索图标（收拢后显示在最左边）
         self.search_icon_btn = QPushButton("🔍")
         self.search_icon_btn.setFixedSize(28, 28)
         self.search_icon_btn.setToolTip("搜索")
@@ -112,93 +99,12 @@ class SettingsWindow(QDialog):
             "QPushButton:hover{background:rgba(0,0,0,0.08)}")
         self.search_icon_btn.clicked.connect(self._expand_nav)
         self.search_icon_btn.hide()
-        self.toolbar_layout.addWidget(self.search_icon_btn)
+        self.tbar_layout.insertWidget(0, self.search_icon_btn)
 
         return bar
 
     # ═══════════════════════════════════════════
-    # 折叠 / 展开（动画）
-    # ═══════════════════════════════════════════
-
-    def _toggle_nav(self):
-        self._collapsed = not self._collapsed
-
-        if self._collapsed:
-            self._collapse()
-        else:
-            self._expand()
-
-    def _expand_nav(self):
-        """搜索图标点击→展开导航"""
-        if self._collapsed:
-            self._collapsed = False
-            self._expand()
-
-    def _collapse(self):
-        # 动画：导航宽度收缩
-        anim = QPropertyAnimation(self.nav_frame, b"minimumWidth")
-        anim.setDuration(ANIM_DURATION)
-        anim.setStartValue(NAV_EXPANDED)
-        anim.setEndValue(NAV_COLLAPSED)
-        anim.setEasingCurve(QEasingCurve.InOutCubic)
-        anim.start()
-
-        # 同步设置最大宽度
-        anim2 = QPropertyAnimation(self.nav_frame, b"maximumWidth")
-        anim2.setDuration(ANIM_DURATION)
-        anim2.setStartValue(NAV_EXPANDED)
-        anim2.setEndValue(NAV_COLLAPSED)
-        anim2.setEasingCurve(QEasingCurve.InOutCubic)
-        anim2.start()
-
-        # 导航项隐藏文字
-        for i in range(self.nav_list.count()):
-            item = self.nav_list.item(i)
-            icon, text, _, _ = NAV_DATA[i]
-            item.setText("")
-
-        # 折叠按钮变 ▶，搜索框隐藏，搜索图标出现
-        self.collapse_btn.setText("▶")
-        self.collapse_btn.setToolTip("展开导航")
-        self.search_box.hide()
-        self.search_icon_btn.show()
-
-    def _expand(self):
-        anim = QPropertyAnimation(self.nav_frame, b"minimumWidth")
-        anim.setDuration(ANIM_DURATION)
-        anim.setStartValue(NAV_COLLAPSED)
-        anim.setEndValue(NAV_EXPANDED)
-        anim.setEasingCurve(QEasingCurve.InOutCubic)
-        anim.start()
-
-        anim2 = QPropertyAnimation(self.nav_frame, b"maximumWidth")
-        anim2.setDuration(ANIM_DURATION)
-        anim2.setStartValue(NAV_COLLAPSED)
-        anim2.setEndValue(NAV_EXPANDED)
-        anim2.setEasingCurve(QEasingCurve.InOutCubic)
-        anim2.start()
-
-        # 恢复文字
-        for i in range(self.nav_list.count()):
-            item = self.nav_list.item(i)
-            icon, text, _, _ = NAV_DATA[i]
-            item.setText(f"  {text}")
-
-        # 折叠按钮变 ☰，搜索框恢复，搜索图标隐藏
-        self.collapse_btn.setText("☰")
-        self.collapse_btn.setToolTip("收起导航")
-        self.search_icon_btn.hide()
-        self.search_box.show()
-
-    def _on_search(self, text):
-        for i in range(self.nav_list.count()):
-            item = self.nav_list.item(i)
-            _, label, _, _ = NAV_DATA[i]
-            visible = not text.strip() or text.strip().lower() in label.lower()
-            item.setHidden(not visible)
-
-    # ═══════════════════════════════════════════
-    # 左侧导航
+    # 左侧导航——折叠按钮在顶部
     # ═══════════════════════════════════════════
 
     def _build_nav(self):
@@ -207,9 +113,20 @@ class SettingsWindow(QDialog):
         frame.setStyleSheet("QFrame{background:#e6e9ef;border-right:1px solid #d3d7de;}")
 
         layout = QVBoxLayout(frame)
-        layout.setContentsMargins(4, 8, 4, 12)
-        layout.setSpacing(2)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
 
+        # ── 折叠按钮（在导航栏顶部） ──
+        self.collapse_btn = QPushButton("☰")
+        self.collapse_btn.setFixedHeight(32)
+        self.collapse_btn.setToolTip("收起导航")
+        self.collapse_btn.setStyleSheet(
+            "QPushButton{background:transparent;border:none;font-size:16px;color:#555;border-radius:0}"
+            "QPushButton:hover{background:rgba(0,0,0,0.05)}")
+        self.collapse_btn.clicked.connect(self._toggle_nav)
+        layout.addWidget(self.collapse_btn)
+
+        # ── 导航列表（固定高度，不滚动） ──
         self.nav_list = QListWidget()
         self.nav_list.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.nav_list.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
@@ -220,10 +137,10 @@ class SettingsWindow(QDialog):
             QListWidget::item:hover:!selected{background:rgba(255,255,255,0.4);}
         """)
 
-        for icon, text, key, enabled in NAV_DATA:
+        for emoji, text, key, enabled in NAV_DATA:
             item = QListWidgetItem(f"  {text}")
             item.setData(Qt.UserRole, key)
-            item.setIcon(self._make_icon(icon))
+            item.setIcon(self._icon(emoji))
             if not enabled:
                 item.setFlags(item.flags() & ~Qt.ItemIsEnabled)
                 item.setForeground(Qt.gray)
@@ -231,31 +148,82 @@ class SettingsWindow(QDialog):
 
         self.nav_list.setCurrentRow(0)
         self.nav_list.currentRowChanged.connect(self._on_nav_changed)
-
-        # 固定高度 = 每项高度 × 项数，不需要滚动
-        item_h = 38
-        self.nav_list.setFixedHeight(item_h * len(NAV_DATA) + 4)
+        # 固定高度=项目数×行高，不滚动
+        self.nav_list.setFixedHeight(38 * len(NAV_DATA) + 6)
 
         layout.addWidget(self.nav_list)
         layout.addStretch()
 
         return frame
 
-    def _make_icon(self, emoji: str):
-        """用 emoji 生成一个简单图标 QPixmap"""
-        from PySide6.QtGui import QPixmap, QPainter, QFont
+    def _icon(self, emoji):
         pm = QPixmap(20, 20)
         pm.fill(Qt.transparent)
-        painter = QPainter(pm)
-        font = QFont()
-        font.setPixelSize(16)
-        painter.setFont(font)
-        painter.drawText(pm.rect(), Qt.AlignCenter, emoji)
-        painter.end()
-        return pm
+        p = QPainter(pm)
+        f = QFont(); f.setPixelSize(16)
+        p.setFont(f)
+        p.drawText(pm.rect(), Qt.AlignCenter, emoji)
+        p.end()
+        return QIcon(pm)
 
     # ═══════════════════════════════════════════
-    # 右侧
+    # 折叠/展开逻辑
+    # ═══════════════════════════════════════════
+
+    def _toggle_nav(self):
+        self._collapsed = not self._collapsed
+        if self._collapsed:
+            self._do_collapse()
+        else:
+            self._do_expand()
+
+    def _expand_nav(self):
+        """搜索图标点击→展开导航"""
+        if self._collapsed:
+            self._collapsed = False
+            self._do_expand()
+
+    def _do_collapse(self):
+        # 导航栏收缩动画
+        self._anim_width(NAV_COLLAPSED)
+        # 导航项只显示图标
+        for i in range(self.nav_list.count()):
+            self.nav_list.item(i).setText("")
+        # 折叠按钮变 ▶
+        self.collapse_btn.setText("▶")
+        self.collapse_btn.setToolTip("展开导航")
+        # 搜索框隐藏，搜索图标显示在最左边
+        self.search_box.hide()
+        self.search_icon_btn.show()
+
+    def _do_expand(self):
+        self._anim_width(NAV_EXPANDED)
+        for i in range(self.nav_list.count()):
+            _, text, _, _ = NAV_DATA[i]
+            self.nav_list.item(i).setText(f"  {text}")
+        self.collapse_btn.setText("☰")
+        self.collapse_btn.setToolTip("收起导航")
+        self.search_icon_btn.hide()
+        self.search_box.show()
+
+    def _anim_width(self, target):
+        for prop in (b"minimumWidth", b"maximumWidth"):
+            a = QPropertyAnimation(self.nav_frame, prop)
+            a.setDuration(ANIM_MS)
+            a.setStartValue(self.nav_frame.width())
+            a.setEndValue(target)
+            a.setEasingCurve(QEasingCurve.InOutCubic)
+            a.start()
+
+    def _on_search(self, text):
+        for i in range(self.nav_list.count()):
+            item = self.nav_list.item(i)
+            _, label, _, _ = NAV_DATA[i]
+            visible = not text.strip() or text.strip().lower() in label.lower()
+            item.setHidden(not visible)
+
+    # ═══════════════════════════════════════════
+    # 右侧内容
     # ═══════════════════════════════════════════
 
     def _build_right(self):
@@ -290,16 +258,15 @@ class SettingsWindow(QDialog):
         btn_row = QHBoxLayout()
         btn_row.addStretch()
         for text, slot, pri in [("应用", self._on_apply, False), ("确定", self._on_ok, True), ("取消", self.reject, False)]:
-            btn = QPushButton(text)
-            btn.setStyleSheet(
+            b = QPushButton(text)
+            b.setStyleSheet(
                 "QPushButton{background:#3b82f6;color:#fff;border:none;border-radius:7px;padding:7px 22px;font-size:13px}"
                 "QPushButton:hover{background:#2563eb}" if pri else
                 "QPushButton{background:#fff;color:#444;border:1px solid #d3d7de;border-radius:7px;padding:7px 22px;font-size:13px}"
                 "QPushButton:hover{background:#f5f6fa}")
-            btn.clicked.connect(slot)
-            btn_row.addWidget(btn)
+            b.clicked.connect(slot)
+            btn_row.addWidget(b)
         layout.addLayout(btn_row)
-
         return right
 
     # ═══════════════════════════════════════════
@@ -308,27 +275,23 @@ class SettingsWindow(QDialog):
 
     def _on_nav_changed(self, idx):
         item = self.nav_list.item(idx)
-        if not item:
-            return
+        if not item: return
         self._switch_page(item.data(Qt.UserRole))
 
     def _switch_page(self, key):
         while self.card_layout.count():
             w = self.card_layout.takeAt(0)
-            if w.widget():
-                w.widget().deleteLater()
+            if w.widget(): w.widget().deleteLater()
 
         for _, text, k, _ in NAV_DATA:
-            if k == key:
-                self.page_title.setText(text)
-                break
+            if k == key: self.page_title.setText(text); break
 
         {"general": self._general, "ai_model": self._ai, "tts": self._tts,
          "asr": self._asr, "character": self._character}[key]()
         self.card_layout.addStretch()
 
     # ═══════════════════════════════════════════
-    # 页面
+    # 页面内容
     # ═══════════════════════════════════════════
 
     def _general(self):
@@ -369,9 +332,7 @@ class SettingsWindow(QDialog):
         for i in range(self.char_list.count()):
             if self.char_list.item(i).text() == self._current_char: self.char_list.setCurrentRow(i); break
         self.card_layout.addWidget(self.char_list)
-        t = QLabel("选择后点击「应用」切换角色")
-        t.setStyleSheet("color:#999;font-size:11px")
-        self.card_layout.addWidget(t)
+        t = QLabel("选择后点击「应用」切换角色"); t.setStyleSheet("color:#999;font-size:11px"); self.card_layout.addWidget(t)
         self._sec("接口设置"); self._ph("角色 API 接口将在后续版本中支持")
 
     # ═══════════════════════════════════════════
@@ -385,7 +346,7 @@ class SettingsWindow(QDialog):
         l = QLabel(t); l.setStyleSheet("color:#94a3b8;font-size:13px;padding:20px"); l.setAlignment(Qt.AlignCenter); self.card_layout.addWidget(l)
 
     # ═══════════════════════════════════════════
-    # 数据收集
+    # 数据
     # ═══════════════════════════════════════════
 
     def _collect(self):
