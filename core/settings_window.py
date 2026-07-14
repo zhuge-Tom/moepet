@@ -279,7 +279,8 @@ class SettingsWindow(QDialog):
 
     def _popup_children_menu(self, item, children):
         """弹出子项菜单"""
-        from PySide6.QtWidgets import QMenu, QAction
+        from PySide6.QtWidgets import QMenu
+        from PySide6.QtGui import QAction
         menu = QMenu(self)
         for emoji, text, key in children:
             action = QAction(f"{emoji}  {text}", self)
