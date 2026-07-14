@@ -42,8 +42,7 @@ class SettingsWindow(QDialog):
         self.setStyleSheet("QDialog{background:#f0f2f5;}")
 
         self._setup_ui()
-        # 默认展开角色设置并选中立绘设置
-        self._tree.topLevelItem(4).setExpanded(True)
+        # 默认选中立绘设置
         self._select_key("character_sprites")
 
     # ═══════════════════════════════════
