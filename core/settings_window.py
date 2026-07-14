@@ -1,13 +1,25 @@
 """
-设置窗口 - 桌面宠物配置面板
+设置窗口 - 左侧导航 + 右侧圆角卡片
+结构参考 ZcChat：通用/模型/语音合成/语音输入/角色设置
 """
 
 from PySide6.QtWidgets import (
-    QDialog, QVBoxLayout, QHBoxLayout, QTabWidget,
+    QDialog, QVBoxLayout, QHBoxLayout,
     QLabel, QSlider, QCheckBox, QComboBox, QPushButton,
-    QGroupBox, QFormLayout, QWidget, QListWidget, QListWidgetItem
+    QGroupBox, QFormLayout, QWidget, QListWidget, QListWidgetItem,
+    QScrollArea, QFrame, QLineEdit, QSpinBox
 )
 from PySide6.QtCore import Qt
+
+
+# 导航项定义：(显示文本, key, 是否启用)
+NAV_ITEMS = [
+    ("通用设置", "general", True),
+    ("AI模型设置", "ai_model", False),
+    ("语音合成设置", "tts", False),
+    ("语音输入设置", "asr", False),
+    ("角色设置", "character", True),
+]
 
 
 class SettingsWindow(QDialog):
@@ -18,206 +30,306 @@ class SettingsWindow(QDialog):
         self.config = config
         self.characters = characters
         self._current_char = current_char
-        self._settings_changed = False
 
         self.setWindowTitle("Moepet 设置")
-        self.setMinimumWidth(420)
-        self.setMinimumHeight(350)
+        self.setMinimumSize(560, 440)
+        self.resize(600, 460)
 
         self._setup_ui()
-        self._load_values()
+        self._switch_page("general")
 
-    # ─── UI 搭建 ──────────────────────────────
+    # ═══════════════════════════════════════════
+    # 主布局
+    # ═══════════════════════════════════════════
 
     def _setup_ui(self):
-        layout = QVBoxLayout(self)
+        self.setStyleSheet("QDialog { background: #f0f2f5; }")
 
-        # 标签页
-        self.tabs = QTabWidget()
-        self.tabs.addTab(self._create_character_tab(), "🎭 角色")
-        self.tabs.addTab(self._create_appearance_tab(), "✨ 外观")
-        self.tabs.addTab(self._create_behavior_tab(), "🎮 行为")
-        self.tabs.addTab(self._create_about_tab(), "ℹ️ 关于")
-        layout.addWidget(self.tabs)
+        root = QHBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
+
+        root.addWidget(self._build_left_nav())
+        root.addWidget(self._build_right_area(), 1)
+
+    def _build_left_nav(self) -> QWidget:
+        """左侧导航栏"""
+        nav_frame = QFrame()
+        nav_frame.setFixedWidth(150)
+        nav_frame.setStyleSheet("""
+            QFrame { background: #e6e9ef; border-right: 1px solid #d3d7de; }
+        """)
+
+        layout = QVBoxLayout(nav_frame)
+        layout.setContentsMargins(8, 16, 8, 16)
+        layout.setSpacing(2)
+
+        title = QLabel("  Moepet")
+        title.setStyleSheet("font-size: 14px; font-weight: bold; color: #2c3e50; padding: 4px 8px;")
+        layout.addWidget(title)
+        layout.addSpacing(10)
+
+        self.nav_list = QListWidget()
+        self.nav_list.setStyleSheet("""
+            QListWidget {
+                background: transparent; border: none; outline: none;
+                font-size: 13px;
+            }
+            QListWidget::item {
+                padding: 9px 12px; border-radius: 6px; color: #555;
+            }
+            QListWidget::item:selected {
+                background: #ffffff; color: #3b82f6; font-weight: bold;
+            }
+            QListWidget::item:hover:!selected {
+                background: rgba(255,255,255,0.4);
+            }
+        """)
+
+        for label, key, enabled in NAV_ITEMS:
+            item = QListWidgetItem(label)
+            item.setData(Qt.UserRole, key)
+            if not enabled:
+                item.setFlags(item.flags() & ~Qt.ItemIsEnabled)
+                item.setForeground(Qt.gray)
+            self.nav_list.addItem(item)
+
+        self.nav_list.setCurrentRow(0)
+        self.nav_list.currentRowChanged.connect(self._on_nav_changed)
+        layout.addWidget(self.nav_list)
+        layout.addStretch()
+
+        return nav_frame
+
+    def _build_right_area(self) -> QWidget:
+        """右侧：标题 + 圆角卡片 + 按钮"""
+        right = QWidget()
+        layout = QVBoxLayout(right)
+        layout.setContentsMargins(20, 16, 20, 16)
+        layout.setSpacing(10)
+
+        # 右上角标题
+        self.page_title = QLabel("通用设置")
+        self.page_title.setStyleSheet("font-size: 18px; font-weight: bold; color: #1e293b;")
+        layout.addWidget(self.page_title, alignment=Qt.AlignLeft)
+
+        # 圆角可滚动卡片
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setStyleSheet("""
+            QScrollArea { background: transparent; border: none; }
+            QScrollBar:vertical { width: 6px; background: transparent; border-radius: 3px; }
+            QScrollBar::handle:vertical { background: #c8ccd4; border-radius: 3px; min-height: 30px; }
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
+        """)
+
+        self.card = QFrame()
+        self.card.setStyleSheet("""
+            QFrame { background: #ffffff; border-radius: 14px; border: 1px solid #e2e6ed; }
+        """)
+        self.card_layout = QVBoxLayout(self.card)
+        self.card_layout.setContentsMargins(24, 20, 24, 20)
+        self.card_layout.setSpacing(14)
+
+        scroll.setWidget(self.card)
+        layout.addWidget(scroll, 1)
 
         # 底部按钮
-        btn_layout = QHBoxLayout()
-        btn_layout.addStretch()
+        btn_row = QHBoxLayout()
+        btn_row.addStretch()
+        for text, slot, primary in [
+            ("应用", self._on_apply, False),
+            ("确定", self._on_ok, True),
+            ("取消", self.reject, False),
+        ]:
+            btn = QPushButton(text)
+            if primary:
+                btn.setDefault(True)
+                btn.setStyleSheet("QPushButton{background:#3b82f6;color:#fff;border:none;border-radius:7px;padding:7px 22px;font-size:13px}QPushButton:hover{background:#2563eb}")
+            else:
+                btn.setStyleSheet("QPushButton{background:#fff;color:#444;border:1px solid #d3d7de;border-radius:7px;padding:7px 22px;font-size:13px}QPushButton:hover{background:#f5f6fa}")
+            btn.clicked.connect(slot)
+            btn_row.addWidget(btn)
+        layout.addLayout(btn_row)
 
-        apply_btn = QPushButton("应用")
-        apply_btn.clicked.connect(self._on_apply)
-        btn_layout.addWidget(apply_btn)
+        return right
 
-        ok_btn = QPushButton("确定")
-        ok_btn.clicked.connect(self._on_ok)
-        ok_btn.setDefault(True)
-        btn_layout.addWidget(ok_btn)
+    # ═══════════════════════════════════════════
+    # 页面切换
+    # ═══════════════════════════════════════════
 
-        cancel_btn = QPushButton("取消")
-        cancel_btn.clicked.connect(self.reject)
-        btn_layout.addWidget(cancel_btn)
+    def _on_nav_changed(self, index: int):
+        item = self.nav_list.item(index)
+        if not item:
+            return
+        key = item.data(Qt.UserRole)
+        self._switch_page(key)
 
-        layout.addLayout(btn_layout)
+    def _switch_page(self, key: str):
+        # 清空卡片
+        while self.card_layout.count():
+            child = self.card_layout.takeAt(0)
+            if child.widget():
+                child.widget().deleteLater()
 
-    # ─── 角色标签页 ───────────────────────────
+        # 更新标题
+        for label, k, _ in NAV_ITEMS:
+            if k == key:
+                self.page_title.setText(label)
+                break
 
-    def _create_character_tab(self):
-        w = QWidget()
-        layout = QVBoxLayout(w)
+        # 构建页面
+        builders = {
+            "general": self._build_general_page,
+            "ai_model": self._build_ai_model_page,
+            "tts": self._build_tts_page,
+            "asr": self._build_asr_page,
+            "character": self._build_character_page,
+        }
+        builders[key]()
+        self.card_layout.addStretch()
 
-        label = QLabel("当前角色：")
-        label.setStyleSheet("font-weight: bold; font-size: 13px;")
-        layout.addWidget(label)
+    # ═══════════════════════════════════════════
+    # 各页面
+    # ═══════════════════════════════════════════
 
-        self.char_list = QListWidget()
-        for name in self.characters:
-            item = QListWidgetItem(name)
-            self.char_list.addItem(item)
-        layout.addWidget(self.char_list)
-
-        tip = QLabel('选择角色后点击「应用」即可切换')
-        tip.setStyleSheet("color: gray; font-size: 11px;")
-        layout.addWidget(tip)
-
-        return w
-
-    # ─── 外观标签页 ───────────────────────────
-
-    def _create_appearance_tab(self):
-        w = QWidget()
-        layout = QVBoxLayout(w)
-
-        # 大小
-        size_group = QGroupBox("角色大小")
-        size_form = QFormLayout()
-        self.size_slider = QSlider(Qt.Horizontal)
-        self.size_slider.setRange(20, 200)  # 0.2x ~ 2.0x
-        self.size_slider.setTickPosition(QSlider.TicksBelow)
-        self.size_slider.setTickInterval(20)
-        self.size_label = QLabel("100%")
-        size_form.addRow("缩放比例：", self.size_slider)
-        size_form.addRow("", self.size_label)
-        size_group.setLayout(size_form)
-        layout.addWidget(size_group)
-
-        self.size_slider.valueChanged.connect(
-            lambda v: self.size_label.setText(f"{v}%")
-        )
-
-        # 窗口选项
-        win_group = QGroupBox("窗口选项")
-        win_layout = QVBoxLayout()
+    # ─── 通用设置 ───
+    def _build_general_page(self):
+        self._section("窗口")
         self.always_top_cb = QCheckBox("始终置顶")
-        win_layout.addWidget(self.always_top_cb)
-        win_group.setLayout(win_layout)
-        layout.addWidget(win_group)
+        self.always_top_cb.setStyleSheet("font-size:13px;")
+        self.card_layout.addWidget(self.always_top_cb)
 
-        layout.addStretch()
-        return w
+        self._section("缩放")
+        row = QHBoxLayout()
+        self.size_slider = QSlider(Qt.Horizontal)
+        self.size_slider.setRange(20, 200)
+        self.size_slider.setStyleSheet("QSlider::groove:horizontal{height:4px;background:#e2e6ed;border-radius:2px}QSlider::handle:horizontal{width:14px;height:14px;margin:-5px 0;background:#3b82f6;border-radius:7px}")
+        self.size_label = QLabel("100%")
+        self.size_label.setFixedWidth(42)
+        self.size_label.setStyleSheet("color:#3b82f6;font-weight:bold;font-size:13px;")
+        self.size_slider.valueChanged.connect(lambda v: self.size_label.setText(f"{v}%"))
+        row.addWidget(self.size_slider, 1)
+        row.addWidget(self.size_label)
+        self.card_layout.addLayout(row)
 
-    # ─── 行为标签页 ───────────────────────────
-
-    def _create_behavior_tab(self):
-        w = QWidget()
-        layout = QVBoxLayout(w)
-
-        click_group = QGroupBox("点击行为")
-        click_layout = QVBoxLayout()
+        self._section("行为")
         self.click_combo = QComboBox()
         self.click_combo.addItem("切换下一张立绘", "switch_sprite")
         self.click_combo.addItem("弹跳一下", "bounce")
         self.click_combo.addItem("无反应", "none")
-        click_layout.addWidget(self.click_combo)
-        click_group.setLayout(click_layout)
-        layout.addWidget(click_group)
+        self.click_combo.setStyleSheet("QComboBox{border:1px solid #d3d7de;border-radius:6px;padding:6px 10px;font-size:13px;}")
+        self.card_layout.addWidget(self.click_combo)
 
-        idle_group = QGroupBox("待机")
-        idle_layout = QVBoxLayout()
-        self.auto_idle_cb = QCheckBox("自动待机动画（定时切换立绘）")
-        idle_layout.addWidget(self.auto_idle_cb)
-        idle_group.setLayout(idle_layout)
-        layout.addWidget(idle_group)
+        self.auto_idle_cb = QCheckBox("自动待机动画")
+        self.auto_idle_cb.setStyleSheet("font-size:13px;")
+        self.card_layout.addWidget(self.auto_idle_cb)
 
-        layout.addStretch()
-        return w
+        # 加载值
+        self._load_general_values()
 
-    # ─── 关于标签页 ───────────────────────────
+    def _load_general_values(self):
+        self.always_top_cb.setChecked(self.config.get("behavior", "always_on_top", default=True))
+        self.size_slider.setValue(int(self.config.get("window", "scale", default=1.0) * 100))
+        action = self.config.get("behavior", "click_action", default="switch_sprite")
+        idx = self.click_combo.findData(action)
+        if idx >= 0:
+            self.click_combo.setCurrentIndex(idx)
+        self.auto_idle_cb.setChecked(self.config.get("behavior", "auto_idle", default=True))
 
-    def _create_about_tab(self):
-        w = QWidget()
-        layout = QVBoxLayout(w)
+    # ─── AI模型设置（占位） ───
+    def _build_ai_model_page(self):
+        self._placeholder("AI 对话功能将在后续版本中支持")
 
-        title = QLabel("🐱 Moepet - 萌系桌面宠物")
-        title.setStyleSheet("font-size: 16px; font-weight: bold;")
-        layout.addWidget(title)
+    # ─── 语音合成设置（占位） ───
+    def _build_tts_page(self):
+        self._placeholder("语音合成（TTS）功能将在后续版本中支持\n音色训练计划中")
 
-        info = QLabel(
-            "基于 PySide6 的动漫桌面宠物\n\n"
-            "角色来源：星空列车与白的旅行\n"
-            "角色：诺瓦 (nuowa)\n\n"
-            "GitHub: github.com/zhuge-Tom/moepet"
-        )
-        info.setStyleSheet("font-size: 12px; color: #555;")
-        info.setWordWrap(True)
-        layout.addWidget(info)
+    # ─── 语音输入设置（占位） ───
+    def _build_asr_page(self):
+        self._placeholder("语音输入（ASR）功能将在后续版本中支持")
 
-        layout.addStretch()
-        return w
-
-    # ─── 数据读写 ─────────────────────────────
-
-    def _load_values(self):
-        """从配置加载当前值"""
-        # 角色
+    # ─── 角色设置 ───
+    def _build_character_page(self):
+        # 立绘设置
+        self._section("立绘设置")
+        self.char_list = QListWidget()
+        self.char_list.setStyleSheet("""
+            QListWidget{border:1px solid #e2e6ed;border-radius:8px;padding:4px;font-size:13px;max-height:120px;}
+            QListWidget::item{padding:6px 10px;border-radius:4px;}
+            QListWidget::item:selected{background:#ecf3fd;color:#3b82f6;}
+        """)
+        for name in self.characters:
+            self.char_list.addItem(QListWidgetItem(name))
+        # 选中当前角色
         for i in range(self.char_list.count()):
             if self.char_list.item(i).text() == self._current_char:
                 self.char_list.setCurrentRow(i)
                 break
+        self.card_layout.addWidget(self.char_list)
 
-        # 外观
-        scale = self.config.get("window", "scale", default=1.0)
-        self.size_slider.setValue(int(scale * 100))
-        self.always_top_cb.setChecked(
-            self.config.get("behavior", "always_on_top", default=True)
-        )
+        tip = QLabel("选择后点击「应用」切换角色")
+        tip.setStyleSheet("color:#999;font-size:11px;")
+        self.card_layout.addWidget(tip)
 
-        # 行为
-        click_action = self.config.get("behavior", "click_action", default="switch_sprite")
-        idx = self.click_combo.findData(click_action)
-        if idx >= 0:
-            self.click_combo.setCurrentIndex(idx)
-        self.auto_idle_cb.setChecked(
-            self.config.get("behavior", "auto_idle", default=True)
-        )
+        # 接口设置
+        self._section("接口设置")
+        self._placeholder("角色 API 接口将在后续版本中支持")
+
+    # ═══════════════════════════════════════════
+    # 辅助
+    # ═══════════════════════════════════════════
+
+    def _section(self, text: str):
+        label = QLabel(text)
+        label.setStyleSheet("font-weight:bold;font-size:13px;color:#64748b;margin-top:2px;")
+        self.card_layout.addWidget(label)
+
+    def _placeholder(self, text: str):
+        lbl = QLabel(text)
+        lbl.setStyleSheet("color:#94a3b8;font-size:13px;padding:20px;")
+        lbl.setAlignment(Qt.AlignCenter)
+        self.card_layout.addWidget(lbl)
+
+    # ═══════════════════════════════════════════
+    # 数据收集
+    # ═══════════════════════════════════════════
 
     def _collect_values(self) -> dict:
-        """收集当前设置值"""
+        scale = getattr(self, 'size_slider', None)
+        always_top = getattr(self, 'always_top_cb', None)
+        click_combo = getattr(self, 'click_combo', None)
+        auto_idle = getattr(self, 'auto_idle_cb', None)
+        char_list = getattr(self, 'char_list', None)
+
         return {
             "current_character": (
-                self.char_list.currentItem().text()
-                if self.char_list.currentItem() else self._current_char
+                char_list.currentItem().text()
+                if char_list and char_list.currentItem() else self._current_char
             ),
-            "window": {
-                "scale": self.size_slider.value() / 100.0,
-            },
+            "window": {"scale": scale.value() / 100.0 if scale else 1.0},
             "behavior": {
-                "click_action": self.click_combo.currentData(),
-                "always_on_top": self.always_top_cb.isChecked(),
-                "auto_idle": self.auto_idle_cb.isChecked(),
+                "click_action": click_combo.currentData() if click_combo else "switch_sprite",
+                "always_on_top": always_top.isChecked() if always_top else True,
+                "auto_idle": auto_idle.isChecked() if auto_idle else True,
             }
         }
 
     def get_new_character(self) -> str | None:
-        """返回用户选择的新角色（如果切换了）"""
-        new = self.char_list.currentItem()
-        if new and new.text() != self._current_char:
-            return new.text()
+        char_list = getattr(self, 'char_list', None)
+        if not char_list:
+            return None
+        item = char_list.currentItem()
+        if item and item.text() != self._current_char:
+            return item.text()
         return None
 
-    # ─── 按钮回调 ─────────────────────────────
+    # ═══════════════════════════════════════════
+    # 按钮
+    # ═══════════════════════════════════════════
 
     def _on_apply(self):
-        """应用但不关闭"""
         values = self._collect_values()
         for key_path, update_dict in [
             (("window",), values["window"]),
@@ -228,13 +340,7 @@ class SettingsWindow(QDialog):
                 target = target.setdefault(k, {})
             target.update(update_dict)
         self.config.save()
-        self._settings_changed = True
 
     def _on_ok(self):
-        """应用并关闭"""
         self._on_apply()
         self.accept()
-
-    @property
-    def settings_changed(self) -> bool:
-        return self._settings_changed
