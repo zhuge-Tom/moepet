@@ -59,6 +59,7 @@ class SettingsWindow(QDialog):
         frame = QFrame()
         frame.setMinimumWidth(NAV_WIDE)
         frame.setMaximumWidth(NAV_WIDE)
+        frame.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Preferred)
         frame.setStyleSheet("QFrame{background:#e6e9ef;border-right:1px solid #d3d7de;}")
 
         layout = QVBoxLayout(frame)
