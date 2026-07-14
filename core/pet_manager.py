@@ -5,6 +5,7 @@
 import json
 from pathlib import Path
 
+from PySide6.QtWidgets import QDialog
 from PySide6.QtCore import Qt
 
 from core.config import Config
@@ -73,19 +74,31 @@ class PetManager:
     # ─── 设置窗口 ─────────────────────────────
 
     def _open_settings(self):
-        """打开设置窗口"""
+        """打开设置窗口（非模态，不阻塞桌宠交互）"""
         char_names = list(self.windows.keys())
         current = self.config.current_character
 
+        # 如果已有设置窗口打开，激活它
+        if hasattr(self, '_settings_dlg') and self._settings_dlg and self._settings_dlg.isVisible():
+            self._settings_dlg.activateWindow()
+            return
+
         dlg = SettingsWindow(self.config, char_names, current)
-        if dlg.exec():
-            # 用户点了"确定"
-            new_char = dlg.get_new_character()
-            if new_char and new_char != current:
-                self.switch_to(new_char)
-                # 更新所有窗口的菜单勾选状态
-                self._update_menus()
-            self._apply_settings()
+        dlg.setModal(False)
+        dlg.setAttribute(Qt.WA_DeleteOnClose)
+
+        def on_finished(result):
+            self._settings_dlg = None
+            if result == QDialog.Accepted:
+                new_char = dlg.get_new_character()
+                if new_char and new_char != current:
+                    self.switch_to(new_char)
+                    self._update_menus()
+                self._apply_settings()
+
+        dlg.finished.connect(on_finished)
+        self._settings_dlg = dlg
+        dlg.show()
 
     def _update_menus(self):
         """更新所有窗口的角色切换菜单"""
