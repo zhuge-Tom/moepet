@@ -138,6 +138,7 @@ class SettingsWindow(QDialog):
                 parent.addChild(child)
 
         self._tree.currentItemChanged.connect(self._on_tree_changed)
+        self._tree.itemClicked.connect(self._on_item_clicked)
 
         # 计算固定高度
         total_rows = sum(1 + len(ch) for _, _, _, _, ch in NAV_TREE)
@@ -257,6 +258,11 @@ class SettingsWindow(QDialog):
         if not cur: return
         key = cur.data(0, Qt.UserRole)
         self._switch_page(key)
+
+    def _on_item_clicked(self, item, col):
+        """单击切换展开/折叠"""
+        if item.childCount() > 0:
+            item.setExpanded(not item.isExpanded())
 
     def _select_key(self, key):
         """选中指定 key 的节点"""
