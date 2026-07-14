@@ -66,14 +66,14 @@ class SettingsWindow(QDialog):
         layout.setSpacing(0)
 
         # ── 描述区行（含隐藏的折叠按钮，收拢后才显示） ──
-        desc_row = QHBoxLayout()
-        desc_row.setContentsMargins(6, 6, 6, 2)
-        desc_row.setSpacing(4)
+        self._desc_row = QHBoxLayout()
+        self._desc_row.setContentsMargins(6, 6, 6, 2)
+        self._desc_row.setSpacing(4)
 
         self._desc_label = QLabel("Moepet")
         self._desc_label.setStyleSheet(
             "font-size:14px;font-weight:bold;color:#2c3e50;background:transparent;")
-        desc_row.addWidget(self._desc_label, 1)
+        self._desc_row.addWidget(self._desc_label, 1)
 
         # 折叠按钮A：在描述行，初始隐藏，收拢后显示
         self._collapse_top = QPushButton("▶")
@@ -84,14 +84,14 @@ class SettingsWindow(QDialog):
             "color:#555;border-radius:4px}QPushButton:hover{background:rgba(0,0,0,0.08)}")
         self._collapse_top.clicked.connect(self._expand_nav)
         self._collapse_top.hide()
-        desc_row.addWidget(self._collapse_top)
+        self._desc_row.addWidget(self._collapse_top)
 
-        layout.addLayout(desc_row)
+        layout.addLayout(self._desc_row)
 
         # ── 折叠+搜索行 ──
-        tool_row = QHBoxLayout()
-        tool_row.setContentsMargins(4, 2, 6, 4)
-        tool_row.setSpacing(4)
+        self._tool_row = QHBoxLayout()
+        self._tool_row.setContentsMargins(4, 2, 6, 4)
+        self._tool_row.setSpacing(4)
 
         # 折叠按钮B：在搜索行，初始显示，收拢后隐藏
         self._collapse_side = QPushButton("☰")
@@ -101,7 +101,7 @@ class SettingsWindow(QDialog):
             "QPushButton{background:transparent;border:none;font-size:16px;"
             "color:#555;border-radius:4px}QPushButton:hover{background:rgba(0,0,0,0.08)}")
         self._collapse_side.clicked.connect(self._toggle_nav)
-        tool_row.addWidget(self._collapse_side)
+        self._tool_row.addWidget(self._collapse_side)
 
         self.search_box = QLineEdit()
         self.search_box.setPlaceholderText("查找设置...")
@@ -111,7 +111,7 @@ class SettingsWindow(QDialog):
             "QLineEdit{border:1px solid #d3d7de;border-radius:6px;padding:2px 6px;"
             "font-size:11px;background:#fff}QLineEdit:focus{border-color:#3b82f6}")
         self.search_box.textChanged.connect(self._on_search)
-        tool_row.addWidget(self.search_box, 1)
+        self._tool_row.addWidget(self.search_box, 1)
 
         # 搜索图标（收拢后显示在搜索行最左）
         self._search_icon = QPushButton("🔍")
@@ -122,9 +122,9 @@ class SettingsWindow(QDialog):
             "border-radius:4px}QPushButton:hover{background:rgba(0,0,0,0.08)}")
         self._search_icon.clicked.connect(self._expand_nav)
         self._search_icon.hide()
-        tool_row.addWidget(self._search_icon)
+        self._tool_row.addWidget(self._search_icon)
 
-        layout.addLayout(tool_row)
+        layout.addLayout(self._tool_row)
 
         # ── 树形导航 ──
         self._tree = QTreeWidget()
@@ -183,13 +183,17 @@ class SettingsWindow(QDialog):
 
     def _do_collapse(self):
         self._anim_nav_width(NAV_NARROW)
-        # 描述文字消失，顶部折叠按钮出现（上移效果）
+        # 描述文字消失，顶部折叠按钮出现
         self._desc_label.hide()
         self._collapse_top.show()
-        # 搜索行折叠按钮隐藏，搜索框隐藏，🔍图标出现
+        # 压缩描述行高度
+        self._desc_row.setContentsMargins(0, 2, 0, 0)
+        # 搜索行折叠按钮隐藏，搜索框隐藏，🔍出现
         self._collapse_side.hide()
         self.search_box.hide()
         self._search_icon.show()
+        # 压缩搜索行高度
+        self._tool_row.setContentsMargins(0, 0, 0, 2)
         # 树项只显示图标
         for i in range(self._tree.topLevelItemCount()):
             self._strip(self._tree.topLevelItem(i))
@@ -198,9 +202,11 @@ class SettingsWindow(QDialog):
         self._anim_nav_width(NAV_WIDE)
         self._desc_label.show()
         self._collapse_top.hide()
+        self._desc_row.setContentsMargins(6, 6, 6, 2)
         self._collapse_side.show()
         self._search_icon.hide()
         self.search_box.show()
+        self._tool_row.setContentsMargins(4, 2, 6, 4)
         for i, (emoji, text, key, enabled, children) in enumerate(NAV_TREE):
             p = self._tree.topLevelItem(i)
             p.setText(0, f" {text}")
