@@ -1,18 +1,16 @@
 """
-设置窗口 - 左侧导航 + 右侧圆角卡片
-结构参考 ZcChat：通用/模型/语音合成/语音输入/角色设置
+设置窗口 - 左导航 + 工具栏(折叠/搜索) + 右圆角卡片
 """
 
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout,
     QLabel, QSlider, QCheckBox, QComboBox, QPushButton,
-    QGroupBox, QFormLayout, QWidget, QListWidget, QListWidgetItem,
-    QScrollArea, QFrame, QLineEdit, QSpinBox
+    QWidget, QListWidget, QListWidgetItem,
+    QScrollArea, QFrame, QLineEdit, QSizePolicy
 )
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QPropertyAnimation, QEasingCurve
 
 
-# 导航项定义：(显示文本, key, 是否启用)
 NAV_ITEMS = [
     ("通用设置", "general", True),
     ("AI模型设置", "ai_model", False),
@@ -20,6 +18,9 @@ NAV_ITEMS = [
     ("语音输入设置", "asr", False),
     ("角色设置", "character", True),
 ]
+
+NAV_WIDTH = 150
+NAV_COLLAPSED_WIDTH = 0
 
 
 class SettingsWindow(QDialog):
@@ -30,6 +31,7 @@ class SettingsWindow(QDialog):
         self.config = config
         self.characters = characters
         self._current_char = current_char
+        self._nav_collapsed = False
 
         self.setWindowTitle("Moepet 设置")
         self.setMinimumSize(560, 440)
@@ -45,29 +47,133 @@ class SettingsWindow(QDialog):
     def _setup_ui(self):
         self.setStyleSheet("QDialog { background: #f0f2f5; }")
 
-        root = QHBoxLayout(self)
+        root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
 
-        root.addWidget(self._build_left_nav())
-        root.addWidget(self._build_right_area(), 1)
+        # ─── 工具栏行 ───
+        root.addWidget(self._build_toolbar())
+
+        # ─── 内容区（左导航 + 右内容） ───
+        content = QHBoxLayout()
+        content.setContentsMargins(0, 0, 0, 0)
+        content.setSpacing(0)
+
+        self.nav_frame = self._build_left_nav()
+        content.addWidget(self.nav_frame)
+
+        self.right_area = self._build_right_area()
+        content.addWidget(self.right_area, 1)
+
+        root.addLayout(content, 1)
+
+    # ═══════════════════════════════════════════
+    # 工具栏
+    # ═══════════════════════════════════════════
+
+    def _build_toolbar(self) -> QWidget:
+        bar = QFrame()
+        bar.setFixedHeight(40)
+        bar.setStyleSheet("QFrame { background: #e6e9ef; border-bottom: 1px solid #d3d7de; }")
+
+        layout = QHBoxLayout(bar)
+        layout.setContentsMargins(8, 4, 12, 4)
+        layout.setSpacing(8)
+
+        # 折叠按钮
+        self.collapse_btn = QPushButton("☰")
+        self.collapse_btn.setFixedSize(28, 28)
+        self.collapse_btn.setStyleSheet("""
+            QPushButton {
+                background: transparent; border: none; font-size: 16px;
+                color: #555; border-radius: 4px;
+            }
+            QPushButton:hover { background: rgba(0,0,0,0.08); }
+        """)
+        self.collapse_btn.clicked.connect(self._toggle_nav)
+        layout.addWidget(self.collapse_btn)
+
+        # 搜索框
+        self.search_box = QLineEdit()
+        self.search_box.setPlaceholderText("查找设置...")
+        self.search_box.setClearButtonEnabled(True)
+        self.search_box.setFixedHeight(28)
+        self.search_box.setStyleSheet("""
+            QLineEdit {
+                border: 1px solid #d3d7de; border-radius: 6px;
+                padding: 2px 8px; font-size: 12px; background: #fff;
+            }
+            QLineEdit:focus { border-color: #3b82f6; }
+        """)
+        self.search_box.textChanged.connect(self._on_search)
+        layout.addWidget(self.search_box, 1)
+
+        # 搜索图标按钮（折叠后显示，初始隐藏）
+        self.search_icon_btn = QPushButton("🔍")
+        self.search_icon_btn.setFixedSize(28, 28)
+        self.search_icon_btn.setStyleSheet("""
+            QPushButton {
+                background: transparent; border: none; font-size: 14px;
+                border-radius: 4px;
+            }
+            QPushButton:hover { background: rgba(0,0,0,0.08); }
+        """)
+        self.search_icon_btn.clicked.connect(self._expand_search)
+        self.search_icon_btn.hide()
+        layout.addWidget(self.search_icon_btn)
+
+        return bar
+
+    # ═══════════════════════════════════════════
+    # 折叠/搜索逻辑
+    # ═══════════════════════════════════════════
+
+    def _toggle_nav(self):
+        self._nav_collapsed = not self._nav_collapsed
+
+        if self._nav_collapsed:
+            # 折叠：隐藏导航栏，搜索框变图标
+            self.nav_frame.setFixedWidth(0)
+            self.search_box.hide()
+            self.search_icon_btn.show()
+            self.collapse_btn.setText("▶")
+        else:
+            # 展开：恢复导航栏，图标变搜索框
+            self.nav_frame.setFixedWidth(NAV_WIDTH)
+            self.search_icon_btn.hide()
+            self.search_box.show()
+            self.collapse_btn.setText("☰")
+
+    def _expand_search(self):
+        """点击搜索图标时展开导航并恢复搜索框"""
+        self._nav_collapsed = False
+        self.nav_frame.setFixedWidth(NAV_WIDTH)
+        self.search_icon_btn.hide()
+        self.search_box.show()
+        self.collapse_btn.setText("☰")
+
+    def _on_search(self, text: str):
+        """搜索过滤导航项"""
+        for i in range(self.nav_list.count()):
+            item = self.nav_list.item(i)
+            label = item.text()
+            visible = text.strip() == "" or text.strip().lower() in label.lower()
+            item.setHidden(not visible)
+
+    # ═══════════════════════════════════════════
+    # 左侧导航
+    # ═══════════════════════════════════════════
 
     def _build_left_nav(self) -> QWidget:
-        """左侧导航栏"""
         nav_frame = QFrame()
-        nav_frame.setFixedWidth(150)
+        nav_frame.setFixedWidth(NAV_WIDTH)
         nav_frame.setStyleSheet("""
             QFrame { background: #e6e9ef; border-right: 1px solid #d3d7de; }
         """)
 
         layout = QVBoxLayout(nav_frame)
-        layout.setContentsMargins(8, 16, 8, 16)
+        layout.setContentsMargins(8, 8, 8, 16)
         layout.setSpacing(2)
-
-        title = QLabel("  Moepet")
-        title.setStyleSheet("font-size: 14px; font-weight: bold; color: #2c3e50; padding: 4px 8px;")
-        layout.addWidget(title)
-        layout.addSpacing(10)
 
         self.nav_list = QListWidget()
         self.nav_list.setStyleSheet("""
@@ -101,11 +207,14 @@ class SettingsWindow(QDialog):
 
         return nav_frame
 
+    # ═══════════════════════════════════════════
+    # 右侧
+    # ═══════════════════════════════════════════
+
     def _build_right_area(self) -> QWidget:
-        """右侧：标题 + 圆角卡片 + 按钮"""
         right = QWidget()
         layout = QVBoxLayout(right)
-        layout.setContentsMargins(20, 16, 20, 16)
+        layout.setContentsMargins(20, 12, 20, 16)
         layout.setSpacing(10)
 
         # 右上角标题
@@ -125,9 +234,7 @@ class SettingsWindow(QDialog):
         """)
 
         self.card = QFrame()
-        self.card.setStyleSheet("""
-            QFrame { background: #ffffff; border-radius: 14px; border: 1px solid #e2e6ed; }
-        """)
+        self.card.setStyleSheet("QFrame { background: #ffffff; border-radius: 14px; border: 1px solid #e2e6ed; }")
         self.card_layout = QVBoxLayout(self.card)
         self.card_layout.setContentsMargins(24, 20, 24, 20)
         self.card_layout.setSpacing(14)
@@ -135,7 +242,7 @@ class SettingsWindow(QDialog):
         scroll.setWidget(self.card)
         layout.addWidget(scroll, 1)
 
-        # 底部按钮
+        # 按钮
         btn_row = QHBoxLayout()
         btn_row.addStretch()
         for text, slot, primary in [
@@ -167,34 +274,29 @@ class SettingsWindow(QDialog):
         self._switch_page(key)
 
     def _switch_page(self, key: str):
-        # 清空卡片
         while self.card_layout.count():
             child = self.card_layout.takeAt(0)
             if child.widget():
                 child.widget().deleteLater()
 
-        # 更新标题
         for label, k, _ in NAV_ITEMS:
             if k == key:
                 self.page_title.setText(label)
                 break
 
-        # 构建页面
-        builders = {
+        {
             "general": self._build_general_page,
             "ai_model": self._build_ai_model_page,
             "tts": self._build_tts_page,
             "asr": self._build_asr_page,
             "character": self._build_character_page,
-        }
-        builders[key]()
+        }[key]()
         self.card_layout.addStretch()
 
     # ═══════════════════════════════════════════
     # 各页面
     # ═══════════════════════════════════════════
 
-    # ─── 通用设置 ───
     def _build_general_page(self):
         self._section("窗口")
         self.always_top_cb = QCheckBox("始终置顶")
@@ -226,7 +328,6 @@ class SettingsWindow(QDialog):
         self.auto_idle_cb.setStyleSheet("font-size:13px;")
         self.card_layout.addWidget(self.auto_idle_cb)
 
-        # 加载值
         self._load_general_values()
 
     def _load_general_values(self):
@@ -238,42 +339,30 @@ class SettingsWindow(QDialog):
             self.click_combo.setCurrentIndex(idx)
         self.auto_idle_cb.setChecked(self.config.get("behavior", "auto_idle", default=True))
 
-    # ─── AI模型设置（占位） ───
     def _build_ai_model_page(self):
         self._placeholder("AI 对话功能将在后续版本中支持")
 
-    # ─── 语音合成设置（占位） ───
     def _build_tts_page(self):
-        self._placeholder("语音合成（TTS）功能将在后续版本中支持\n音色训练计划中")
+        self._placeholder("语音合成（TTS）将在后续版本中支持\n音色训练计划中")
 
-    # ─── 语音输入设置（占位） ───
     def _build_asr_page(self):
-        self._placeholder("语音输入（ASR）功能将在后续版本中支持")
+        self._placeholder("语音输入（ASR）将在后续版本中支持")
 
-    # ─── 角色设置 ───
     def _build_character_page(self):
-        # 立绘设置
         self._section("立绘设置")
         self.char_list = QListWidget()
-        self.char_list.setStyleSheet("""
-            QListWidget{border:1px solid #e2e6ed;border-radius:8px;padding:4px;font-size:13px;max-height:120px;}
-            QListWidget::item{padding:6px 10px;border-radius:4px;}
-            QListWidget::item:selected{background:#ecf3fd;color:#3b82f6;}
-        """)
+        self.char_list.setStyleSheet("QListWidget{border:1px solid #e2e6ed;border-radius:8px;padding:4px;font-size:13px;max-height:120px}QListWidget::item{padding:6px 10px;border-radius:4px}QListWidget::item:selected{background:#ecf3fd;color:#3b82f6}")
         for name in self.characters:
             self.char_list.addItem(QListWidgetItem(name))
-        # 选中当前角色
         for i in range(self.char_list.count()):
             if self.char_list.item(i).text() == self._current_char:
                 self.char_list.setCurrentRow(i)
                 break
         self.card_layout.addWidget(self.char_list)
-
         tip = QLabel("选择后点击「应用」切换角色")
         tip.setStyleSheet("color:#999;font-size:11px;")
         self.card_layout.addWidget(tip)
 
-        # 接口设置
         self._section("接口设置")
         self._placeholder("角色 API 接口将在后续版本中支持")
 
@@ -324,10 +413,6 @@ class SettingsWindow(QDialog):
         if item and item.text() != self._current_char:
             return item.text()
         return None
-
-    # ═══════════════════════════════════════════
-    # 按钮
-    # ═══════════════════════════════════════════
 
     def _on_apply(self):
         values = self._collect_values()
