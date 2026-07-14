@@ -81,9 +81,8 @@ class PetWindow(QMainWindow):
         """设置右键菜单"""
         self.menu = QMenu(self)
 
-        # 角色切换子菜单
-        switch_menu = self.menu.addMenu("切换角色")
-        # 角色列表由外部注入（见 set_characters_menu）
+        # 角色切换子菜单（必须持有引用防止被 GC）
+        self._switch_menu = self.menu.addMenu("切换角色")
 
         self.menu.addSeparator()
 
@@ -94,14 +93,14 @@ class PetWindow(QMainWindow):
 
     def set_characters_menu(self, characters: list[str], current: str, callback):
         """设置角色切换菜单项"""
-        switch_menu = self.menu.actions()[0].menu()
-        if switch_menu:
-            switch_menu.clear()
+        if self._switch_menu:
+            self._switch_menu.clear()
             for name in characters:
-                action = QAction(f"【{'✓' if name == current else '  '}】 {name}", self)
+                label = f"【{'✓' if name == current else '  '}】 {name}"
+                action = QAction(label, self)
                 action.setData(name)
                 action.triggered.connect(lambda checked, n=name: callback(n))
-                switch_menu.addAction(action)
+                self._switch_menu.addAction(action)
 
     # ─── 立绘切换 ─────────────────────────────
 
