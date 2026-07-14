@@ -66,18 +66,15 @@ class SettingsWindow(QDialog):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        # ── 项目描述区 ──
-        self._desc_label = QLabel("  Moepet")
-        self._desc_label.setFixedHeight(36)
-        self._desc_label.setStyleSheet(
-            "font-size:14px;font-weight:bold;color:#2c3e50;"
-            "background:transparent;padding:6px 10px;")
-        layout.addWidget(self._desc_label)
+        # ── 描述区 + 折叠按钮（同一行） ──
+        desc_row = QHBoxLayout()
+        desc_row.setContentsMargins(6, 6, 6, 4)
+        desc_row.setSpacing(4)
 
-        # ── 折叠+搜索行 ──
-        top = QHBoxLayout()
-        top.setContentsMargins(4, 4, 6, 4)
-        top.setSpacing(4)
+        self._desc_label = QLabel("Moepet")
+        self._desc_label.setStyleSheet(
+            "font-size:14px;font-weight:bold;color:#2c3e50;background:transparent;")
+        desc_row.addWidget(self._desc_label, 1)
 
         self.collapse_btn = QPushButton("☰")
         self.collapse_btn.setFixedSize(30, 28)
@@ -86,7 +83,14 @@ class SettingsWindow(QDialog):
             "QPushButton{background:transparent;border:none;font-size:16px;"
             "color:#555;border-radius:4px}QPushButton:hover{background:rgba(0,0,0,0.08)}")
         self.collapse_btn.clicked.connect(self._toggle_nav)
-        top.addWidget(self.collapse_btn)
+        desc_row.addWidget(self.collapse_btn)
+
+        layout.addLayout(desc_row)
+
+        # ── 搜索行 ──
+        search_row = QHBoxLayout()
+        search_row.setContentsMargins(4, 4, 6, 4)
+        search_row.setSpacing(4)
 
         self.search_box = QLineEdit()
         self.search_box.setPlaceholderText("查找设置...")
@@ -96,7 +100,7 @@ class SettingsWindow(QDialog):
             "QLineEdit{border:1px solid #d3d7de;border-radius:6px;padding:2px 6px;"
             "font-size:11px;background:#fff}QLineEdit:focus{border-color:#3b82f6}")
         self.search_box.textChanged.connect(self._on_search)
-        top.addWidget(self.search_box, 1)
+        search_row.addWidget(self.search_box, 1)
 
         self.search_icon_btn = QPushButton("🔍")
         self.search_icon_btn.setFixedSize(30, 28)
@@ -106,9 +110,9 @@ class SettingsWindow(QDialog):
             "border-radius:4px}QPushButton:hover{background:rgba(0,0,0,0.08)}")
         self.search_icon_btn.clicked.connect(self._expand_nav)
         self.search_icon_btn.hide()
-        top.addWidget(self.search_icon_btn)
+        search_row.addWidget(self.search_icon_btn)
 
-        layout.addLayout(top)
+        layout.addLayout(search_row)
 
         # ── 树形导航 ──
         self._tree = QTreeWidget()
@@ -168,15 +172,13 @@ class SettingsWindow(QDialog):
 
     def _do_collapse(self):
         self._anim_nav_width(NAV_NARROW)
-        # 描述文字消失
+        # 描述文字消失，折叠按钮占满描述行
         self._desc_label.hide()
-        # 折叠按钮变▶上移到描述区位置
         self.collapse_btn.setText("▶")
-        self.collapse_btn.setFixedSize(NAV_NARROW - 8, 28)
-        # 搜索框隐藏，🔍出现在折叠原位置（搜索行最左）
+        # 搜索框隐藏，🔍出现在搜索行最左
         self.search_box.hide()
         self.search_icon_btn.show()
-        # 所有树项只显示图标
+        # 树项只显示图标
         for i in range(self._tree.topLevelItemCount()):
             self._strip_text(self._tree.topLevelItem(i))
 
@@ -184,7 +186,6 @@ class SettingsWindow(QDialog):
         self._anim_nav_width(NAV_WIDE)
         self._desc_label.show()
         self.collapse_btn.setText("☰")
-        self.collapse_btn.setFixedSize(30, 28)
         self.search_icon_btn.hide()
         self.search_box.show()
         for i, (emoji, text, key, enabled, children) in enumerate(NAV_TREE):
