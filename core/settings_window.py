@@ -111,6 +111,7 @@ class SettingsWindow(QDialog):
         self.nav_list = QListWidget()
         self.nav_list.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.nav_list.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.nav_list.verticalScrollBar().setEnabled(False)
         self.nav_list.setStyleSheet("""
             QListWidget{background:transparent;border:none;outline:none;font-size:13px;}
             QListWidget::item{padding:8px 8px;border-radius:6px;color:#555;}
