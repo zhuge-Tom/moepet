@@ -42,8 +42,8 @@ class SettingsWindow(QDialog):
         self.setStyleSheet("QDialog{background:#f0f2f5;}")
 
         self._setup_ui()
-        # 默认选中立绘设置
-        self._select_key("character_sprites")
+        # 默认选中通用设置
+        self._tree.setCurrentItem(self._tree.topLevelItem(0))
 
     # ═══════════════════════════════════
     # 主布局
