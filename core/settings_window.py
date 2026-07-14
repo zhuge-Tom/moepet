@@ -149,11 +149,15 @@ class SettingsWindow(QDialog):
                 p.setFlags(p.flags() & ~Qt.ItemIsEnabled)
                 p.setForeground(0, Qt.gray)
             self._tree.addTopLevelItem(p)
+            # 初始展开状态：创建子项
             for ct_emoji, ct, ck in children:
                 c = QTreeWidgetItem([f"{ct}"])
                 c.setData(0, Qt.UserRole, ck)
                 c.setIcon(0, self._icon(ct_emoji))
                 p.addChild(c)
+            # 保存子项数据供折叠/展开时重建
+            if children:
+                p.setData(0, Qt.UserRole + 1, children)
 
         self._tree.itemClicked.connect(self._on_item_clicked)
         self._tree.currentItemChanged.connect(self._on_tree_changed)
@@ -191,6 +195,8 @@ class SettingsWindow(QDialog):
         self.search_box.hide()
         self._search_icon.show()
         self._tool_row.setContentsMargins(0, 0, 0, 2)
+        # 移除所有子项（折叠后用弹菜单）
+        self._remove_all_children()
 
     def _do_expand(self):
         self._anim_nav_width(NAV_WIDE)
@@ -201,6 +207,23 @@ class SettingsWindow(QDialog):
         self._search_icon.hide()
         self.search_box.show()
         self._tool_row.setContentsMargins(4, 2, 6, 4)
+        # 恢复所有子项
+        self._restore_all_children()
+
+    def _remove_all_children(self):
+        for i in range(self._tree.topLevelItemCount()):
+            p = self._tree.topLevelItem(i)
+            while p.childCount() > 0:
+                p.removeChild(p.child(0))
+
+    def _restore_all_children(self):
+        for i, (emoji, text, key, enabled, children) in enumerate(NAV_TREE):
+            p = self._tree.topLevelItem(i)
+            for ct_emoji, ct, ck in children:
+                c = QTreeWidgetItem([f"{ct}"])
+                c.setData(0, Qt.UserRole, ck)
+                c.setIcon(0, self._icon(ct_emoji))
+                p.addChild(c)
 
     def _strip(self, item):
         item.setText(0, "")
@@ -237,24 +260,35 @@ class SettingsWindow(QDialog):
 
     def _on_tree_changed(self, cur, prev):
         if not cur: return
-        if cur.childCount() > 0:
-            return  # 父节点：展开由 itemClicked 处理
         self._switch_page(cur.data(0, Qt.UserRole))
 
     def _on_item_clicked(self, item, col):
-        """单击处理：父节点展开/折叠，子节点切换页面"""
-        if item.childCount() > 0:
-            item.setExpanded(not item.isExpanded())
+        """单击处理：有子项则弹菜单，否则切换页面"""
+        children = item.data(0, Qt.UserRole + 1)
+        if children:
+            self._popup_children_menu(item, children)
         else:
             self._switch_page(item.data(0, Qt.UserRole))
+
+    def _popup_children_menu(self, item, children):
+        """弹出子项菜单"""
+        from PySide6.QtWidgets import QMenu, QAction
+        menu = QMenu(self)
+        for emoji, text, key in children:
+            action = QAction(f"{emoji}  {text}", self)
+            action.setData(key)
+            action.triggered.connect(lambda checked, k=key: self._switch_page(k))
+            menu.addAction(action)
+        # 在 item 下方弹出
+        rect = self._tree.visualItemRect(item)
+        pos = self._tree.viewport().mapToGlobal(rect.bottomLeft())
+        menu.exec(pos)
     def _switch_page(self, key):
         while self.card_layout.count():
             w = self.card_layout.takeAt(0)
             if w.widget(): w.widget().deleteLater()
         for _, text, k, _, children in NAV_TREE:
             if k == key: self.page_title.setText(text); break
-            for _, ct, ck in children:
-                if ck == key: self.page_title.setText(ct); break
         {"general": self._general, "ai_model": self._ai, "tts": self._tts,
          "asr": self._asr, "character": self._character_parent,
          "character_api": self._character_api,
