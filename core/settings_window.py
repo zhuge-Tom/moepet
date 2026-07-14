@@ -1,5 +1,5 @@
 """
-设置窗口 - 导航栏含描述区 + 折叠上移 + 搜索左移
+设置窗口 - 双折叠按钮实现上移动画 + 搜索左移
 """
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QWidget,
@@ -46,7 +46,6 @@ class SettingsWindow(QDialog):
         root = QHBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
-
         self.nav_frame = self._build_nav()
         root.addWidget(self.nav_frame)
         root.addWidget(self._build_right(), 1)
@@ -66,9 +65,9 @@ class SettingsWindow(QDialog):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        # ── 描述区 + 折叠按钮（同一行） ──
+        # ── 描述区行（含隐藏的折叠按钮，收拢后才显示） ──
         desc_row = QHBoxLayout()
-        desc_row.setContentsMargins(6, 6, 6, 4)
+        desc_row.setContentsMargins(6, 6, 6, 2)
         desc_row.setSpacing(4)
 
         self._desc_label = QLabel("Moepet")
@@ -76,21 +75,33 @@ class SettingsWindow(QDialog):
             "font-size:14px;font-weight:bold;color:#2c3e50;background:transparent;")
         desc_row.addWidget(self._desc_label, 1)
 
-        self.collapse_btn = QPushButton("☰")
-        self.collapse_btn.setFixedSize(30, 28)
-        self.collapse_btn.setToolTip("收起导航")
-        self.collapse_btn.setStyleSheet(
-            "QPushButton{background:transparent;border:none;font-size:16px;"
+        # 折叠按钮A：在描述行，初始隐藏，收拢后显示
+        self._collapse_top = QPushButton("▶")
+        self._collapse_top.setFixedSize(NAV_NARROW - 8, 24)
+        self._collapse_top.setToolTip("展开导航")
+        self._collapse_top.setStyleSheet(
+            "QPushButton{background:transparent;border:none;font-size:14px;"
             "color:#555;border-radius:4px}QPushButton:hover{background:rgba(0,0,0,0.08)}")
-        self.collapse_btn.clicked.connect(self._toggle_nav)
-        desc_row.addWidget(self.collapse_btn)
+        self._collapse_top.clicked.connect(self._expand_nav)
+        self._collapse_top.hide()
+        desc_row.addWidget(self._collapse_top)
 
         layout.addLayout(desc_row)
 
-        # ── 搜索行 ──
-        search_row = QHBoxLayout()
-        search_row.setContentsMargins(4, 4, 6, 4)
-        search_row.setSpacing(4)
+        # ── 折叠+搜索行 ──
+        tool_row = QHBoxLayout()
+        tool_row.setContentsMargins(4, 2, 6, 4)
+        tool_row.setSpacing(4)
+
+        # 折叠按钮B：在搜索行，初始显示，收拢后隐藏
+        self._collapse_side = QPushButton("☰")
+        self._collapse_side.setFixedSize(30, 28)
+        self._collapse_side.setToolTip("收起导航")
+        self._collapse_side.setStyleSheet(
+            "QPushButton{background:transparent;border:none;font-size:16px;"
+            "color:#555;border-radius:4px}QPushButton:hover{background:rgba(0,0,0,0.08)}")
+        self._collapse_side.clicked.connect(self._toggle_nav)
+        tool_row.addWidget(self._collapse_side)
 
         self.search_box = QLineEdit()
         self.search_box.setPlaceholderText("查找设置...")
@@ -100,19 +111,20 @@ class SettingsWindow(QDialog):
             "QLineEdit{border:1px solid #d3d7de;border-radius:6px;padding:2px 6px;"
             "font-size:11px;background:#fff}QLineEdit:focus{border-color:#3b82f6}")
         self.search_box.textChanged.connect(self._on_search)
-        search_row.addWidget(self.search_box, 1)
+        tool_row.addWidget(self.search_box, 1)
 
-        self.search_icon_btn = QPushButton("🔍")
-        self.search_icon_btn.setFixedSize(30, 28)
-        self.search_icon_btn.setToolTip("搜索")
-        self.search_icon_btn.setStyleSheet(
+        # 搜索图标（收拢后显示在搜索行最左）
+        self._search_icon = QPushButton("🔍")
+        self._search_icon.setFixedSize(30, 28)
+        self._search_icon.setToolTip("搜索")
+        self._search_icon.setStyleSheet(
             "QPushButton{background:transparent;border:none;font-size:13px;"
             "border-radius:4px}QPushButton:hover{background:rgba(0,0,0,0.08)}")
-        self.search_icon_btn.clicked.connect(self._expand_nav)
-        self.search_icon_btn.hide()
-        search_row.addWidget(self.search_icon_btn)
+        self._search_icon.clicked.connect(self._expand_nav)
+        self._search_icon.hide()
+        tool_row.addWidget(self._search_icon)
 
-        layout.addLayout(search_row)
+        layout.addLayout(tool_row)
 
         # ── 树形导航 ──
         self._tree = QTreeWidget()
@@ -144,7 +156,6 @@ class SettingsWindow(QDialog):
 
         self._tree.currentItemChanged.connect(self._on_tree_changed)
         self._tree.itemClicked.connect(self._on_item_clicked)
-
         total_rows = sum(1 + len(ch) for _, _, _, _, ch in NAV_TREE)
         self._tree.setFixedHeight(ROW_H * total_rows + 8)
         layout.addWidget(self._tree)
@@ -172,21 +183,23 @@ class SettingsWindow(QDialog):
 
     def _do_collapse(self):
         self._anim_nav_width(NAV_NARROW)
-        # 描述文字消失，折叠按钮占满描述行
+        # 描述文字消失，顶部折叠按钮出现（上移效果）
         self._desc_label.hide()
-        self.collapse_btn.setText("▶")
-        # 搜索框隐藏，🔍出现在搜索行最左
+        self._collapse_top.show()
+        # 搜索行折叠按钮隐藏，搜索框隐藏，🔍图标出现
+        self._collapse_side.hide()
         self.search_box.hide()
-        self.search_icon_btn.show()
+        self._search_icon.show()
         # 树项只显示图标
         for i in range(self._tree.topLevelItemCount()):
-            self._strip_text(self._tree.topLevelItem(i))
+            self._strip(self._tree.topLevelItem(i))
 
     def _do_expand(self):
         self._anim_nav_width(NAV_WIDE)
         self._desc_label.show()
-        self.collapse_btn.setText("☰")
-        self.search_icon_btn.hide()
+        self._collapse_top.hide()
+        self._collapse_side.show()
+        self._search_icon.hide()
         self.search_box.show()
         for i, (emoji, text, key, enabled, children) in enumerate(NAV_TREE):
             p = self._tree.topLevelItem(i)
@@ -194,10 +207,10 @@ class SettingsWindow(QDialog):
             for j, (ct, ck) in enumerate(children):
                 p.child(j).setText(0, f"  {ct}")
 
-    def _strip_text(self, item):
+    def _strip(self, item):
         item.setText(0, "")
         for i in range(item.childCount()):
-            self._strip_text(item.child(i))
+            self._strip(item.child(i))
 
     def _anim_nav_width(self, target):
         cur = self.nav_frame.width()
@@ -222,12 +235,12 @@ class SettingsWindow(QDialog):
                 not text.strip() or text.strip().lower() in p.text(0).lower()))
 
     # ═══════════════════════════════════
-    # 页面切换
+    # 右侧 + 页面（不变）
     # ═══════════════════════════════════
 
     def _on_tree_changed(self, cur, prev):
         if not cur: return
-        if cur.childCount() > 0: return  # 父节点不切换页面
+        if cur.childCount() > 0: return
         self._switch_page(cur.data(0, Qt.UserRole))
 
     def _on_item_clicked(self, item, col):
@@ -242,60 +255,36 @@ class SettingsWindow(QDialog):
             if k == key: self.page_title.setText(text); break
             for ct, ck in children:
                 if ck == key: self.page_title.setText(ct); break
-        {
-            "general": self._general, "ai_model": self._ai, "tts": self._tts,
-            "asr": self._asr, "character": self._character_parent,
-            "character_api": self._character_api,
-            "character_sprites": self._character_sprites,
-        }[key]()
+        {"general": self._general, "ai_model": self._ai, "tts": self._tts,
+         "asr": self._asr, "character": self._character_parent,
+         "character_api": self._character_api,
+         "character_sprites": self._character_sprites}[key]()
         self.card_layout.addStretch()
-
-    # ═══════════════════════════════════
-    # 右侧
-    # ═══════════════════════════════════
 
     def _build_right(self):
         right = QWidget()
         layout = QVBoxLayout(right)
         layout.setContentsMargins(20, 12, 20, 16)
         layout.setSpacing(10)
-
         self.page_title = QLabel("通用设置")
         self.page_title.setStyleSheet("font-size:18px;font-weight:bold;color:#1e293b;")
         layout.addWidget(self.page_title, alignment=Qt.AlignLeft)
-
         scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QFrame.NoFrame)
-        scroll.setStyleSheet(
-            "QScrollArea{background:transparent;border:none}"
-            "QScrollBar:vertical{width:6px;background:transparent;border-radius:3px}"
-            "QScrollBar::handle:vertical{background:#c8ccd4;border-radius:3px;min-height:30px}"
-            "QScrollBar::add-line:vertical,QScrollBar::sub-line:vertical{height:0}")
-
+        scroll.setWidgetResizable(True); scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setStyleSheet("QScrollArea{background:transparent;border:none}QScrollBar:vertical{width:6px;background:transparent;border-radius:3px}QScrollBar::handle:vertical{background:#c8ccd4;border-radius:3px;min-height:30px}QScrollBar::add-line:vertical,QScrollBar::sub-line:vertical{height:0}")
         self.card = QFrame()
         self.card.setStyleSheet("QFrame{background:#fff;border-radius:14px;border:1px solid #e2e6ed;}")
         self.card_layout = QVBoxLayout(self.card)
         self.card_layout.setContentsMargins(24, 20, 24, 20)
         self.card_layout.setSpacing(14)
-        scroll.setWidget(self.card)
-        layout.addWidget(scroll, 1)
-
+        scroll.setWidget(self.card); layout.addWidget(scroll, 1)
         btn_row = QHBoxLayout(); btn_row.addStretch()
         for text, slot, pri in [("应用", self._on_apply, False), ("确定", self._on_ok, True), ("取消", self.reject, False)]:
             b = QPushButton(text)
-            b.setStyleSheet(
-                "QPushButton{background:#3b82f6;color:#fff;border:none;border-radius:7px;padding:7px 22px;font-size:13px}"
-                "QPushButton:hover{background:#2563eb}" if pri else
-                "QPushButton{background:#fff;color:#444;border:1px solid #d3d7de;border-radius:7px;padding:7px 22px;font-size:13px}"
-                "QPushButton:hover{background:#f5f6fa}")
+            b.setStyleSheet("QPushButton{background:#3b82f6;color:#fff;border:none;border-radius:7px;padding:7px 22px;font-size:13px}QPushButton:hover{background:#2563eb}" if pri else "QPushButton{background:#fff;color:#444;border:1px solid #d3d7de;border-radius:7px;padding:7px 22px;font-size:13px}QPushButton:hover{background:#f5f6fa}")
             b.clicked.connect(slot); btn_row.addWidget(b)
         layout.addLayout(btn_row)
         return right
-
-    # ═══════════════════════════════════
-    # 页面内容
-    # ═══════════════════════════════════
 
     def _general(self):
         self._sec("窗口"); self.always_top_cb = QCheckBox("始终置顶"); self.card_layout.addWidget(self.always_top_cb)
