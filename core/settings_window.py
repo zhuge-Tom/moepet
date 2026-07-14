@@ -1,16 +1,15 @@
 """
-设置窗口 - 树形导航：角色设置下含接口/立绘子项
-收拢→按钮上移 + 搜索变图标 + 右侧展开
+设置窗口 - 导航栏含描述区 + 折叠上移 + 搜索左移
 """
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QWidget,
     QLabel, QSlider, QCheckBox, QComboBox, QPushButton,
-    QScrollArea, QFrame, QLineEdit, QTreeWidget, QTreeWidgetItem
+    QScrollArea, QFrame, QLineEdit, QTreeWidget, QTreeWidgetItem,
+    QSizePolicy
 )
 from PySide6.QtCore import Qt, QPropertyAnimation, QEasingCurve
 from PySide6.QtGui import QPainter, QFont, QIcon, QPixmap
 
-# 树形导航：(emoji, 文字, key, 启用, 子项列表)
 NAV_TREE = [
     ("⚙", "通用设置", "general", True, []),
     ("🤖", "AI模型", "ai_model", False, []),
@@ -21,7 +20,6 @@ NAV_TREE = [
         ("立绘设置", "character_sprites"),
     ]),
 ]
-
 NAV_WIDE = 160
 NAV_NARROW = 48
 ANIM_MS = 220
@@ -42,12 +40,7 @@ class SettingsWindow(QDialog):
         self.setStyleSheet("QDialog{background:#f0f2f5;}")
 
         self._setup_ui()
-        # 默认选中通用设置
         self._tree.setCurrentItem(self._tree.topLevelItem(0))
-
-    # ═══════════════════════════════════
-    # 主布局
-    # ═══════════════════════════════════
 
     def _setup_ui(self):
         root = QHBoxLayout(self)
@@ -56,12 +49,10 @@ class SettingsWindow(QDialog):
 
         self.nav_frame = self._build_nav()
         root.addWidget(self.nav_frame)
-
-        self.right_area = self._build_right()
-        root.addWidget(self.right_area, 1)
+        root.addWidget(self._build_right(), 1)
 
     # ═══════════════════════════════════
-    # 左侧导航
+    # 导航栏
     # ═══════════════════════════════════
 
     def _build_nav(self):
@@ -74,15 +65,25 @@ class SettingsWindow(QDialog):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        # ── 顶行 ──
+        # ── 项目描述区 ──
+        self._desc_label = QLabel("  Moepet")
+        self._desc_label.setFixedHeight(36)
+        self._desc_label.setStyleSheet(
+            "font-size:14px;font-weight:bold;color:#2c3e50;"
+            "background:transparent;padding:6px 10px;")
+        layout.addWidget(self._desc_label)
+
+        # ── 折叠+搜索行 ──
         top = QHBoxLayout()
-        top.setContentsMargins(4, 6, 6, 4)
+        top.setContentsMargins(4, 4, 6, 4)
         top.setSpacing(4)
 
         self.collapse_btn = QPushButton("☰")
         self.collapse_btn.setFixedSize(30, 28)
         self.collapse_btn.setToolTip("收起导航")
-        self.collapse_btn.setStyleSheet("QPushButton{background:transparent;border:none;font-size:16px;color:#555;border-radius:4px}QPushButton:hover{background:rgba(0,0,0,0.08)}")
+        self.collapse_btn.setStyleSheet(
+            "QPushButton{background:transparent;border:none;font-size:16px;"
+            "color:#555;border-radius:4px}QPushButton:hover{background:rgba(0,0,0,0.08)}")
         self.collapse_btn.clicked.connect(self._toggle_nav)
         top.addWidget(self.collapse_btn)
 
@@ -90,14 +91,18 @@ class SettingsWindow(QDialog):
         self.search_box.setPlaceholderText("查找设置...")
         self.search_box.setClearButtonEnabled(True)
         self.search_box.setFixedHeight(28)
-        self.search_box.setStyleSheet("QLineEdit{border:1px solid #d3d7de;border-radius:6px;padding:2px 6px;font-size:11px;background:#fff}QLineEdit:focus{border-color:#3b82f6}")
+        self.search_box.setStyleSheet(
+            "QLineEdit{border:1px solid #d3d7de;border-radius:6px;padding:2px 6px;"
+            "font-size:11px;background:#fff}QLineEdit:focus{border-color:#3b82f6}")
         self.search_box.textChanged.connect(self._on_search)
         top.addWidget(self.search_box, 1)
 
         self.search_icon_btn = QPushButton("🔍")
         self.search_icon_btn.setFixedSize(30, 28)
         self.search_icon_btn.setToolTip("搜索")
-        self.search_icon_btn.setStyleSheet("QPushButton{background:transparent;border:none;font-size:13px;border-radius:4px}QPushButton:hover{background:rgba(0,0,0,0.08)}")
+        self.search_icon_btn.setStyleSheet(
+            "QPushButton{background:transparent;border:none;font-size:13px;"
+            "border-radius:4px}QPushButton:hover{background:rgba(0,0,0,0.08)}")
         self.search_icon_btn.clicked.connect(self._expand_nav)
         self.search_icon_btn.hide()
         top.addWidget(self.search_icon_btn)
@@ -117,33 +122,26 @@ class SettingsWindow(QDialog):
             QTreeWidget::item{padding:7px 6px;border-radius:6px;color:#555;}
             QTreeWidget::item:selected{background:#fff;color:#3b82f6;font-weight:bold;}
             QTreeWidget::item:hover:!selected{background:rgba(255,255,255,0.4);}
-            QTreeWidget::branch:has-children:!has-siblings:closed,
-            QTreeWidget::branch:closed:has-children:has-siblings{border-image:none;image:none;}
-            QTreeWidget::branch:open:has-children:!has-siblings,
-            QTreeWidget::branch:open:has-children:has-siblings{border-image:none;image:none;}
         """)
 
         for emoji, text, key, enabled, children in NAV_TREE:
-            parent = QTreeWidgetItem([f" {text}"])
-            parent.setData(0, Qt.UserRole, key)
-            parent.setIcon(0, self._icon(emoji))
+            p = QTreeWidgetItem([f" {text}"])
+            p.setData(0, Qt.UserRole, key)
+            p.setIcon(0, self._icon(emoji))
             if not enabled:
-                parent.setFlags(parent.flags() & ~Qt.ItemIsEnabled)
-                parent.setForeground(0, Qt.gray)
-            self._tree.addTopLevelItem(parent)
-
-            for child_text, child_key in children:
-                child = QTreeWidgetItem([f"  {child_text}"])
-                child.setData(0, Qt.UserRole, child_key)
-                parent.addChild(child)
+                p.setFlags(p.flags() & ~Qt.ItemIsEnabled)
+                p.setForeground(0, Qt.gray)
+            self._tree.addTopLevelItem(p)
+            for ct, ck in children:
+                c = QTreeWidgetItem([f"  {ct}"])
+                c.setData(0, Qt.UserRole, ck)
+                p.addChild(c)
 
         self._tree.currentItemChanged.connect(self._on_tree_changed)
         self._tree.itemClicked.connect(self._on_item_clicked)
 
-        # 计算固定高度
         total_rows = sum(1 + len(ch) for _, _, _, _, ch in NAV_TREE)
         self._tree.setFixedHeight(ROW_H * total_rows + 8)
-
         layout.addWidget(self._tree)
         layout.addStretch()
         return frame
@@ -169,21 +167,30 @@ class SettingsWindow(QDialog):
 
     def _do_collapse(self):
         self._anim_nav_width(NAV_NARROW)
-        # 所有项只显示图标
+        # 描述文字消失
+        self._desc_label.hide()
+        # 折叠按钮变▶上移到描述区位置
+        self.collapse_btn.setText("▶")
+        self.collapse_btn.setFixedSize(NAV_NARROW - 8, 28)
+        # 搜索框隐藏，🔍出现在折叠原位置（搜索行最左）
+        self.search_box.hide()
+        self.search_icon_btn.show()
+        # 所有树项只显示图标
         for i in range(self._tree.topLevelItemCount()):
             self._strip_text(self._tree.topLevelItem(i))
-        self.collapse_btn.setText("▶"); self.collapse_btn.setFixedSize(24, 24)
-        self.search_box.hide(); self.search_icon_btn.show()
 
     def _do_expand(self):
         self._anim_nav_width(NAV_WIDE)
+        self._desc_label.show()
+        self.collapse_btn.setText("☰")
+        self.collapse_btn.setFixedSize(30, 28)
+        self.search_icon_btn.hide()
+        self.search_box.show()
         for i, (emoji, text, key, enabled, children) in enumerate(NAV_TREE):
-            parent = self._tree.topLevelItem(i)
-            parent.setText(0, f" {text}")
+            p = self._tree.topLevelItem(i)
+            p.setText(0, f" {text}")
             for j, (ct, ck) in enumerate(children):
-                parent.child(j).setText(0, f"  {ct}")
-        self.collapse_btn.setText("☰"); self.collapse_btn.setFixedSize(30, 28)
-        self.search_icon_btn.hide(); self.search_box.show()
+                p.child(j).setText(0, f"  {ct}")
 
     def _strip_text(self, item):
         item.setText(0, "")
@@ -201,18 +208,45 @@ class SettingsWindow(QDialog):
             a.start()
 
     def _on_search(self, text):
-        def match(item):
-            return not text.strip() or text.strip().lower() in item.text(0).lower()
-
         for i in range(self._tree.topLevelItemCount()):
             p = self._tree.topLevelItem(i)
-            any_visible = False
+            any_vis = False
             for j in range(p.childCount()):
                 c = p.child(j)
-                visible = match(c)
-                c.setHidden(not visible)
-                if visible: any_visible = True
-            p.setHidden(not any_visible and not match(p))
+                v = not text.strip() or text.strip().lower() in c.text(0).lower()
+                c.setHidden(not v)
+                if v: any_vis = True
+            p.setHidden(not any_vis and not (
+                not text.strip() or text.strip().lower() in p.text(0).lower()))
+
+    # ═══════════════════════════════════
+    # 页面切换
+    # ═══════════════════════════════════
+
+    def _on_tree_changed(self, cur, prev):
+        if not cur: return
+        if cur.childCount() > 0: return  # 父节点不切换页面
+        self._switch_page(cur.data(0, Qt.UserRole))
+
+    def _on_item_clicked(self, item, col):
+        if item.childCount() > 0:
+            item.setExpanded(not item.isExpanded())
+
+    def _switch_page(self, key):
+        while self.card_layout.count():
+            w = self.card_layout.takeAt(0)
+            if w.widget(): w.widget().deleteLater()
+        for _, text, k, _, children in NAV_TREE:
+            if k == key: self.page_title.setText(text); break
+            for ct, ck in children:
+                if ck == key: self.page_title.setText(ct); break
+        {
+            "general": self._general, "ai_model": self._ai, "tts": self._tts,
+            "asr": self._asr, "character": self._character_parent,
+            "character_api": self._character_api,
+            "character_sprites": self._character_sprites,
+        }[key]()
+        self.card_layout.addStretch()
 
     # ═══════════════════════════════════
     # 右侧
@@ -224,84 +258,41 @@ class SettingsWindow(QDialog):
         layout.setContentsMargins(20, 12, 20, 16)
         layout.setSpacing(10)
 
-        self.page_title = QLabel("立绘设置")
+        self.page_title = QLabel("通用设置")
         self.page_title.setStyleSheet("font-size:18px;font-weight:bold;color:#1e293b;")
         layout.addWidget(self.page_title, alignment=Qt.AlignLeft)
 
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.NoFrame)
-        scroll.setStyleSheet("QScrollArea{background:transparent;border:none}QScrollBar:vertical{width:6px;background:transparent;border-radius:3px}QScrollBar::handle:vertical{background:#c8ccd4;border-radius:3px;min-height:30px}QScrollBar::add-line:vertical,QScrollBar::sub-line:vertical{height:0}")
+        scroll.setStyleSheet(
+            "QScrollArea{background:transparent;border:none}"
+            "QScrollBar:vertical{width:6px;background:transparent;border-radius:3px}"
+            "QScrollBar::handle:vertical{background:#c8ccd4;border-radius:3px;min-height:30px}"
+            "QScrollBar::add-line:vertical,QScrollBar::sub-line:vertical{height:0}")
 
         self.card = QFrame()
         self.card.setStyleSheet("QFrame{background:#fff;border-radius:14px;border:1px solid #e2e6ed;}")
         self.card_layout = QVBoxLayout(self.card)
         self.card_layout.setContentsMargins(24, 20, 24, 20)
         self.card_layout.setSpacing(14)
-
         scroll.setWidget(self.card)
         layout.addWidget(scroll, 1)
 
         btn_row = QHBoxLayout(); btn_row.addStretch()
         for text, slot, pri in [("应用", self._on_apply, False), ("确定", self._on_ok, True), ("取消", self.reject, False)]:
             b = QPushButton(text)
-            b.setStyleSheet("QPushButton{background:#3b82f6;color:#fff;border:none;border-radius:7px;padding:7px 22px;font-size:13px}QPushButton:hover{background:#2563eb}" if pri else "QPushButton{background:#fff;color:#444;border:1px solid #d3d7de;border-radius:7px;padding:7px 22px;font-size:13px}QPushButton:hover{background:#f5f6fa}")
+            b.setStyleSheet(
+                "QPushButton{background:#3b82f6;color:#fff;border:none;border-radius:7px;padding:7px 22px;font-size:13px}"
+                "QPushButton:hover{background:#2563eb}" if pri else
+                "QPushButton{background:#fff;color:#444;border:1px solid #d3d7de;border-radius:7px;padding:7px 22px;font-size:13px}"
+                "QPushButton:hover{background:#f5f6fa}")
             b.clicked.connect(slot); btn_row.addWidget(b)
         layout.addLayout(btn_row)
         return right
 
     # ═══════════════════════════════════
-    # 页面切换
-    # ═══════════════════════════════════
-
-    def _on_tree_changed(self, cur, prev):
-        if not cur: return
-        # 父节点（有子项）不切换页面，只展开/折叠
-        if cur.childCount() > 0:
-            return
-        key = cur.data(0, Qt.UserRole)
-        self._switch_page(key)
-
-    def _on_item_clicked(self, item, col):
-        """单击切换展开/折叠"""
-        if item.childCount() > 0:
-            item.setExpanded(not item.isExpanded())
-
-    def _select_key(self, key):
-        """选中指定 key 的节点"""
-        def find(item):
-            if item.data(0, Qt.UserRole) == key:
-                self._tree.setCurrentItem(item)
-                return True
-            for i in range(item.childCount()):
-                if find(item.child(i)): return True
-            return False
-        for i in range(self._tree.topLevelItemCount()):
-            if find(self._tree.topLevelItem(i)): break
-
-    def _switch_page(self, key):
-        while self.card_layout.count():
-            w = self.card_layout.takeAt(0)
-            if w.widget(): w.widget().deleteLater()
-
-        # 找标题
-        for _, text, k, _, children in NAV_TREE:
-            if k == key: self.page_title.setText(text); break
-            for ct, ck in children:
-                if ck == key: self.page_title.setText(ct); break
-
-        builders = {
-            "general": self._general,
-            "ai_model": self._ai, "tts": self._tts, "asr": self._asr,
-            "character": self._character_parent,
-            "character_api": self._character_api,
-            "character_sprites": self._character_sprites,
-        }
-        builders[key]()
-        self.card_layout.addStretch()
-
-    # ═══════════════════════════════════
-    # 页面
+    # 页面内容
     # ═══════════════════════════════════
 
     def _general(self):
@@ -332,13 +323,8 @@ class SettingsWindow(QDialog):
     def _ai(self): self._ph("AI 对话功能将在后续版本中支持")
     def _tts(self): self._ph("语音合成（TTS）将在后续版本中支持\n音色训练计划中")
     def _asr(self): self._ph("语音输入（ASR）将在后续版本中支持")
-
-    def _character_parent(self):
-        """点击'角色设置'父节点 → 显示占位"""
-        self._ph("请在下方子项中选择「接口设置」或「立绘设置」")
-
-    def _character_api(self):
-        self._ph("角色 API 接口将在后续版本中支持")
+    def _character_parent(self): self._ph("请在下方选择「接口设置」或「立绘设置」")
+    def _character_api(self): self._ph("角色 API 接口将在后续版本中支持")
 
     def _character_sprites(self):
         self._sec("立绘设置")
@@ -346,10 +332,8 @@ class SettingsWindow(QDialog):
         self.char_list.setHeaderHidden(True)
         self.char_list.setStyleSheet("QTreeWidget{border:1px solid #e2e6ed;border-radius:8px;padding:4px;font-size:13px;max-height:120px}QTreeWidget::item{padding:6px 10px;border-radius:4px}QTreeWidget::item:selected{background:#ecf3fd;color:#3b82f6}")
         for n in self.characters:
-            item = QTreeWidgetItem([n])
-            self.char_list.addTopLevelItem(item)
-            if n == self._current_char:
-                self.char_list.setCurrentItem(item)
+            item = QTreeWidgetItem([n]); self.char_list.addTopLevelItem(item)
+            if n == self._current_char: self.char_list.setCurrentItem(item)
         self.card_layout.addWidget(self.char_list)
         t = QLabel("选择后点击「应用」切换角色"); t.setStyleSheet("color:#999;font-size:11px"); self.card_layout.addWidget(t)
 
@@ -358,17 +342,12 @@ class SettingsWindow(QDialog):
     def _ph(self,t):
         l=QLabel(t); l.setStyleSheet("color:#94a3b8;font-size:13px;padding:20px"); l.setAlignment(Qt.AlignCenter); self.card_layout.addWidget(l)
 
-    # ═══════════════════════════════════
-    # 数据
-    # ═══════════════════════════════════
-
     def _collect(self):
         s=getattr(self,'size_slider',None); t=getattr(self,'always_top_cb',None)
         c=getattr(self,'click_combo',None); a=getattr(self,'auto_idle_cb',None)
         cl=getattr(self,'char_list',None)
         curr = self._current_char
-        if cl and cl.currentItem():
-            curr = cl.currentItem().text(0)
+        if cl and cl.currentItem(): curr = cl.currentItem().text(0)
         return {"current_character":curr,
                 "window":{"scale":s.value()/100.0 if s else 1.0},
                 "behavior":{"click_action":c.currentData() if c else "switch_sprite",
