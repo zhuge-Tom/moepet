@@ -161,6 +161,8 @@ class SettingsWindow(QDialog):
 
         self._tree.itemClicked.connect(self._on_item_clicked)
         self._tree.currentItemChanged.connect(self._on_tree_changed)
+        # 折叠后树太窄，viewport 事件捕获兜底
+        self._tree.viewport().installEventFilter(self)
         total_rows = sum(1 + len(ch) for _, _, _, _, ch in NAV_TREE)
         self._tree.setFixedHeight(ROW_H * total_rows + 8)
         layout.addWidget(self._tree)
@@ -225,10 +227,15 @@ class SettingsWindow(QDialog):
                 c.setIcon(0, self._icon(ct_emoji))
                 p.addChild(c)
 
-    def _strip(self, item):
-        item.setText(0, "")
-        for i in range(item.childCount()):
-            self._strip(item.child(i))
+    def eventFilter(self, obj, event):
+        """viewport 点击兜底：折叠后 itemClicked 可能不触发"""
+        from PySide6.QtCore import QEvent
+        if obj is self._tree.viewport() and event.type() == QEvent.MouseButtonRelease:
+            item = self._tree.itemAt(event.pos())
+            if item:
+                self._on_item_clicked(item, 0)
+                return True
+        return super().eventFilter(obj, event)
 
     def _anim_nav_width(self, target):
         cur = self.nav_frame.width()
