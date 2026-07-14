@@ -248,7 +248,10 @@ class SettingsWindow(QDialog):
 
     def _on_tree_changed(self, cur, prev):
         if not cur: return
-        if cur.childCount() > 0: return
+        if cur.childCount() > 0:
+            # 父节点：切换展开/折叠，不切换页面
+            cur.setExpanded(not cur.isExpanded())
+            return
         self._switch_page(cur.data(0, Qt.UserRole))
 
     def _on_item_clicked(self, item, col):
