@@ -154,8 +154,8 @@ class SettingsWindow(QDialog):
                 c.setData(0, Qt.UserRole, ck)
                 p.addChild(c)
 
-        self._tree.currentItemChanged.connect(self._on_tree_changed)
         self._tree.itemClicked.connect(self._on_item_clicked)
+        self._tree.currentItemChanged.connect(self._on_tree_changed)
         total_rows = sum(1 + len(ch) for _, _, _, _, ch in NAV_TREE)
         self._tree.setFixedHeight(ROW_H * total_rows + 8)
         layout.addWidget(self._tree)
@@ -249,15 +249,15 @@ class SettingsWindow(QDialog):
     def _on_tree_changed(self, cur, prev):
         if not cur: return
         if cur.childCount() > 0:
-            # 父节点：切换展开/折叠，不切换页面
-            cur.setExpanded(not cur.isExpanded())
-            return
+            return  # 父节点：展开由 itemClicked 处理
         self._switch_page(cur.data(0, Qt.UserRole))
 
     def _on_item_clicked(self, item, col):
+        """单击处理：父节点展开/折叠，子节点切换页面"""
         if item.childCount() > 0:
             item.setExpanded(not item.isExpanded())
-
+        else:
+            self._switch_page(item.data(0, Qt.UserRole))
     def _switch_page(self, key):
         while self.card_layout.count():
             w = self.card_layout.takeAt(0)
