@@ -150,7 +150,7 @@ class SettingsWindow(QDialog):
                 p.setForeground(0, Qt.gray)
             self._tree.addTopLevelItem(p)
             for ct_emoji, ct, ck in children:
-                c = QTreeWidgetItem([f"  {ct}"])
+                c = QTreeWidgetItem([f"{ct}"])
                 c.setData(0, Qt.UserRole, ck)
                 c.setIcon(0, self._icon(ct_emoji))
                 p.addChild(c)
