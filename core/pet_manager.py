@@ -22,13 +22,20 @@ class PetManager:
         if not self.characters_dir.exists():
             return
 
-        for char_dir in self.characters_dir.iterdir():
+        # 先创建所有窗口
+        for char_dir in sorted(self.characters_dir.iterdir()):
             if char_dir.is_dir():
                 char_config_path = char_dir / "config.json"
                 if char_config_path.exists():
                     with open(char_config_path, "r", encoding="utf-8") as f:
                         char_cfg = json.load(f)
                     self.windows[char_dir.name] = PetWindow(char_dir, char_cfg)
+
+        # 再统一注入角色切换菜单
+        char_names = list(self.windows.keys())
+        current = self.config.get("current_character", char_names[0] if char_names else "")
+        for name, window in self.windows.items():
+            window.set_characters_menu(char_names, current, self.switch_to)
 
     def show_current(self):
         """显示当前角色"""
