@@ -86,10 +86,20 @@ class PetWindow(QMainWindow):
 
         self.menu.addSeparator()
 
+        # 设置
+        self._settings_action = QAction("设置", self)
+        self.menu.addAction(self._settings_action)
+
+        self.menu.addSeparator()
+
         # 退出
         quit_action = QAction("退出", self)
         quit_action.triggered.connect(QApplication.quit)
         self.menu.addAction(quit_action)
+
+    def set_settings_callback(self, callback):
+        """注入设置按钮回调"""
+        self._settings_action.triggered.connect(callback)
 
     def set_characters_menu(self, characters: list[str], current: str, callback):
         """设置角色切换菜单项"""
