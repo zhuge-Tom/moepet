@@ -58,7 +58,7 @@ class SettingsWindow(QDialog):
         frame = QFrame()
         frame.setMinimumWidth(NAV_WIDE)
         frame.setMaximumWidth(NAV_WIDE)
-        frame.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Preferred)
+        frame.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Preferred)
         frame.setStyleSheet("QFrame{background:#e6e9ef;border-right:1px solid #d3d7de;}")
 
         layout = QVBoxLayout(frame)
@@ -220,6 +220,7 @@ class SettingsWindow(QDialog):
 
     def _anim_nav_width(self, target):
         cur = self.nav_frame.width()
+        self._anims = []
         for prop in (b"minimumWidth", b"maximumWidth"):
             a = QPropertyAnimation(self.nav_frame, prop)
             a.setDuration(ANIM_MS)
@@ -227,6 +228,7 @@ class SettingsWindow(QDialog):
             a.setEndValue(target)
             a.setEasingCurve(QEasingCurve.InOutCubic)
             a.start()
+            self._anims.append(a)
 
     def _on_search(self, text):
         for i in range(self._tree.topLevelItemCount()):
