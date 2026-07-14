@@ -16,8 +16,8 @@ NAV_TREE = [
     ("🔊", "语音合成", "tts", False, []),
     ("🎤", "语音输入", "asr", False, []),
     ("🎭", "角色设置", "character", True, [
-        ("接口设置", "character_api"),
-        ("立绘设置", "character_sprites"),
+        ("🔌", "接口设置", "character_api"),
+        ("🖼️", "立绘设置", "character_sprites"),
     ]),
 ]
 NAV_WIDE = 160
@@ -149,9 +149,10 @@ class SettingsWindow(QDialog):
                 p.setFlags(p.flags() & ~Qt.ItemIsEnabled)
                 p.setForeground(0, Qt.gray)
             self._tree.addTopLevelItem(p)
-            for ct, ck in children:
+            for ct_emoji, ct, ck in children:
                 c = QTreeWidgetItem([f"  {ct}"])
                 c.setData(0, Qt.UserRole, ck)
+                c.setIcon(0, self._icon(ct_emoji))
                 p.addChild(c)
 
         self._tree.itemClicked.connect(self._on_item_clicked)
@@ -252,7 +253,7 @@ class SettingsWindow(QDialog):
             if w.widget(): w.widget().deleteLater()
         for _, text, k, _, children in NAV_TREE:
             if k == key: self.page_title.setText(text); break
-            for ct, ck in children:
+            for _, ct, ck in children:
                 if ck == key: self.page_title.setText(ct); break
         {"general": self._general, "ai_model": self._ai, "tts": self._tts,
          "asr": self._asr, "character": self._character_parent,
