@@ -7,7 +7,7 @@ from pathlib import Path
 from PySide6.QtWidgets import (
     QMainWindow, QLabel, QMenu, QApplication
 )
-from PySide6.QtCore import Qt, QPoint, QTimer
+from PySide6.QtCore import Qt, QPoint, QTimer, QEvent
 from PySide6.QtGui import (
     QPixmap, QAction, QMouseEvent, QCursor
 )
@@ -75,7 +75,27 @@ class PetWindow(QMainWindow):
         self.label = QLabel(self)
         self.label.setAlignment(Qt.AlignCenter)
         self.label.setStyleSheet("background: transparent;")
+        self.label.setAttribute(Qt.WA_TransparentForMouseEvents, False)
+        # 安装事件过滤器，把 label 的鼠标事件转发给窗口
+        self.label.installEventFilter(self)
         self.setCentralWidget(self.label)
+
+    def eventFilter(self, obj, event):
+        """将 label 的鼠标事件转发给窗口处理"""
+        if obj is self.label and event.type() in (
+            QEvent.MouseButtonPress,
+            QEvent.MouseMove,
+            QEvent.MouseButtonRelease,
+        ):
+            # 手动调用窗口的对应事件方法
+            if event.type() == QEvent.MouseButtonPress:
+                self.mousePressEvent(event)
+            elif event.type() == QEvent.MouseMove:
+                self.mouseMoveEvent(event)
+            elif event.type() == QEvent.MouseButtonRelease:
+                self.mouseReleaseEvent(event)
+            return True
+        return super().eventFilter(obj, event)
 
     def _setup_menu(self):
         """设置右键菜单"""
