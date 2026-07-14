@@ -379,15 +379,23 @@ class SettingsWindow(QDialog):
         l=QLabel(t); l.setStyleSheet("color:#94a3b8;font-size:13px;padding:20px"); l.setAlignment(Qt.AlignCenter); self.card_layout.addWidget(l)
 
     def _collect(self):
-        import shiboken6
-        s = getattr(self, 'size_slider', None)
-        t = getattr(self, 'always_top_cb', None)
-        c = getattr(self, 'click_combo', None)
-        a = getattr(self, 'auto_idle_cb', None)
-        cl = getattr(self, 'char_list', None)
+        import shiboken6 as sb
+        def safe(obj, default=None):
+            if obj is None:
+                return default
+            try:
+                if not sb.isValid(obj):
+                    return default
+            except:
+                return default
+            return obj
+
+        s = safe(getattr(self, 'size_slider', None))
+        t = safe(getattr(self, 'always_top_cb', None))
+        c = safe(getattr(self, 'click_combo', None))
+        a = safe(getattr(self, 'auto_idle_cb', None))
+        cl = safe(getattr(self, 'char_list', None))
         curr = self._current_char
-        if cl and not shiboken6.isValid(cl):
-            cl = None
         if cl and cl.currentItem():
             curr = cl.currentItem().text(0)
         return {"current_character":curr,
