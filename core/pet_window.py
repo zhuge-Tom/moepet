@@ -156,6 +156,14 @@ class PetWindow(QMainWindow):
             self._current_sprite_index = index
             self._show_current_sprite()
 
+    def rescale(self, scale: float):
+        """实时缩放：重新加载立绘"""
+        self.char_config["scale"] = scale
+        self.sprites = self._load_sprites()
+        self._current_sprite_index = min(self._current_sprite_index, len(self.sprites) - 1)
+        if self.sprites:
+            self._show_current_sprite()
+
     # ─── 交互事件 ─────────────────────────────
 
     def mousePressEvent(self, event: QMouseEvent):

@@ -87,6 +87,11 @@ class PetManager:
         dlg.setModal(False)
         dlg.setAttribute(Qt.WA_DeleteOnClose)
 
+        # 实时缩放反馈
+        dlg.scale_changed.connect(self._on_scale_changed)
+        # 应用按钮
+        dlg.apply_clicked.connect(self._apply_settings)
+
         def on_finished(result):
             self._settings_dlg = None
             if result == QDialog.Accepted:
@@ -110,6 +115,7 @@ class PetManager:
     def _apply_settings(self):
         """应用设置到所有窗口"""
         always_on_top = self.config.get("behavior", "always_on_top", default=True)
+        scale = self.config.get("window", "scale", default=1.0)
 
         for window in self.windows.values():
             # 更新置顶状态
@@ -119,4 +125,12 @@ class PetManager:
             else:
                 flags &= ~Qt.WindowStaysOnTopHint
             window.setWindowFlags(flags)
-            window.show()  # 重新显示以应用 flags 变更
+            window.show()
+            # 应用缩放
+            window.rescale(scale)
+
+    def _on_scale_changed(self, scale: float):
+        """实时缩放立绘"""
+        current = self.config.current_character
+        if current in self.windows:
+            self.windows[current].rescale(scale)

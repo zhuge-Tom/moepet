@@ -7,7 +7,7 @@ from PySide6.QtWidgets import (
     QScrollArea, QFrame, QLineEdit, QTreeWidget, QTreeWidgetItem,
     QSizePolicy
 )
-from PySide6.QtCore import Qt, QPropertyAnimation, QEasingCurve
+from PySide6.QtCore import Qt, QPropertyAnimation, QEasingCurve, Signal
 from PySide6.QtGui import QPainter, QFont, QIcon, QPixmap
 
 NAV_TREE = [
@@ -27,6 +27,9 @@ ROW_H = 36
 
 
 class SettingsWindow(QDialog):
+    scale_changed = Signal(float)
+    apply_clicked = Signal()
+
     def __init__(self, config, characters, current_char, parent=None):
         super().__init__(parent)
         self.config = config
@@ -335,7 +338,7 @@ class SettingsWindow(QDialog):
         self.size_slider = QSlider(Qt.Horizontal); self.size_slider.setRange(20,200)
         self.size_slider.setStyleSheet("QSlider::groove:horizontal{height:4px;background:#e2e6ed;border-radius:2px}QSlider::handle:horizontal{width:14px;height:14px;margin:-5px 0;background:#3b82f6;border-radius:7px}")
         self.size_label = QLabel("100%"); self.size_label.setFixedWidth(42); self.size_label.setStyleSheet("color:#3b82f6;font-weight:bold;font-size:13px")
-        self.size_slider.valueChanged.connect(lambda v: self.size_label.setText(f"{v}%"))
+        self.size_slider.valueChanged.connect(self._on_scale_slider)
         row.addWidget(self.size_slider,1); row.addWidget(self.size_label); self.card_layout.addLayout(row)
         self._sec("行为")
         self.click_combo = QComboBox()
@@ -406,5 +409,11 @@ class SettingsWindow(QDialog):
             for k in kp: t=t.setdefault(k,{})
             t.update(ud)
         self.config.save()
+        self.apply_clicked.emit()
+
+    def _on_scale_slider(self, v):
+        self.size_label.setText(f"{v}%")
+        self.scale_changed.emit(v / 100.0)
+
     def _on_ok(self):
         self._on_apply(); self.accept()
