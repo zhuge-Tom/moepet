@@ -256,6 +256,9 @@ class SettingsWindow(QDialog):
 
     def _on_tree_changed(self, cur, prev):
         if not cur: return
+        # 父节点（有子项）不切换页面，只展开/折叠
+        if cur.childCount() > 0:
+            return
         key = cur.data(0, Qt.UserRole)
         self._switch_page(key)
 
