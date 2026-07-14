@@ -183,20 +183,13 @@ class SettingsWindow(QDialog):
 
     def _do_collapse(self):
         self._anim_nav_width(NAV_NARROW)
-        # 描述文字消失，顶部折叠按钮出现
         self._desc_label.hide()
         self._collapse_top.show()
-        # 压缩描述行高度
         self._desc_row.setContentsMargins(0, 2, 0, 0)
-        # 搜索行折叠按钮隐藏，搜索框隐藏，🔍出现
         self._collapse_side.hide()
         self.search_box.hide()
         self._search_icon.show()
-        # 压缩搜索行高度
         self._tool_row.setContentsMargins(0, 0, 0, 2)
-        # 树项只显示图标
-        for i in range(self._tree.topLevelItemCount()):
-            self._strip(self._tree.topLevelItem(i))
 
     def _do_expand(self):
         self._anim_nav_width(NAV_WIDE)
@@ -207,11 +200,6 @@ class SettingsWindow(QDialog):
         self._search_icon.hide()
         self.search_box.show()
         self._tool_row.setContentsMargins(4, 2, 6, 4)
-        for i, (emoji, text, key, enabled, children) in enumerate(NAV_TREE):
-            p = self._tree.topLevelItem(i)
-            p.setText(0, f" {text}")
-            for j, (ct, ck) in enumerate(children):
-                p.child(j).setText(0, f"  {ct}")
 
     def _strip(self, item):
         item.setText(0, "")
