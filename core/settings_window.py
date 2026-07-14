@@ -376,11 +376,17 @@ class SettingsWindow(QDialog):
         l=QLabel(t); l.setStyleSheet("color:#94a3b8;font-size:13px;padding:20px"); l.setAlignment(Qt.AlignCenter); self.card_layout.addWidget(l)
 
     def _collect(self):
-        s=getattr(self,'size_slider',None); t=getattr(self,'always_top_cb',None)
-        c=getattr(self,'click_combo',None); a=getattr(self,'auto_idle_cb',None)
-        cl=getattr(self,'char_list',None)
+        import shiboken6
+        s = getattr(self, 'size_slider', None)
+        t = getattr(self, 'always_top_cb', None)
+        c = getattr(self, 'click_combo', None)
+        a = getattr(self, 'auto_idle_cb', None)
+        cl = getattr(self, 'char_list', None)
         curr = self._current_char
-        if cl and cl.currentItem(): curr = cl.currentItem().text(0)
+        if cl and not shiboken6.isValid(cl):
+            cl = None
+        if cl and cl.currentItem():
+            curr = cl.currentItem().text(0)
         return {"current_character":curr,
                 "window":{"scale":s.value()/100.0 if s else 1.0},
                 "behavior":{"click_action":c.currentData() if c else "switch_sprite",
