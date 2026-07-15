@@ -52,8 +52,8 @@ class SettingsWindow(QDialog):
         self._last_page_key = "general"
 
         self.setWindowTitle("Moepet 设置")
-        self.setMinimumSize(520, 460)
-        self.resize(680, 540)
+        self.setMinimumSize(580, 520)
+        self.resize(760, 600)
         self.setStyleSheet("QDialog { background: #f0f2f5; }")
 
         self._build_ui()
@@ -342,8 +342,8 @@ class SettingsWindow(QDialog):
     def _build_right(self):
         right = QWidget()
         layout = QVBoxLayout(right)
-        layout.setContentsMargins(20, 12, 20, 16)
-        layout.setSpacing(10)
+        layout.setContentsMargins(24, 16, 24, 16)
+        layout.setSpacing(12)
 
         self._page_title = QLabel("通用设置")
         self._page_title.setStyleSheet("font-size: 18px; font-weight: bold; color: #1e293b;")
@@ -352,6 +352,8 @@ class SettingsWindow(QDialog):
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setFocusPolicy(Qt.NoFocus)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         scroll.setStyleSheet(
             "QScrollArea { background: transparent; border: none; }"
             "QScrollBar:vertical { width: 6px; background: transparent; border-radius: 3px; }"
@@ -360,9 +362,10 @@ class SettingsWindow(QDialog):
 
         self.card = QFrame()
         self.card.setStyleSheet("QFrame { background: #fff; border-radius: 14px; border: 1px solid #e2e6ed; }")
+        self.card.setFocusPolicy(Qt.NoFocus)
         self._card_layout = QVBoxLayout(self.card)
-        self._card_layout.setContentsMargins(24, 20, 24, 20)
-        self._card_layout.setSpacing(10)
+        self._card_layout.setContentsMargins(28, 24, 28, 24)
+        self._card_layout.setSpacing(16)
         scroll.setWidget(self.card)
         layout.addWidget(scroll, 1)
 
@@ -384,14 +387,15 @@ class SettingsWindow(QDialog):
     # ─── 通用控件 ─────────────────────────────
 
     def _sec(self, t):
+        self._card_layout.addSpacing(4)
         label = QLabel(t)
-        label.setStyleSheet("font-weight: bold; font-size: 13px; color: #64748b; margin-top: 4px;")
+        label.setStyleSheet("font-weight: bold; font-size: 14px; color: #475569; margin-top: 2px;")
         self._card_layout.addWidget(label)
 
     def _row(self, label_text: str, widget, stretch_label=True):
         """标签 + 控件 的水平行"""
         row = QHBoxLayout()
-        row.setSpacing(12)
+        row.setSpacing(16)
         lbl = QLabel(label_text)
         lbl.setStyleSheet("font-size: 13px; color: #2c3e50;")
         lbl.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Fixed)
@@ -399,6 +403,13 @@ class SettingsWindow(QDialog):
         row.addWidget(widget, 1)
         self._card_layout.addLayout(row)
         return widget
+
+    def _hint(self, text):
+        """灰色提示文字"""
+        h = QLabel(text)
+        h.setStyleSheet("color: #94a3b8; font-size: 11px; margin-left: 2px;")
+        h.setWordWrap(True)
+        self._card_layout.addWidget(h)
 
     def _line_edit(self, placeholder="", echo_mode=QLineEdit.Normal):
         le = QLineEdit()
@@ -543,9 +554,7 @@ class SettingsWindow(QDialog):
             "QTextEdit:focus { border-color: #e94560; }")
         self._card_layout.addWidget(self._system_prompt)
 
-        hint = QLabel("提示词决定了角色的性格和回复风格")
-        hint.setStyleSheet("color: #999; font-size: 11px;")
-        self._card_layout.addWidget(hint)
+        self._hint("提示词决定了角色的性格和回复风格")
 
         self._card_layout.addSpacing(8)
         self._sec("格式提示词（可选）")
@@ -584,9 +593,6 @@ class SettingsWindow(QDialog):
         self._card_layout.addWidget(self._sprite_list)
 
         row = QHBoxLayout()
-        select_label = QLabel("选择后点击「应用」切换角色")
-        select_label.setStyleSheet("color: #999; font-size: 11px;")
-        row.addWidget(select_label)
         row.addStretch()
 
         open_sprite_btn = QPushButton("📂 打开立绘文件夹")
@@ -597,9 +603,7 @@ class SettingsWindow(QDialog):
         row.addWidget(open_sprite_btn)
         self._card_layout.addLayout(row)
 
-        hint = QLabel("将 .png 立绘文件放入 sprites 文件夹即可自动加载")
-        hint.setStyleSheet("color: #999; font-size: 11px;")
-        self._card_layout.addWidget(hint)
+        self._hint("将 .png 立绘文件放入 sprites 文件夹即可自动加载")
 
     # ═══════════════════════════════════
     # AI 模型
@@ -612,9 +616,7 @@ class SettingsWindow(QDialog):
         self._ai_url.setText(self.config.get("llm", "base_url", default=""))
         self._row("Base URL", self._ai_url)
 
-        url_hint = QLabel("支持 DeepSeek / OpenAI / 本地 Ollama 等 OpenAI 兼容接口")
-        url_hint.setStyleSheet("color: #999; font-size: 11px; margin-left: 4px;")
-        self._card_layout.addWidget(url_hint)
+        self._hint("支持 DeepSeek / OpenAI / 本地 Ollama 等 OpenAI 兼容接口")
 
         self._ai_key = self._line_edit("sk-xxxx", QLineEdit.Password)
         self._ai_key.setText(self.config.get("llm", "api_key", default=""))
@@ -634,9 +636,7 @@ class SettingsWindow(QDialog):
         self._ai_post.setText(self.config.get("llm", "post_processing", default=""))
         self._row("回复后处理（正则）", self._ai_post)
 
-        post_hint = QLabel("用正则表达式删除回复中不需要的部分，如模型思考过程")
-        post_hint.setStyleSheet("color: #999; font-size: 11px; margin-left: 4px;")
-        self._card_layout.addWidget(post_hint)
+        self._hint("用正则表达式删除回复中不需要的部分，如模型思考过程")
 
         self._ai_ignore_err_cb = QCheckBox("忽略格式错误")
         self._ai_ignore_err_cb.setChecked(self.config.get("llm", "ignore_format_error", default=True))

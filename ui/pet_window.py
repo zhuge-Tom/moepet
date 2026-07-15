@@ -222,9 +222,6 @@ class PetWindow(QMainWindow):
             self._drag_pos = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
             self._drag_start = event.globalPosition().toPoint()
             event.accept()
-        elif event.button() == Qt.RightButton:
-            # 右键显示对话框
-            signals.dialog_toggle_requested.emit()
 
     def mouseMoveEvent(self, event: QMouseEvent):
         if event.buttons() & Qt.LeftButton and self._drag_pos:
