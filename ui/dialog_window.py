@@ -30,6 +30,8 @@ class DialogWindow(QDialog):
         self._typed_index = 0
         self._typing = False
         self._history: list[dict] = []
+        self._is_streaming = False
+        self._stream_buffer = ""
 
         self.setWindowFlags(
             Qt.FramelessWindowHint
@@ -143,6 +145,35 @@ class DialogWindow(QDialog):
         self._history.append({"role": role, "text": text})
         self._add_history_bubble(role, text)
         self._text_display.setText(text)
+
+    # ─── 流式输入（LLM 用）────────────────────
+
+    def start_stream(self):
+        """开始流式接收，清空显示区并显示思考中"""
+        if self._typing:
+            self._typing_timer.stop()
+            self._typing = False
+        self._text_display.clear()
+        self._stream_buffer = ""
+        self._is_streaming = True
+
+    def append_stream(self, text: str):
+        """追加流式文本片段"""
+        if not self._is_streaming:
+            self.start_stream()
+        self._stream_buffer += text
+        self._text_display.insertPlainText(text)
+        cursor = self._text_display.textCursor()
+        cursor.movePosition(QTextCursor.End)
+        self._text_display.setTextCursor(cursor)
+
+    def finish_stream(self, full_text: str = ""):
+        """流式结束，保存历史"""
+        self._is_streaming = False
+        text = full_text or self._stream_buffer
+        if text:
+            self._history.append({"role": "assistant", "text": text})
+            self._add_history_bubble("assistant", text)
 
     def _type_next_char(self):
         if self._typed_index < len(self._full_text):

@@ -20,6 +20,23 @@ DEFAULTS = {
         "auto_idle": True,
         "idle_interval": 30,
     },
+    "general": {
+        "typing_speed": 40,
+        "dialog_scale": 100,
+        "auto_start": False,
+    },
+    "llm": {
+        "base_url": "https://api.deepseek.com/v1",
+        "api_key": "",
+        "model": "deepseek-chat",
+        "stream": True,
+        "post_processing": "",
+        "ignore_format_error": True,
+    },
+    "character_prompt": {
+        "system_prompt": "你是一个可爱的桌面宠物助手，用简短、活泼的语气回复。回复请控制在100字以内。",
+        "format_prompt": "",
+    },
     "position": {
         "pet_x": -1,
         "pet_y": -1,

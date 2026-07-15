@@ -1,6 +1,6 @@
 """宠物管理器
 
-顶层协调者，负责角色加载、窗口管理、信号路由。
+顶层协调者，负责角色加载、窗口管理、LLM 对话、信号路由。
 """
 
 from pathlib import Path
@@ -11,6 +11,7 @@ from PySide6.QtCore import Qt
 from core.config import Config
 from core.character import CharacterLoader, CharacterData
 from core.signals import signals
+from core.llm_service import LLMService
 from ui.pet_window import PetWindow
 from ui.dialog_window import DialogWindow
 from ui.settings_window import SettingsWindow
@@ -30,13 +31,32 @@ class PetManager:
         self._settings_dlg: SettingsWindow | None = None
         self._tray: TrayIcon | None = None
 
+        self._llm = LLMService()
+        self._configure_llm()
+
         self._load_characters()
         self._connect_signals()
+
+    # ─── LLM ──────────────────────────────────
+
+    def _configure_llm(self):
+        """从 config 读取 LLM 配置"""
+        self._llm.configure(
+            base_url=self.config.get("llm", "base_url", default=""),
+            api_key=self.config.get("llm", "api_key", default=""),
+            model=self.config.get("llm", "model", default=""),
+        )
+        system_prompt = self.config.get("character_prompt", "system_prompt", default="")
+        format_prompt = self.config.get("character_prompt", "format_prompt", default="")
+        full_prompt = system_prompt
+        if format_prompt:
+            full_prompt += "\n\n" + format_prompt
+        if full_prompt:
+            self._llm.set_system_prompt(full_prompt)
 
     # ─── 初始化 ───────────────────────────────
 
     def _load_characters(self):
-        """扫描并加载所有角色"""
         for name in self._loader.list_names():
             char_data = self._loader.load(name)
             if char_data is None:
@@ -46,14 +66,12 @@ class PetManager:
             win = PetWindow(char_data, scale_override=scale)
             self._windows[name] = win
 
-        # 统一注入角色菜单
         names = list(self._windows.keys())
         current = self.config.current_character
         for win in self._windows.values():
             win.set_character_menu(names, current, self._switch_character)
 
     def _connect_signals(self):
-        """连接全局信号到处理函数"""
         signals.dialog_toggle_requested.connect(self._toggle_dialog)
         signals.sprite_change_requested.connect(self._on_sprite_request)
         signals.sprite_animation_requested.connect(self._on_anim_request)
@@ -62,7 +80,6 @@ class PetManager:
         signals.quit_requested.connect(self._quit)
 
     def _setup_tray(self):
-        """创建系统托盘"""
         current = self.config.current_character
         char = self._char_data.get(current)
         name = char.name if char else "Moepet"
@@ -72,11 +89,9 @@ class PetManager:
     # ─── 启动 ────────────────────────────────
 
     def start(self):
-        """启动：显示立绘、对话框、托盘"""
         current = self.config.current_character
         if current in self._windows:
             win = self._windows[current]
-            # 恢复位置
             pos = self.config.get_position("pet")
             if pos:
                 win.move(*pos)
@@ -84,7 +99,6 @@ class PetManager:
 
         self._setup_tray()
 
-        # 如果之前对话框是打开的，恢复显示
         if self.config.get("dialog", "visible", default=False):
             self._toggle_dialog()
 
@@ -101,18 +115,15 @@ class PetManager:
             self.config.set("current_character", name)
             self.config.save()
 
-            # 更新菜单
             names = list(self._windows.keys())
             for win in self._windows.values():
                 win.set_character_menu(names, name, self._switch_character)
 
-            # 更新对话框角色名
             if self._dialog and self._dialog.isVisible():
                 char = self._char_data.get(name)
                 if char:
                     self._dialog.set_character_name(char.name)
 
-            # 更新托盘
             if self._tray:
                 char = self._char_data.get(name)
                 if char:
@@ -139,7 +150,6 @@ class PetManager:
         if self._dialog is None:
             self._dialog = DialogWindow(char_name=char.name)
             self._dialog.text_submitted.connect(self._on_dialog_text)
-            # 对话框初始位置在立绘旁边
             if win:
                 self._dialog.move(win.x() + win.width() + 10, win.y() + 50)
 
@@ -152,11 +162,77 @@ class PetManager:
         self.config.save()
 
     def _on_dialog_text(self, text: str):
-        """处理对话框提交的用户文本"""
-        # 预留：后续接入 AI 接口
-        # 暂时回显一句占位回复
+        """用户发送消息 → 发给 LLM"""
+        if not self._dialog:
+            return
+
+        api_key = self.config.get("llm", "api_key", default="")
+        if not api_key:
+            self._dialog.display_text("请先在设置 → AI 模型 中配置 API Key 喵~", "assistant")
+            return
+
+        if self._llm.is_busy():
+            self._dialog.display_text("上一条还在处理中，请稍等~", "assistant")
+            return
+
+        self._llm.add_user_message(text)
+
+        stream = self.config.get("llm", "stream", default=True)
+        if stream:
+            self._dialog.start_stream()
+            self._llm.chunk_received.connect(self._on_llm_chunk)
+            self._llm.response_finished.connect(self._on_llm_done)
+            self._llm.error_occurred.connect(self._on_llm_error)
+            self._llm.send(stream=True)
+        else:
+            self._dialog.start_stream()
+            self._dialog.append_stream("思考中...")
+            self._llm.response_finished.connect(self._on_llm_done_non_stream)
+            self._llm.error_occurred.connect(self._on_llm_error)
+            self._llm.send(stream=False)
+
+    def _on_llm_chunk(self, chunk: str):
+        """流式输出片段"""
         if self._dialog:
-            self._dialog.display_text("（AI 对话功能即将上线~）", "assistant")
+            self._dialog.append_stream(chunk)
+
+    def _on_llm_done(self, full_text: str):
+        """流式完成"""
+        self._llm.chunk_received.disconnect(self._on_llm_chunk)
+        self._llm.response_finished.disconnect(self._on_llm_done)
+        self._llm.error_occurred.disconnect(self._on_llm_error)
+        if self._dialog:
+            self._dialog.finish_stream(full_text)
+
+    def _on_llm_done_non_stream(self, full_text: str):
+        """非流式完成"""
+        self._llm.response_finished.disconnect(self._on_llm_done_non_stream)
+        self._llm.error_occurred.disconnect(self._on_llm_error)
+        if self._dialog:
+            self._dialog._text_display.clear()
+            self._dialog.display_text(full_text, "assistant")
+
+    def _on_llm_error(self, err: str):
+        """LLM 错误"""
+        try:
+            self._llm.chunk_received.disconnect(self._on_llm_chunk)
+        except RuntimeError:
+            pass
+        try:
+            self._llm.response_finished.disconnect(self._on_llm_done)
+        except RuntimeError:
+            pass
+        try:
+            self._llm.response_finished.disconnect(self._on_llm_done_non_stream)
+        except RuntimeError:
+            pass
+        try:
+            self._llm.error_occurred.disconnect(self._on_llm_error)
+        except RuntimeError:
+            pass
+        if self._dialog:
+            self._dialog.finish_stream()
+            self._dialog.display_text(f"出错了: {err}", "assistant")
 
     # ─── 立绘请求 ─────────────────────────────
 
@@ -184,7 +260,10 @@ class PetManager:
             return
 
         current = self.config.current_character
-        dlg = SettingsWindow(self.config, list(self._windows.keys()), current)
+        dlg = SettingsWindow(
+            self.config, list(self._windows.keys()), current,
+            base_dir=self.base_dir,
+        )
         dlg.setModal(False)
         dlg.setAttribute(Qt.WA_DeleteOnClose)
 
@@ -204,14 +283,13 @@ class PetManager:
         dlg.show()
 
     def _on_live_scale(self, scale: float):
-        """实时缩放反馈"""
         current = self.config.current_character
         win = self._windows.get(current)
         if win:
             win.rescale(scale)
 
     def _apply_settings(self, settings: dict):
-        """应用设置到所有窗口"""
+        """应用所有设置"""
         always_on_top = self.config.get("window", "always_on_top", default=True)
         scale = self.config.get("window", "scale", default=0.5)
 
@@ -219,7 +297,15 @@ class PetManager:
             win.set_always_on_top(always_on_top)
             win.rescale(scale)
 
-        # 检查角色切换
+        # 更新对话框缩放比例
+        dialog_scale = self.config.get("general", "dialog_scale", default=100)
+        typing_speed = self.config.get("general", "typing_speed", default=40)
+        if self._dialog:
+            self._dialog._typing_timer.setInterval(typing_speed)
+
+        # 重新配置 LLM
+        self._configure_llm()
+
         new_char = settings.get("current_character")
         if new_char and new_char != self.config.current_character:
             self._switch_character(new_char)
@@ -228,7 +314,6 @@ class PetManager:
 
     def _on_position_changed(self, x: int, y: int):
         if x == -1 and y == -1:
-            # 重置位置
             current = self.config.current_character
             win = self._windows.get(current)
             if win:
@@ -240,8 +325,6 @@ class PetManager:
     # ─── 退出 ────────────────────────────────
 
     def _quit(self):
-        """保存状态并退出"""
-        # 记住当前立绘位置
         current = self.config.current_character
         win = self._windows.get(current)
         if win:

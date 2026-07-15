@@ -64,6 +64,13 @@ class PetWindow(QMainWindow):
     def _setup_animator(self):
         self._animator = SpriteAnimator(self, self._label, self._overlay)
 
+        # 缩放防抖：拖动滑块时不立即重绘，停下来后才应用
+        self._rescale_timer = QTimer(self)
+        self._rescale_timer.setSingleShot(True)
+        self._rescale_timer.setInterval(120)
+        self._rescale_timer.timeout.connect(self._apply_rescale)
+        self._pending_scale = None
+
     def _setup_menu(self):
         self._menu = QMenu(self)
         self._menu.setStyleSheet("""
@@ -161,10 +168,17 @@ class PetWindow(QMainWindow):
         self._animator.play(anim_type, self._label.pos(), self._label.size())
 
     def rescale(self, scale: float):
-        """实时缩放"""
-        self._scale = scale
-        self._load_sprites()
-        self._show_sprite()
+        """实时缩放 - 使用防抖避免拖动时残留"""
+        self._pending_scale = scale
+        self._rescale_timer.start()
+
+    def _apply_rescale(self):
+        """防抖结束后实际执行缩放"""
+        if self._pending_scale is not None:
+            self._scale = self._pending_scale
+            self._pending_scale = None
+            self._load_sprites()
+            self._show_sprite()
 
     def set_always_on_top(self, enabled: bool):
         flags = self.windowFlags()
