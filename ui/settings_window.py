@@ -49,6 +49,7 @@ class SettingsWindow(QDialog):
         self._current_char = current_char
         self._base_dir = base_dir or Path(__file__).parent.parent
         self._collapsed = False
+        self._last_page_key = "general"
 
         self.setWindowTitle("Moepet 设置")
         self.setMinimumSize(520, 460)
@@ -270,14 +271,31 @@ class SettingsWindow(QDialog):
     def _on_tree_changed(self, cur, prev):
         if not cur:
             return
+        # 有子项的节点不触发页面切换（只弹菜单）
+        children = cur.data(0, Qt.UserRole + 1)
+        if children:
+            return
         self._switch_page(cur.data(0, Qt.UserRole))
 
     def _on_item_clicked(self, item, col):
         children = item.data(0, Qt.UserRole + 1)
         if children:
             self._popup_children_menu(item, children)
+            # 恢复到上一个选中的非父节点，避免高亮停在父节点上
+            if self._last_page_key:
+                for i in range(self._tree.topLevelItemCount()):
+                    p = self._tree.topLevelItem(i)
+                    if p.data(0, Qt.UserRole) == self._last_page_key:
+                        self._tree.setCurrentItem(p)
+                        break
+                    for j in range(p.childCount()):
+                        c = p.child(j)
+                        if c.data(0, Qt.UserRole) == self._last_page_key:
+                            self._tree.setCurrentItem(c)
+                            break
         else:
-            self._switch_page(item.data(0, Qt.UserRole))
+            self._last_page_key = item.data(0, Qt.UserRole)
+            self._switch_page(self._last_page_key)
 
     def _popup_children_menu(self, item, children):
         menu = QMenu(self)
@@ -344,7 +362,7 @@ class SettingsWindow(QDialog):
         self.card.setStyleSheet("QFrame { background: #fff; border-radius: 14px; border: 1px solid #e2e6ed; }")
         self._card_layout = QVBoxLayout(self.card)
         self._card_layout.setContentsMargins(24, 20, 24, 20)
-        self._card_layout.setSpacing(14)
+        self._card_layout.setSpacing(10)
         scroll.setWidget(self.card)
         layout.addWidget(scroll, 1)
 
@@ -373,10 +391,12 @@ class SettingsWindow(QDialog):
     def _row(self, label_text: str, widget, stretch_label=True):
         """标签 + 控件 的水平行"""
         row = QHBoxLayout()
+        row.setSpacing(12)
         lbl = QLabel(label_text)
         lbl.setStyleSheet("font-size: 13px; color: #2c3e50;")
-        row.addWidget(lbl, 2 if stretch_label else 0)
-        row.addWidget(widget, 3 if stretch_label else 0)
+        lbl.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Fixed)
+        row.addWidget(lbl)
+        row.addWidget(widget, 1)
         self._card_layout.addLayout(row)
         return widget
 
@@ -403,31 +423,28 @@ class SettingsWindow(QDialog):
     def _page_general(self):
         self._sec("软件设置")
 
-        # 角色选择
-        char_row = QHBoxLayout()
+        # 角色选择 - 分两行：标签一行，控件一行
         char_lbl = QLabel("角色选择")
         char_lbl.setStyleSheet("font-size: 13px; color: #2c3e50;")
-        char_row.addWidget(char_lbl, 2)
+        self._card_layout.addWidget(char_lbl)
 
         self._char_combo = QComboBox()
+        self._char_combo.setFixedHeight(30)
         self._char_combo.setStyleSheet("QComboBox { border: 1px solid #d3d7de; border-radius: 6px; padding: 4px 10px; font-size: 13px; }")
         for n in self._characters:
             self._char_combo.addItem(n)
         idx = self._char_combo.findText(self._current_char)
         if idx >= 0:
             self._char_combo.setCurrentIndex(idx)
+        self._card_layout.addWidget(self._char_combo)
 
         open_folder_btn = QPushButton("📂 打开角色文件夹")
+        open_folder_btn.setFixedHeight(28)
         open_folder_btn.setStyleSheet(
             "QPushButton { background: #f5f7fa; color: #444; border: 1px solid #d3d7de; border-radius: 6px; padding: 4px 12px; font-size: 12px; }"
             "QPushButton:hover { background: #e8ecf1; }")
         open_folder_btn.clicked.connect(self._open_characters_folder)
-
-        char_sub = QHBoxLayout()
-        char_sub.addWidget(open_folder_btn)
-        char_sub.addWidget(self._char_combo)
-        char_row.addLayout(char_sub, 3)
-        self._card_layout.addLayout(char_row)
+        self._card_layout.addWidget(open_folder_btn)
 
         self._auto_start_cb = QCheckBox("开机自启")
         self._auto_start_cb.setChecked(self.config.get("general", "auto_start", default=False))
@@ -439,12 +456,18 @@ class SettingsWindow(QDialog):
         self._always_top_cb.setChecked(self.config.get("window", "always_on_top", default=True))
         self._card_layout.addWidget(self._always_top_cb)
 
-        # 缩放
+        # 缩放 - 单独一行
+        scale_lbl = QLabel("立绘缩放")
+        scale_lbl.setStyleSheet("font-size: 13px; color: #2c3e50;")
+        self._card_layout.addWidget(scale_lbl)
+
         scale_row = QHBoxLayout()
+        scale_row.setSpacing(8)
         self._scale_slider = QSlider(Qt.Horizontal)
         self._scale_slider.setRange(10, 200)
         self._scale_slider.setValue(int(self.config.get("window", "scale", default=0.5) * 100))
         self._scale_slider.valueChanged.connect(self._on_scale_slider)
+        self._scale_slider.setFixedHeight(20)
         self._scale_slider.setStyleSheet(
             "QSlider::groove:horizontal { height: 4px; background: #e2e6ed; border-radius: 2px; }"
             "QSlider::handle:horizontal { width: 14px; height: 14px; margin: -5px 0; background: #e94560; border-radius: 7px; }")
@@ -453,9 +476,8 @@ class SettingsWindow(QDialog):
         self._scale_label.setFixedWidth(42)
         self._scale_label.setStyleSheet("color: #e94560; font-weight: bold; font-size: 13px;")
 
-        scale_row.addWidget(QLabel("立绘缩放"), 2)
-        scale_row.addWidget(self._scale_slider, 2)
-        scale_row.addWidget(self._scale_label, 1)
+        scale_row.addWidget(self._scale_slider, 1)
+        scale_row.addWidget(self._scale_label)
         self._card_layout.addLayout(scale_row)
 
         # 逐字速度
@@ -463,6 +485,8 @@ class SettingsWindow(QDialog):
         self._typing_speed.setRange(10, 500)
         self._typing_speed.setValue(self.config.get("general", "typing_speed", default=40))
         self._typing_speed.setSuffix(" ms/字")
+        self._typing_speed.setFixedHeight(30)
+        self._typing_speed.setMinimumWidth(120)
         self._typing_speed.setStyleSheet("QSpinBox { border: 1px solid #d3d7de; border-radius: 6px; padding: 4px 8px; font-size: 13px; }")
         self._row("逐字显示速度", self._typing_speed)
 
@@ -471,6 +495,8 @@ class SettingsWindow(QDialog):
         self._dialog_scale.setRange(50, 200)
         self._dialog_scale.setValue(self.config.get("general", "dialog_scale", default=100))
         self._dialog_scale.setSuffix(" %")
+        self._dialog_scale.setFixedHeight(30)
+        self._dialog_scale.setMinimumWidth(120)
         self._dialog_scale.setStyleSheet("QSpinBox { border: 1px solid #d3d7de; border-radius: 6px; padding: 4px 8px; font-size: 13px; }")
         self._row("对话框缩放", self._dialog_scale)
 
@@ -480,6 +506,7 @@ class SettingsWindow(QDialog):
         self._click_combo.addItem("切换下一张立绘", "switch_sprite")
         self._click_combo.addItem("弹跳动画", "bounce")
         self._click_combo.addItem("无反应", "none")
+        self._click_combo.setFixedHeight(30)
         self._click_combo.setStyleSheet("QComboBox { border: 1px solid #d3d7de; border-radius: 6px; padding: 6px 10px; font-size: 13px; }")
         current = self.config.get("behavior", "click_action", default="switch_sprite")
         idx = self._click_combo.findData(current)
@@ -503,30 +530,29 @@ class SettingsWindow(QDialog):
     def _page_character_api(self):
         self._sec("对话设置")
 
-        # 系统提示词
         prompt_lbl = QLabel("角色提示词（system prompt）")
         prompt_lbl.setStyleSheet("font-size: 13px; color: #2c3e50; font-weight: bold;")
         self._card_layout.addWidget(prompt_lbl)
 
         self._system_prompt = QTextEdit()
         self._system_prompt.setPlaceholderText("设定角色的性格、说话方式、回复格式...")
-        self._system_prompt.setMinimumHeight(100)
-        self._system_prompt.setMaximumHeight(180)
+        self._system_prompt.setFixedHeight(120)
         self._system_prompt.setPlainText(self.config.get("character_prompt", "system_prompt", default=""))
         self._system_prompt.setStyleSheet(
             "QTextEdit { border: 1px solid #d3d7de; border-radius: 8px; padding: 8px; font-size: 13px; }"
             "QTextEdit:focus { border-color: #e94560; }")
         self._card_layout.addWidget(self._system_prompt)
 
-        hint = QLabel("提示词决定了角色的性格和回复风格，支持中文和英文")
+        hint = QLabel("提示词决定了角色的性格和回复风格")
         hint.setStyleSheet("color: #999; font-size: 11px;")
         self._card_layout.addWidget(hint)
 
+        self._card_layout.addSpacing(8)
         self._sec("格式提示词（可选）")
 
         self._format_prompt = QTextEdit()
         self._format_prompt.setPlaceholderText("例如：每句话前加上心情标签，格式为 {心情}|{回复}")
-        self._format_prompt.setMaximumHeight(80)
+        self._format_prompt.setFixedHeight(80)
         self._format_prompt.setPlainText(self.config.get("character_prompt", "format_prompt", default=""))
         self._format_prompt.setStyleSheet(
             "QTextEdit { border: 1px solid #d3d7de; border-radius: 8px; padding: 8px; font-size: 13px; }"
@@ -554,7 +580,7 @@ class SettingsWindow(QDialog):
                 item.setData(0, Qt.UserRole, str(img))
                 self._sprite_list.addTopLevelItem(item)
 
-        self._sprite_list.setMinimumHeight(120)
+        self._sprite_list.setFixedHeight(140)
         self._card_layout.addWidget(self._sprite_list)
 
         row = QHBoxLayout()
@@ -617,20 +643,19 @@ class SettingsWindow(QDialog):
         self._card_layout.addWidget(self._ai_ignore_err_cb)
 
         # 测试连接按钮
-        test_row = QHBoxLayout()
-        test_row.addStretch()
+        self._card_layout.addSpacing(4)
         test_btn = QPushButton("🔗 测试连接")
+        test_btn.setFixedHeight(32)
         test_btn.setStyleSheet(
             "QPushButton { background: #3498db; color: #fff; border: none; border-radius: 7px; padding: 7px 22px; font-size: 13px; }"
             "QPushButton:hover { background: #2980b9; }")
         test_btn.clicked.connect(self._test_connection)
-        test_row.addWidget(test_btn)
+        self._card_layout.addWidget(test_btn)
 
         self._test_status = QLabel("")
+        self._test_status.setWordWrap(True)
         self._test_status.setStyleSheet("font-size: 12px; padding: 4px;")
-        test_row.addWidget(self._test_status)
-
-        self._card_layout.addLayout(test_row)
+        self._card_layout.addWidget(self._test_status)
 
     def _test_connection(self):
         """测试 API 连接"""
