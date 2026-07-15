@@ -1,6 +1,7 @@
-"""
-Moepet - 萌系桌面宠物
-基于 PySide6，支持多角色切换的桌面宠物
+"""Moepet - 萌系桌面宠物
+
+基于 PySide6 的桌面宠物应用，支持多角色、
+Galgame 风格对话框、立绘动画演出。
 """
 
 import sys
@@ -10,24 +11,27 @@ from PySide6.QtWidgets import QApplication
 from PySide6.QtCore import Qt
 
 from core.config import Config
-from core.pet_manager import PetManager
+from core.signals import signals
+from pet_manager import PetManager
 
 BASE_DIR = Path(__file__).parent
-CHARACTERS_DIR = BASE_DIR / "characters"
 
 
 def main():
     app = QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(False)
+    app.setApplicationName("Moepet")
 
     if hasattr(Qt, "AA_UseSoftwareOpenGL"):
         app.setAttribute(Qt.AA_UseSoftwareOpenGL)
 
     config = Config(BASE_DIR / "config.json")
-    manager = PetManager(CHARACTERS_DIR, config)
+    manager = PetManager(BASE_DIR, config)
 
-    manager.show_current()
+    # 退出信号
+    signals.quit_requested.connect(app.quit)
 
+    manager.start()
     sys.exit(app.exec())
 
 
