@@ -24,3 +24,6 @@ build/
 # OS
 .DS_Store
 Thumbs.db
+
+# 聊天记录（运行时生成）
+characters/*/chat_history.json

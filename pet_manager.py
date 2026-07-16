@@ -3,6 +3,7 @@
 顶层协调者，负责角色加载、窗口管理、LLM 对话、信号路由。
 """
 
+import json
 from pathlib import Path
 
 from PySide6.QtWidgets import QApplication, QDialog
@@ -33,6 +34,7 @@ class PetManager:
 
         self._llm = LLMService()
         self._configure_llm()
+        self._load_chat_history()
 
         self._load_characters()
         self._connect_signals()
@@ -78,6 +80,40 @@ class PetManager:
         signals.settings_changed.connect(self._on_settings_signal)
         signals.position_changed.connect(self._on_position_changed)
         signals.quit_requested.connect(self._quit)
+
+    # ─── 对话历史持久化 ──────────────────────────
+
+    def _history_path(self, char_name: str = None) -> Path:
+        """获取对话历史文件路径"""
+        name = char_name or self.config.current_character
+        history_dir = self.base_dir / "characters" / name
+        history_dir.mkdir(parents=True, exist_ok=True)
+        return history_dir / "chat_history.json"
+
+    def _load_chat_history(self):
+        """启动时加载对话历史"""
+        path = self._history_path()
+        if path.exists():
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    messages = json.load(f)
+                # 保留系统提示词，加载后续对话
+                for msg in messages:
+                    if msg.get("role") == "system":
+                        continue
+                    self._llm.add_user_message(msg["content"]) if msg["role"] == "user" \
+                        else self._llm.add_assistant_message(msg["content"])
+            except (json.JSONDecodeError, OSError, KeyError):
+                pass
+
+    def _save_chat_history(self):
+        """保存对话历史到文件"""
+        path = self._history_path()
+        try:
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(self._llm.history, f, ensure_ascii=False, indent=2)
+        except OSError:
+            pass
 
     def _setup_tray(self):
         current = self.config.current_character
@@ -150,14 +186,15 @@ class PetManager:
         if self._dialog is None:
             self._dialog = DialogWindow(char_name=char.name)
             self._dialog.text_submitted.connect(self._on_dialog_text)
-            if win:
-                self._dialog.move(win.x() + win.width() + 10, win.y() + 50)
 
-        pos = self.config.get_position("dialog")
-        if pos:
-            self._dialog.move(*pos)
-
-        self._dialog.show()
+        # 始终定位在立绘正上方居中，紧挨着
+        if win:
+            self._dialog.show()
+            dlg_w = self._dialog.width()
+            dlg_h = self._dialog.height()
+            dialog_x = win.x() + (win.width() - dlg_w) // 2
+            dialog_y = win.y() - dlg_h + 110
+            self._dialog.move(dialog_x, dialog_y)
         self.config.set("dialog", "visible", True)
         self.config.save()
 
@@ -165,6 +202,9 @@ class PetManager:
         """用户发送消息 → 发给 LLM"""
         if not self._dialog:
             return
+
+        # 每次发消息前重新配置 LLM，确保使用最新设置
+        self._configure_llm()
 
         api_key = self.config.get("llm", "api_key", default="")
         if not api_key:
@@ -203,6 +243,7 @@ class PetManager:
         self._llm.error_occurred.disconnect(self._on_llm_error)
         if self._dialog:
             self._dialog.finish_stream(full_text)
+        self._save_chat_history()
 
     def _on_llm_done_non_stream(self, full_text: str):
         """非流式完成"""
@@ -211,6 +252,7 @@ class PetManager:
         if self._dialog:
             self._dialog._text_display.clear()
             self._dialog.display_text(full_text, "assistant")
+        self._save_chat_history()
 
     def _on_llm_error(self, err: str):
         """LLM 错误"""
@@ -325,6 +367,7 @@ class PetManager:
     # ─── 退出 ────────────────────────────────
 
     def _quit(self):
+        self._save_chat_history()
         current = self.config.current_character
         win = self._windows.get(current)
         if win:

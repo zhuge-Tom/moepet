@@ -40,8 +40,8 @@ class DialogWindow(QDialog):
         )
         self.setAttribute(Qt.WA_TranslucentBackground)
         self.setStyleSheet(DIALOG_QSS)
-        self.setMinimumSize(400, 160)
-        self.resize(480, 200)
+        self.setMinimumSize(400, 240)
+        self.resize(480, 280)
 
         self._typing_timer = QTimer(self)
         self._typing_timer.setInterval(self.TYPING_INTERVAL)
@@ -71,20 +71,14 @@ class DialogWindow(QDialog):
         self._text_display = QTextEdit()
         self._text_display.setObjectName("chat_display")
         self._text_display.setReadOnly(True)
-        self._text_display.setMinimumHeight(80)
-        self._text_display.setMaximumHeight(200)
+        self._text_display.setMinimumHeight(120)
+        self._text_display.setMaximumHeight(400)
         frame_layout.addWidget(self._text_display, 1)
 
         # 底部操作栏
         bottom = QHBoxLayout()
         bottom.setContentsMargins(12, 6, 12, 0)
         bottom.setSpacing(8)
-
-        self._history_btn = QPushButton("📜 历史")
-        self._history_btn.setObjectName("history_btn")
-        self._history_btn.setFixedHeight(28)
-        self._history_btn.clicked.connect(self._toggle_history)
-        bottom.addWidget(self._history_btn)
 
         bottom.addStretch()
 
@@ -104,24 +98,6 @@ class DialogWindow(QDialog):
         frame_layout.addLayout(bottom)
         root.addWidget(frame)
 
-        # 历史面板（默认隐藏）
-        self._history_panel = QScrollArea()
-        self._history_panel.setWidgetResizable(True)
-        self._history_panel.setFrameShape(QFrame.NoFrame)
-        self._history_panel.setMaximumHeight(0)
-        self._history_panel.setStyleSheet("""
-            QScrollArea { background: #0f0f23; border-radius: 0 0 12px 12px; }
-            QScrollBar:vertical { width: 4px; background: transparent; }
-            QScrollBar::handle:vertical { background: #e94560; border-radius: 2px; }
-        """)
-        self._history_container = QWidget()
-        self._history_layout = QVBoxLayout(self._history_container)
-        self._history_layout.setContentsMargins(12, 8, 12, 8)
-        self._history_layout.setSpacing(6)
-        self._history_layout.addStretch()
-        self._history_panel.setWidget(self._history_container)
-        root.addWidget(self._history_panel)
-
     # ─── 文本显示 ─────────────────────────────
 
     def display_text(self, text: str, role: str = "assistant"):
@@ -131,7 +107,6 @@ class DialogWindow(QDialog):
 
         # 存入历史
         self._history.append({"role": role, "text": text})
-        self._add_history_bubble(role, text)
 
         # 开始逐字显示
         self._full_text = text
@@ -143,7 +118,6 @@ class DialogWindow(QDialog):
     def display_instant(self, text: str, role: str = "user"):
         """立即显示文本（用户消息用）"""
         self._history.append({"role": role, "text": text})
-        self._add_history_bubble(role, text)
         self._text_display.setText(text)
 
     # ─── 流式输入（LLM 用）────────────────────
@@ -173,7 +147,6 @@ class DialogWindow(QDialog):
         text = full_text or self._stream_buffer
         if text:
             self._history.append({"role": "assistant", "text": text})
-            self._add_history_bubble("assistant", text)
 
     def _type_next_char(self):
         if self._typed_index < len(self._full_text):
@@ -187,23 +160,6 @@ class DialogWindow(QDialog):
             self._typing_timer.stop()
             self._typing = False
 
-    def _add_history_bubble(self, role: str, text: str):
-        """在历史面板添加消息气泡"""
-        bubble = QLabel(f"{'你' if role == 'user' else self._char_name}: {text}")
-        bubble.setWordWrap(True)
-        bubble.setStyleSheet(f"""
-            QLabel {{
-                background: {'#0f3460' if role == 'user' else '#2d1b3d'};
-                color: #eee;
-                border-radius: 8px;
-                padding: 8px 12px;
-                font-size: 12px;
-            }}
-        """)
-        # 插入到 stretch 之前
-        count = self._history_layout.count()
-        self._history_layout.insertWidget(max(0, count - 1), bubble)
-
     # ─── 输入处理 ─────────────────────────────
 
     def _on_submit(self):
@@ -213,14 +169,6 @@ class DialogWindow(QDialog):
         self._input.clear()
         self.display_instant(text, "user")
         self.text_submitted.emit(text)
-
-    # ─── 历史面板 ─────────────────────────────
-
-    def _toggle_history(self):
-        if self._history_panel.maximumHeight() > 0:
-            self._history_panel.setMaximumHeight(0)
-        else:
-            self._history_panel.setMaximumHeight(200)
 
     # ─── 外部接口 ─────────────────────────────
 
