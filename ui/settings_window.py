@@ -1,7 +1,7 @@
 """设置窗口
 
-QTreeWidget 导航 + 搜索 + 折叠动画 + 子项弹菜单。
-完整版：通用设置 / 角色设置(接口+立绘) / AI模型 / TTS / ASR / 关于。
+QTreeWidget 导航 + QStackedWidget 页面切换。
+每个页面预构建为独立 Widget，切换时仅改 index，彻底避免重叠和闪烁。
 """
 
 import os
@@ -12,9 +12,9 @@ from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QWidget,
     QLabel, QSlider, QCheckBox, QComboBox, QPushButton,
     QScrollArea, QFrame, QLineEdit, QTreeWidget, QTreeWidgetItem,
-    QSizePolicy, QMenu, QTextEdit, QSpinBox, QGroupBox,
+    QSizePolicy, QMenu, QTextEdit, QSpinBox, QStackedWidget,
 )
-from PySide6.QtCore import Qt, QPropertyAnimation, QEasingCurve, Signal, QEvent, QTimer
+from PySide6.QtCore import Qt, QPropertyAnimation, QEasingCurve, Signal, QEvent
 from PySide6.QtGui import QPainter, QFont, QIcon, QPixmap, QAction, QDesktopServices
 from PySide6.QtCore import QUrl
 
@@ -36,6 +36,10 @@ NAV_NARROW = 48
 ANIM_MS = 220
 ROW_H = 36
 
+# 纯色替代 rgba 半透明，避免 hover 重绘闪烁
+_NAV_BG = "#2c3e50"
+_NAV_HOVER = "#3d5166"
+
 
 class SettingsWindow(QDialog):
     scale_changed = Signal(float)
@@ -50,6 +54,7 @@ class SettingsWindow(QDialog):
         self._base_dir = base_dir or Path(__file__).parent.parent
         self._collapsed = False
         self._last_page_key = "general"
+        self._anims = []
 
         self.setWindowTitle("Moepet 设置")
         self.setMinimumSize(580, 520)
@@ -76,7 +81,8 @@ class SettingsWindow(QDialog):
         frame.setMinimumWidth(NAV_WIDE)
         frame.setMaximumWidth(NAV_WIDE)
         frame.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Preferred)
-        frame.setStyleSheet("QFrame { background: #2c3e50; border-right: 1px solid #1a252f; }")
+        frame.setStyleSheet(
+            f"QFrame {{ background: {_NAV_BG}; border-right: 1px solid #1a252f; }}")
 
         layout = QVBoxLayout(frame)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -87,15 +93,18 @@ class SettingsWindow(QDialog):
         self._desc_row.setContentsMargins(6, 6, 6, 2)
         self._desc_row.setSpacing(4)
         self._desc_label = QLabel("Moepet")
-        self._desc_label.setStyleSheet("font-size: 14px; font-weight: bold; color: #ecf0f1; background: transparent;")
+        self._desc_label.setStyleSheet(
+            "font-size: 14px; font-weight: bold; color: #ecf0f1;"
+            f" background: transparent;")
         self._desc_row.addWidget(self._desc_label, 1)
 
         self._collapse_top = QPushButton("▶")
         self._collapse_top.setFixedSize(NAV_NARROW - 8, 24)
         self._collapse_top.setToolTip("展开导航")
         self._collapse_top.setStyleSheet(
-            "QPushButton { background: transparent; border: none; font-size: 14px; color: #bdc3c7; border-radius: 4px; }"
-            "QPushButton:hover { background: rgba(255,255,255,0.1); }")
+            "QPushButton { background: transparent; border: none;"
+            f" font-size: 14px; color: #bdc3c7; border-radius: 4px; }}"
+            f"QPushButton:hover {{ background: {_NAV_HOVER}; }}")
         self._collapse_top.clicked.connect(self._expand_nav)
         self._collapse_top.hide()
         self._desc_row.addWidget(self._collapse_top)
@@ -110,8 +119,9 @@ class SettingsWindow(QDialog):
         self._collapse_side.setFixedSize(30, 28)
         self._collapse_side.setToolTip("收起导航")
         self._collapse_side.setStyleSheet(
-            "QPushButton { background: transparent; border: none; font-size: 16px; color: #bdc3c7; border-radius: 4px; }"
-            "QPushButton:hover { background: rgba(255,255,255,0.1); }")
+            "QPushButton { background: transparent; border: none;"
+            f" font-size: 16px; color: #bdc3c7; border-radius: 4px; }}"
+            f"QPushButton:hover {{ background: {_NAV_HOVER}; }}")
         self._collapse_side.clicked.connect(self._toggle_nav)
         self._tool_row.addWidget(self._collapse_side)
 
@@ -120,8 +130,9 @@ class SettingsWindow(QDialog):
         self.search_box.setClearButtonEnabled(True)
         self.search_box.setFixedHeight(28)
         self.search_box.setStyleSheet(
-            "QLineEdit { border: 1px solid #34495e; border-radius: 6px; padding: 2px 6px;"
-            "font-size: 11px; background: #34495e; color: #ecf0f1; }"
+            "QLineEdit { border: 1px solid #34495e; border-radius: 6px;"
+            " padding: 2px 6px; font-size: 11px;"
+            " background: #34495e; color: #ecf0f1; }"
             "QLineEdit:focus { border-color: #e94560; }")
         self.search_box.textChanged.connect(self._on_search)
         self._tool_row.addWidget(self.search_box, 1)
@@ -130,14 +141,15 @@ class SettingsWindow(QDialog):
         self._search_icon.setFixedSize(30, 28)
         self._search_icon.setToolTip("搜索")
         self._search_icon.setStyleSheet(
-            "QPushButton { background: transparent; border: none; font-size: 13px; border-radius: 4px; }"
-            "QPushButton:hover { background: rgba(255,255,255,0.1); }")
+            "QPushButton { background: transparent; border: none;"
+            f" font-size: 13px; border-radius: 4px; }}"
+            f"QPushButton:hover {{ background: {_NAV_HOVER}; }}")
         self._search_icon.clicked.connect(self._expand_nav)
         self._search_icon.hide()
         self._tool_row.addWidget(self._search_icon)
         layout.addLayout(self._tool_row)
 
-        # 树形导航
+        # 树形导航 — hover 用纯色，不用 rgba 半透明
         self._tree = QTreeWidget()
         self._tree.setHeaderHidden(True)
         self._tree.setIndentation(16)
@@ -145,11 +157,21 @@ class SettingsWindow(QDialog):
         self._tree.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self._tree.verticalScrollBar().setEnabled(False)
         self._tree.setAnimated(True)
-        self._tree.setStyleSheet("""
-            QTreeWidget { background: transparent; border: none; outline: none; font-size: 13px; }
-            QTreeWidget::item { padding: 7px 6px; border-radius: 6px; color: #bdc3c7; }
-            QTreeWidget::item:selected { background: #e94560; color: #fff; font-weight: bold; }
-            QTreeWidget::item:hover:!selected { background: rgba(255,255,255,0.08); }""")
+        self._tree.setAutoFillBackground(True)
+        self._tree.setStyleSheet(f"""
+            QTreeWidget {{
+                background: {_NAV_BG}; border: none;
+                outline: none; font-size: 13px;
+            }}
+            QTreeWidget::item {{
+                padding: 7px 6px; border-radius: 6px; color: #bdc3c7;
+            }}
+            QTreeWidget::item:selected {{
+                background: #e94560; color: #fff; font-weight: bold;
+            }}
+            QTreeWidget::item:hover:!selected {{
+                background: {_NAV_HOVER};
+            }}""")
 
         for emoji, text, key, enabled, children in NAV_TREE:
             p = QTreeWidgetItem([f" {text}"])
@@ -262,82 +284,12 @@ class SettingsWindow(QDialog):
                 c.setHidden(not v)
                 if v:
                     any_vis = True
-            p.setHidden(not any_vis and not (not text.strip() or text.strip().lower() in p.text(0).lower()))
+            p.setHidden(not any_vis and not (
+                not text.strip() or text.strip().lower() in p.text(0).lower()))
 
     # ═══════════════════════════════════
-    # 右侧 + 页面路由
+    # 右侧 + QStackedWidget 页面管理
     # ═══════════════════════════════════
-
-    def _on_tree_changed(self, cur, prev):
-        if not cur:
-            return
-        # 有子项的节点不触发页面切换（只弹菜单）
-        children = cur.data(0, Qt.UserRole + 1)
-        if children:
-            return
-        self._switch_page(cur.data(0, Qt.UserRole))
-
-    def _on_item_clicked(self, item, col):
-        children = item.data(0, Qt.UserRole + 1)
-        if children:
-            self._popup_children_menu(item, children)
-            # 恢复到上一个选中的非父节点，避免高亮停在父节点上
-            if self._last_page_key:
-                for i in range(self._tree.topLevelItemCount()):
-                    p = self._tree.topLevelItem(i)
-                    if p.data(0, Qt.UserRole) == self._last_page_key:
-                        self._tree.setCurrentItem(p)
-                        break
-                    for j in range(p.childCount()):
-                        c = p.child(j)
-                        if c.data(0, Qt.UserRole) == self._last_page_key:
-                            self._tree.setCurrentItem(c)
-                            break
-        else:
-            self._last_page_key = item.data(0, Qt.UserRole)
-            self._switch_page(self._last_page_key)
-
-    def _popup_children_menu(self, item, children):
-        menu = QMenu(self)
-        menu.setStyleSheet("""
-            QMenu { background: #2c3e50; color: #ecf0f1; border: 1px solid #e94560;
-                    border-radius: 6px; padding: 4px; }
-            QMenu::item { padding: 6px 20px; border-radius: 4px; }
-            QMenu::item:selected { background: #e94560; }""")
-        for emoji, text, key in children:
-            action = QAction(f"{emoji}  {text}", self)
-            action.setData(key)
-            action.triggered.connect(lambda checked, k=key: self._switch_page(k))
-            menu.addAction(action)
-        rect = self._tree.visualItemRect(item)
-        pos = self._tree.viewport().mapToGlobal(rect.bottomLeft())
-        menu.exec(pos)
-
-    def _switch_page(self, key):
-        while self._card_layout.count():
-            w = self._card_layout.takeAt(0)
-            if w.widget():
-                w.widget().deleteLater()
-
-        titles = {
-            "general": "通用设置", "character": "角色设置",
-            "character_api": "接口设置", "character_sprites": "立绘设置",
-            "ai": "AI 模型", "tts": "语音合成", "asr": "语音输入", "about": "关于",
-        }
-        self._page_title.setText(titles.get(key, ""))
-
-        renderers = {
-            "general": self._page_general,
-            "character": self._page_character_parent,
-            "character_api": self._page_character_api,
-            "character_sprites": self._page_character_sprites,
-            "ai": self._page_ai,
-            "tts": self._page_tts,
-            "asr": self._page_asr,
-            "about": self._page_about,
-        }
-        renderers.get(key, self._page_general)()
-        self._card_layout.addStretch()
 
     def _build_right(self):
         right = QWidget()
@@ -346,7 +298,8 @@ class SettingsWindow(QDialog):
         layout.setSpacing(12)
 
         self._page_title = QLabel("通用设置")
-        self._page_title.setStyleSheet("font-size: 18px; font-weight: bold; color: #1e293b;")
+        self._page_title.setStyleSheet(
+            "font-size: 18px; font-weight: bold; color: #1e293b;")
         layout.addWidget(self._page_title, alignment=Qt.AlignLeft)
 
         scroll = QScrollArea()
@@ -356,43 +309,95 @@ class SettingsWindow(QDialog):
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         scroll.setStyleSheet(
             "QScrollArea { background: transparent; border: none; }"
-            "QScrollBar:vertical { width: 6px; background: transparent; border-radius: 3px; }"
-            "QScrollBar::handle:vertical { background: #c8ccd4; border-radius: 3px; min-height: 30px; }"
-            "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }")
+            "QScrollBar:vertical { width: 6px; background: transparent;"
+            " border-radius: 3px; }"
+            "QScrollBar::handle:vertical { background: #c8ccd4;"
+            " border-radius: 3px; min-height: 30px; }"
+            "QScrollBar::add-line:vertical,"
+            " QScrollBar::sub-line:vertical { height: 0; }")
 
-        self.card = QFrame()
-        self.card.setStyleSheet("QFrame { background: #fff; border-radius: 14px; border: 1px solid #e2e6ed; }")
-        self.card.setFocusPolicy(Qt.NoFocus)
-        self._card_layout = QVBoxLayout(self.card)
-        self._card_layout.setContentsMargins(28, 24, 28, 24)
-        self._card_layout.setSpacing(16)
-        scroll.setWidget(self.card)
+        # QStackedWidget: 每个页面是独立的 QWidget，切换时仅改 index
+        self._stack = QStackedWidget()
+        self._stack.setStyleSheet("background: transparent;")
+
+        # 预构建所有页面（每个页面是独立的 Widget）
+        self._pages = {}
+        page_builders = [
+            ("general", self._page_general),
+            ("character", self._page_character_parent),
+            ("character_api", self._page_character_api),
+            ("character_sprites", self._page_character_sprites),
+            ("ai", self._page_ai),
+            ("tts", self._page_tts),
+            ("asr", self._page_asr),
+            ("about", self._page_about),
+        ]
+        for key, builder in page_builders:
+            page_widget = builder()
+            page_widget.setProperty("page_key", key)
+            self._stack.addWidget(page_widget)
+            self._pages[key] = page_widget
+
+        scroll.setWidget(self._stack)
         layout.addWidget(scroll, 1)
 
         btn_row = QHBoxLayout()
         btn_row.addStretch()
-        for text, slot, pri in [("应用", self._on_apply, False), ("确定", self._on_ok, True), ("取消", self.reject, False)]:
+        for text, slot, pri in [
+            ("应用", self._on_apply, False),
+            ("确定", self._on_ok, True),
+            ("取消", self.reject, False),
+        ]:
             b = QPushButton(text)
             if pri:
-                b.setStyleSheet("QPushButton { background: #e94560; color: #fff; border: none; border-radius: 7px; padding: 7px 22px; font-size: 13px; }"
-                                "QPushButton:hover { background: #ff6b6b; }")
+                b.setStyleSheet(
+                    "QPushButton { background: #e94560; color: #fff;"
+                    " border: none; border-radius: 7px;"
+                    " padding: 7px 22px; font-size: 13px; }"
+                    "QPushButton:hover { background: #ff6b6b; }")
             else:
-                b.setStyleSheet("QPushButton { background: #fff; color: #444; border: 1px solid #d3d7de; border-radius: 7px; padding: 7px 22px; font-size: 13px; }"
-                                "QPushButton:hover { background: #f5f6fa; }")
+                b.setStyleSheet(
+                    "QPushButton { background: #fff; color: #444;"
+                    " border: 1px solid #d3d7de; border-radius: 7px;"
+                    " padding: 7px 22px; font-size: 13px; }"
+                    "QPushButton:hover { background: #f5f6fa; }")
             b.clicked.connect(slot)
             btn_row.addWidget(b)
         layout.addLayout(btn_row)
         return right
 
-    # ─── 通用控件 ─────────────────────────────
+    def _switch_page(self, key):
+        """QStackedWidget 切换页面 — 旧页面自动隐藏，新页面自动显示"""
+        if key in self._pages:
+            self._stack.setCurrentWidget(self._pages[key])
+        titles = {
+            "general": "通用设置", "character": "角色设置",
+            "character_api": "接口设置", "character_sprites": "立绘设置",
+            "ai": "AI 模型", "tts": "语音合成", "asr": "语音输入",
+            "about": "关于",
+        }
+        self._page_title.setText(titles.get(key, ""))
 
-    def _sec(self, t):
-        self._card_layout.addSpacing(4)
-        label = QLabel(t)
-        label.setStyleSheet("font-weight: bold; font-size: 14px; color: #475569; margin-top: 2px;")
-        self._card_layout.addWidget(label)
+    # ─── 页面构建工具 ─────────────────────────
 
-    def _row(self, label_text: str, widget, stretch_label=True):
+    def _make_page(self):
+        """创建空白页面容器，返回 (QWidget, QVBoxLayout)"""
+        w = QWidget()
+        lay = QVBoxLayout(w)
+        lay.setContentsMargins(28, 24, 28, 24)
+        lay.setSpacing(16)
+        return w, lay
+
+    def _sec(self, layout, title):
+        """添加分区标题"""
+        layout.addSpacing(4)
+        label = QLabel(title)
+        label.setStyleSheet(
+            "font-weight: bold; font-size: 14px;"
+            " color: #475569; margin-top: 2px;")
+        layout.addWidget(label)
+
+    def _row(self, label_text, widget, layout, stretch_label=True):
         """标签 + 控件 的水平行"""
         row = QHBoxLayout()
         row.setSpacing(16)
@@ -401,15 +406,15 @@ class SettingsWindow(QDialog):
         lbl.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Fixed)
         row.addWidget(lbl)
         row.addWidget(widget, 1)
-        self._card_layout.addLayout(row)
+        layout.addLayout(row)
         return widget
 
-    def _hint(self, text):
+    def _hint(self, layout, text):
         """灰色提示文字"""
         h = QLabel(text)
         h.setStyleSheet("color: #94a3b8; font-size: 11px; margin-left: 2px;")
         h.setWordWrap(True)
-        self._card_layout.addWidget(h)
+        layout.addWidget(h)
 
     def _line_edit(self, placeholder="", echo_mode=QLineEdit.Normal):
         le = QLineEdit()
@@ -417,117 +422,159 @@ class SettingsWindow(QDialog):
         le.setEchoMode(echo_mode)
         le.setFixedHeight(30)
         le.setStyleSheet(
-            "QLineEdit { border: 1px solid #d3d7de; border-radius: 6px; padding: 4px 10px; font-size: 13px; }"
+            "QLineEdit { border: 1px solid #d3d7de; border-radius: 6px;"
+            " padding: 4px 10px; font-size: 13px; }"
             "QLineEdit:focus { border-color: #e94560; }")
         return le
 
-    def _ph(self, t):
-        label = QLabel(t)
-        label.setStyleSheet("color: #94a3b8; font-size: 13px; padding: 20px;")
+    def _ph(self, layout, text):
+        """占位提示"""
+        label = QLabel(text)
+        label.setStyleSheet(
+            "color: #94a3b8; font-size: 13px; padding: 20px;")
         label.setAlignment(Qt.AlignCenter)
-        self._card_layout.addWidget(label)
+        layout.addWidget(label)
 
     # ═══════════════════════════════════
     # 通用设置
     # ═══════════════════════════════════
 
     def _page_general(self):
-        self._sec("软件设置")
+        page, lay = self._make_page()
 
-        # 角色选择 - 分两行：标签一行，控件一行
+        self._sec(lay, "软件设置")
+
         char_lbl = QLabel("角色选择")
         char_lbl.setStyleSheet("font-size: 13px; color: #2c3e50;")
-        self._card_layout.addWidget(char_lbl)
+        lay.addWidget(char_lbl)
 
         self._char_combo = QComboBox()
         self._char_combo.setFixedHeight(30)
-        self._char_combo.setStyleSheet("QComboBox { border: 1px solid #d3d7de; border-radius: 6px; padding: 4px 10px; font-size: 13px; }")
+        self._char_combo.setStyleSheet(
+            "QComboBox { border: 1px solid #d3d7de; border-radius: 6px;"
+            " padding: 4px 10px; font-size: 13px; }")
         for n in self._characters:
             self._char_combo.addItem(n)
         idx = self._char_combo.findText(self._current_char)
         if idx >= 0:
             self._char_combo.setCurrentIndex(idx)
-        self._card_layout.addWidget(self._char_combo)
+        lay.addWidget(self._char_combo)
 
         open_folder_btn = QPushButton("📂 打开角色文件夹")
         open_folder_btn.setFixedHeight(28)
         open_folder_btn.setStyleSheet(
-            "QPushButton { background: #f5f7fa; color: #444; border: 1px solid #d3d7de; border-radius: 6px; padding: 4px 12px; font-size: 12px; }"
+            "QPushButton { background: #f5f7fa; color: #444;"
+            " border: 1px solid #d3d7de; border-radius: 6px;"
+            " padding: 4px 12px; font-size: 12px; }"
             "QPushButton:hover { background: #e8ecf1; }")
         open_folder_btn.clicked.connect(self._open_characters_folder)
-        self._card_layout.addWidget(open_folder_btn)
+        lay.addWidget(open_folder_btn)
 
         self._auto_start_cb = QCheckBox("开机自启")
-        self._auto_start_cb.setChecked(self.config.get("general", "auto_start", default=False))
-        self._card_layout.addWidget(self._auto_start_cb)
+        self._auto_start_cb.setChecked(
+            self.config.get("general", "auto_start", default=False))
+        lay.addWidget(self._auto_start_cb)
 
-        self._sec("窗口设置")
+        self._sec(lay, "窗口设置")
 
         self._always_top_cb = QCheckBox("始终置顶")
-        self._always_top_cb.setChecked(self.config.get("window", "always_on_top", default=True))
-        self._card_layout.addWidget(self._always_top_cb)
+        self._always_top_cb.setChecked(
+            self.config.get("window", "always_on_top", default=True))
+        lay.addWidget(self._always_top_cb)
 
-        # 缩放 - 单独一行
         scale_lbl = QLabel("立绘缩放")
         scale_lbl.setStyleSheet("font-size: 13px; color: #2c3e50;")
-        self._card_layout.addWidget(scale_lbl)
+        lay.addWidget(scale_lbl)
 
         scale_row = QHBoxLayout()
         scale_row.setSpacing(8)
         self._scale_slider = QSlider(Qt.Horizontal)
         self._scale_slider.setRange(10, 200)
-        self._scale_slider.setValue(int(self.config.get("window", "scale", default=0.5) * 100))
+        self._scale_slider.setValue(
+            int(self.config.get("window", "scale", default=0.5) * 100))
         self._scale_slider.valueChanged.connect(self._on_scale_slider)
         self._scale_slider.setFixedHeight(20)
         self._scale_slider.setStyleSheet(
-            "QSlider::groove:horizontal { height: 4px; background: #e2e6ed; border-radius: 2px; }"
-            "QSlider::handle:horizontal { width: 14px; height: 14px; margin: -5px 0; background: #e94560; border-radius: 7px; }")
-
+            "QSlider::groove:horizontal { height: 4px;"
+            " background: #e2e6ed; border-radius: 2px; }"
+            "QSlider::handle:horizontal { width: 14px; height: 14px;"
+            " margin: -5px 0; background: #e94560; border-radius: 7px; }"
+            "QSlider::handle:horizontal:hover { background: #ff6b6b; }")
         self._scale_label = QLabel(f"{self._scale_slider.value()}%")
         self._scale_label.setFixedWidth(42)
-        self._scale_label.setStyleSheet("color: #e94560; font-weight: bold; font-size: 13px;")
-
+        self._scale_label.setStyleSheet(
+            "color: #e94560; font-weight: bold; font-size: 13px;")
         scale_row.addWidget(self._scale_slider, 1)
         scale_row.addWidget(self._scale_label)
-        self._card_layout.addLayout(scale_row)
+        lay.addLayout(scale_row)
 
-        # 逐字速度
+        _spin_qss = (
+            "QSpinBox { border: 1px solid #d3d7de; border-radius: 6px;"
+            " padding: 4px 8px; font-size: 13px; padding-right: 24px; }"
+            "QSpinBox::up-button, QSpinBox::down-button {"
+            " width: 18px; border: none; background: transparent; }"
+            "QSpinBox::up-button { subcontrol-origin: border;"
+            " subcontrol-position: top right; }"
+            "QSpinBox::down-button { subcontrol-origin: border;"
+            " subcontrol-position: bottom right; }"
+            "QSpinBox::up-button:hover, QSpinBox::down-button:hover {"
+            " background: #e8ecf1; }"
+            "QSpinBox::up-button:pressed, QSpinBox::down-button:pressed {"
+            " background: #d3d7de; }"
+            "QSpinBox::up-arrow { image: none;"
+            " border-left: 4px solid transparent;"
+            " border-right: 4px solid transparent;"
+            " border-bottom: 5px solid #666; width: 0; height: 0; }"
+            "QSpinBox::down-arrow { image: none;"
+            " border-left: 4px solid transparent;"
+            " border-right: 4px solid transparent;"
+            " border-top: 5px solid #666; width: 0; height: 0; }"
+        )
+
         self._typing_speed = QSpinBox()
         self._typing_speed.setRange(10, 500)
-        self._typing_speed.setValue(self.config.get("general", "typing_speed", default=40))
+        self._typing_speed.setValue(
+            self.config.get("general", "typing_speed", default=40))
         self._typing_speed.setSuffix(" ms/字")
         self._typing_speed.setFixedHeight(30)
         self._typing_speed.setMinimumWidth(120)
-        self._typing_speed.setStyleSheet("QSpinBox { border: 1px solid #d3d7de; border-radius: 6px; padding: 4px 8px; font-size: 13px; }")
-        self._row("逐字显示速度", self._typing_speed)
+        self._typing_speed.setStyleSheet(_spin_qss)
+        self._row("逐字显示速度", self._typing_speed, lay)
 
-        # 对话框缩放
         self._dialog_scale = QSpinBox()
         self._dialog_scale.setRange(50, 200)
-        self._dialog_scale.setValue(self.config.get("general", "dialog_scale", default=100))
+        self._dialog_scale.setValue(
+            self.config.get("general", "dialog_scale", default=100))
         self._dialog_scale.setSuffix(" %")
         self._dialog_scale.setFixedHeight(30)
         self._dialog_scale.setMinimumWidth(120)
-        self._dialog_scale.setStyleSheet("QSpinBox { border: 1px solid #d3d7de; border-radius: 6px; padding: 4px 8px; font-size: 13px; }")
-        self._row("对话框缩放", self._dialog_scale)
+        self._dialog_scale.setStyleSheet(_spin_qss)
+        self._row("对话框缩放", self._dialog_scale, lay)
 
-        self._sec("行为")
+        self._sec(lay, "行为")
 
         self._click_combo = QComboBox()
         self._click_combo.addItem("切换下一张立绘", "switch_sprite")
         self._click_combo.addItem("弹跳动画", "bounce")
         self._click_combo.addItem("无反应", "none")
         self._click_combo.setFixedHeight(30)
-        self._click_combo.setStyleSheet("QComboBox { border: 1px solid #d3d7de; border-radius: 6px; padding: 6px 10px; font-size: 13px; }")
-        current = self.config.get("behavior", "click_action", default="switch_sprite")
+        self._click_combo.setStyleSheet(
+            "QComboBox { border: 1px solid #d3d7de; border-radius: 6px;"
+            " padding: 6px 10px; font-size: 13px; }")
+        current = self.config.get("behavior", "click_action",
+                                  default="switch_sprite")
         idx = self._click_combo.findData(current)
         if idx >= 0:
             self._click_combo.setCurrentIndex(idx)
-        self._row("点击立绘", self._click_combo)
+        self._row("点击立绘", self._click_combo, lay)
 
         self._auto_idle_cb = QCheckBox("自动待机动画")
-        self._auto_idle_cb.setChecked(self.config.get("behavior", "auto_idle", default=True))
-        self._card_layout.addWidget(self._auto_idle_cb)
+        self._auto_idle_cb.setChecked(
+            self.config.get("behavior", "auto_idle", default=True))
+        lay.addWidget(self._auto_idle_cb)
+
+        lay.addStretch()
+        return page
 
     def _open_characters_folder(self):
         folder = self._base_dir / "characters"
@@ -539,129 +586,172 @@ class SettingsWindow(QDialog):
     # ═══════════════════════════════════
 
     def _page_character_api(self):
-        self._sec("对话设置")
+        page, lay = self._make_page()
+
+        self._sec(lay, "对话设置")
 
         prompt_lbl = QLabel("角色提示词（system prompt）")
-        prompt_lbl.setStyleSheet("font-size: 13px; color: #2c3e50; font-weight: bold;")
-        self._card_layout.addWidget(prompt_lbl)
+        prompt_lbl.setStyleSheet(
+            "font-size: 13px; color: #2c3e50; font-weight: bold;")
+        lay.addWidget(prompt_lbl)
 
         self._system_prompt = QTextEdit()
-        self._system_prompt.setPlaceholderText("设定角色的性格、说话方式、回复格式...")
+        self._system_prompt.setPlaceholderText(
+            "设定角色的性格、说话方式、回复格式...")
         self._system_prompt.setFixedHeight(120)
-        self._system_prompt.setPlainText(self.config.get("character_prompt", "system_prompt", default=""))
+        self._system_prompt.setPlainText(
+            self.config.get("character_prompt", "system_prompt", default=""))
         self._system_prompt.setStyleSheet(
-            "QTextEdit { border: 1px solid #d3d7de; border-radius: 8px; padding: 8px; font-size: 13px; }"
+            "QTextEdit { border: 1px solid #d3d7de; border-radius: 8px;"
+            " padding: 8px; font-size: 13px; }"
             "QTextEdit:focus { border-color: #e94560; }")
-        self._card_layout.addWidget(self._system_prompt)
+        lay.addWidget(self._system_prompt)
 
-        self._hint("提示词决定了角色的性格和回复风格")
+        self._hint(lay, "提示词决定了角色的性格和回复风格")
 
-        self._card_layout.addSpacing(8)
-        self._sec("格式提示词（可选）")
+        lay.addSpacing(8)
+        self._sec(lay, "格式提示词（可选）")
 
         self._format_prompt = QTextEdit()
-        self._format_prompt.setPlaceholderText("例如：每句话前加上心情标签，格式为 {心情}|{回复}")
+        self._format_prompt.setPlaceholderText(
+            "例如：每句话前加上心情标签，格式为 {心情}|{回复}")
         self._format_prompt.setFixedHeight(80)
-        self._format_prompt.setPlainText(self.config.get("character_prompt", "format_prompt", default=""))
+        self._format_prompt.setPlainText(
+            self.config.get("character_prompt", "format_prompt", default=""))
         self._format_prompt.setStyleSheet(
-            "QTextEdit { border: 1px solid #d3d7de; border-radius: 8px; padding: 8px; font-size: 13px; }"
+            "QTextEdit { border: 1px solid #d3d7de; border-radius: 8px;"
+            " padding: 8px; font-size: 13px; }"
             "QTextEdit:focus { border-color: #e94560; }")
-        self._card_layout.addWidget(self._format_prompt)
+        lay.addWidget(self._format_prompt)
+
+        lay.addStretch()
+        return page
 
     # ═══════════════════════════════════
     # 角色设置 > 立绘设置
     # ═══════════════════════════════════
 
     def _page_character_sprites(self):
-        self._sec("当前角色立绘")
+        page, lay = self._make_page()
+
+        self._sec(lay, "当前角色立绘")
 
         self._sprite_list = QTreeWidget()
         self._sprite_list.setHeaderHidden(True)
         self._sprite_list.setStyleSheet(
-            "QTreeWidget { border: 1px solid #e2e6ed; border-radius: 8px; padding: 4px; font-size: 13px; }"
+            "QTreeWidget { border: 1px solid #e2e6ed; border-radius: 8px;"
+            " padding: 4px; font-size: 13px; }"
             "QTreeWidget::item { padding: 6px 10px; border-radius: 4px; }"
-            "QTreeWidget::item:selected { background: #fce4ec; color: #e94560; }")
-
-        char_dir = self._base_dir / "characters" / self._current_char / "sprites"
-        if char_dir.exists():
-            for img in sorted(char_dir.glob("*.png")):
-                item = QTreeWidgetItem([f"🖼️  {img.stem}  ({img.stat().st_size // 1024}KB)"])
-                item.setData(0, Qt.UserRole, str(img))
-                self._sprite_list.addTopLevelItem(item)
-
+            "QTreeWidget::item:selected {"
+            " background: #fce4ec; color: #e94560; }")
         self._sprite_list.setFixedHeight(140)
-        self._card_layout.addWidget(self._sprite_list)
+        lay.addWidget(self._sprite_list)
+
+        # 首次填充
+        self._refresh_sprite_list()
 
         row = QHBoxLayout()
         row.addStretch()
-
         open_sprite_btn = QPushButton("📂 打开立绘文件夹")
         open_sprite_btn.setStyleSheet(
-            "QPushButton { background: #f5f7fa; color: #444; border: 1px solid #d3d7de; border-radius: 6px; padding: 4px 12px; font-size: 12px; }"
+            "QPushButton { background: #f5f7fa; color: #444;"
+            " border: 1px solid #d3d7de; border-radius: 6px;"
+            " padding: 4px 12px; font-size: 12px; }"
             "QPushButton:hover { background: #e8ecf1; }")
-        open_sprite_btn.clicked.connect(lambda: QDesktopServices.openUrl(QUrl.fromLocalFile(str(char_dir))))
+        open_sprite_btn.clicked.connect(self._open_sprites_folder)
         row.addWidget(open_sprite_btn)
-        self._card_layout.addLayout(row)
+        lay.addLayout(row)
 
-        self._hint("将 .png 立绘文件放入 sprites 文件夹即可自动加载")
+        self._hint(lay, "将 .png 立绘文件放入 sprites 文件夹即可自动加载")
+
+        lay.addStretch()
+        return page
+
+    def _refresh_sprite_list(self):
+        """刷新立绘列表（切换角色时调用）"""
+        self._sprite_list.clear()
+        char_dir = self._base_dir / "characters" / self._current_char / "sprites"
+        if char_dir.exists():
+            for img in sorted(char_dir.glob("*.png")):
+                item = QTreeWidgetItem(
+                    [f"🖼️  {img.stem}  ({img.stat().st_size // 1024}KB)"])
+                item.setData(0, Qt.UserRole, str(img))
+                self._sprite_list.addTopLevelItem(item)
+
+    def _open_sprites_folder(self):
+        char_dir = self._base_dir / "characters" / self._current_char / "sprites"
+        if char_dir.exists():
+            QDesktopServices.openUrl(QUrl.fromLocalFile(str(char_dir)))
 
     # ═══════════════════════════════════
     # AI 模型
     # ═══════════════════════════════════
 
     def _page_ai(self):
-        self._sec("OpenAI 兼容 API")
+        page, lay = self._make_page()
+
+        self._sec(lay, "OpenAI 兼容 API")
 
         self._ai_url = self._line_edit("https://api.deepseek.com/v1")
         self._ai_url.setText(self.config.get("llm", "base_url", default=""))
-        self._row("Base URL", self._ai_url)
+        self._row("Base URL", self._ai_url, lay)
 
-        self._hint("支持 DeepSeek / OpenAI / 本地 Ollama 等 OpenAI 兼容接口")
+        self._hint(lay, "支持 DeepSeek / OpenAI / 本地 Ollama 等"
+                        " OpenAI 兼容接口")
 
         self._ai_key = self._line_edit("sk-xxxx", QLineEdit.Password)
         self._ai_key.setText(self.config.get("llm", "api_key", default=""))
-        self._row("API Key", self._ai_key)
+        self._row("API Key", self._ai_key, lay)
 
-        self._ai_model = self._line_edit("deepseek-chat / gpt-4o-mini / ...")
+        self._ai_model = self._line_edit(
+            "deepseek-chat / gpt-4o-mini / ...")
         self._ai_model.setText(self.config.get("llm", "model", default=""))
-        self._row("Model", self._ai_model)
+        self._row("Model", self._ai_model, lay)
 
-        self._sec("高级设定")
+        self._sec(lay, "高级设定")
 
         self._ai_stream_cb = QCheckBox("启用流式输出（逐字显示）")
-        self._ai_stream_cb.setChecked(self.config.get("llm", "stream", default=True))
-        self._card_layout.addWidget(self._ai_stream_cb)
+        self._ai_stream_cb.setChecked(
+            self.config.get("llm", "stream", default=True))
+        lay.addWidget(self._ai_stream_cb)
 
         self._ai_post = self._line_edit("例如 <think>.*?</think>")
-        self._ai_post.setText(self.config.get("llm", "post_processing", default=""))
-        self._row("回复后处理（正则）", self._ai_post)
+        self._ai_post.setText(
+            self.config.get("llm", "post_processing", default=""))
+        self._row("回复后处理（正则）", self._ai_post, lay)
 
-        self._hint("用正则表达式删除回复中不需要的部分，如模型思考过程")
+        self._hint(lay, "用正则表达式删除回复中不需要的部分，如模型思考过程")
 
         self._ai_ignore_err_cb = QCheckBox("忽略格式错误")
-        self._ai_ignore_err_cb.setChecked(self.config.get("llm", "ignore_format_error", default=True))
-        self._card_layout.addWidget(self._ai_ignore_err_cb)
+        self._ai_ignore_err_cb.setChecked(
+            self.config.get("llm", "ignore_format_error", default=True))
+        lay.addWidget(self._ai_ignore_err_cb)
 
-        # 测试连接按钮
-        self._card_layout.addSpacing(4)
+        lay.addSpacing(4)
         test_btn = QPushButton("🔗 测试连接")
         test_btn.setFixedHeight(32)
         test_btn.setStyleSheet(
-            "QPushButton { background: #3498db; color: #fff; border: none; border-radius: 7px; padding: 7px 22px; font-size: 13px; }"
+            "QPushButton { background: #3498db; color: #fff;"
+            " border: none; border-radius: 7px;"
+            " padding: 7px 22px; font-size: 13px; }"
             "QPushButton:hover { background: #2980b9; }")
         test_btn.clicked.connect(self._test_connection)
-        self._card_layout.addWidget(test_btn)
+        lay.addWidget(test_btn)
 
         self._test_status = QLabel("")
         self._test_status.setWordWrap(True)
         self._test_status.setStyleSheet("font-size: 12px; padding: 4px;")
-        self._card_layout.addWidget(self._test_status)
+        lay.addWidget(self._test_status)
+
+        lay.addStretch()
+        return page
 
     def _test_connection(self):
         """测试 API 连接"""
         from core.llm_service import LLMService
         self._test_status.setText("连接中...")
-        self._test_status.setStyleSheet("color: #3498db; font-size: 12px; padding: 4px;")
+        self._test_status.setStyleSheet(
+            "color: #3498db; font-size: 12px; padding: 4px;")
 
         self._test_llm = LLMService(self)
         self._test_llm.configure(
@@ -677,26 +767,38 @@ class SettingsWindow(QDialog):
 
     def _on_test_success(self, text):
         self._test_status.setText("✅ 连接成功！")
-        self._test_status.setStyleSheet("color: #27ae60; font-size: 12px; padding: 4px;")
+        self._test_status.setStyleSheet(
+            "color: #27ae60; font-size: 12px; padding: 4px;")
 
     def _on_test_error(self, err):
         self._test_status.setText(f"❌ {err}")
-        self._test_status.setStyleSheet("color: #e74c3c; font-size: 12px; padding: 4px;")
+        self._test_status.setStyleSheet(
+            "color: #e74c3c; font-size: 12px; padding: 4px;")
 
     # ═══════════════════════════════════
     # TTS / ASR / 关于
     # ═══════════════════════════════════
 
     def _page_character_parent(self):
-        self._ph("请在下方选择「接口设置」或「立绘设置」")
+        page, lay = self._make_page()
+        self._ph(lay, "请在下方选择「接口设置」或「立绘设置」")
+        lay.addStretch()
+        return page
 
     def _page_tts(self):
-        self._ph("语音合成（TTS）将在后续版本中支持\n音色训练计划中")
+        page, lay = self._make_page()
+        self._ph(lay, "语音合成（TTS）将在后续版本中支持\n音色训练计划中")
+        lay.addStretch()
+        return page
 
     def _page_asr(self):
-        self._ph("语音输入（ASR）将在后续版本中支持")
+        page, lay = self._make_page()
+        self._ph(lay, "语音输入（ASR）将在后续版本中支持")
+        lay.addStretch()
+        return page
 
     def _page_about(self):
+        page, lay = self._make_page()
         about = QLabel(
             "Moepet - 萌系桌面宠物\n"
             "基于 PySide6 的桌面宠物应用\n\n"
@@ -705,9 +807,81 @@ class SettingsWindow(QDialog):
             "GitHub: zhuge-Tom/moepet")
         about.setStyleSheet("color: #555; font-size: 13px; padding: 16px;")
         about.setAlignment(Qt.AlignCenter)
-        self._card_layout.addWidget(about)
+        lay.addWidget(about)
+        lay.addStretch()
+        return page
 
-    # ─── 配置收集 ─────────────────────────────
+    # ═══════════════════════════════════
+    # 导航事件
+    # ═══════════════════════════════════
+
+    def _on_tree_changed(self, cur, prev):
+        if not cur:
+            return
+        children = cur.data(0, Qt.UserRole + 1)
+        if children:
+            return
+        self._switch_page(cur.data(0, Qt.UserRole))
+
+    def _on_item_clicked(self, item, col):
+        children = item.data(0, Qt.UserRole + 1)
+        if children:
+            if self._collapsed:
+                # 折叠状态：弹菜单选择子页面
+                self._popup_children_menu(item, children)
+                # 恢复到上一个选中的非父节点
+                if self._last_page_key:
+                    for i in range(self._tree.topLevelItemCount()):
+                        p = self._tree.topLevelItem(i)
+                        if p.data(0, Qt.UserRole) == self._last_page_key:
+                            self._tree.setCurrentItem(p)
+                            break
+                        for j in range(p.childCount()):
+                            c = p.child(j)
+                            if c.data(0, Qt.UserRole) == self._last_page_key:
+                                self._tree.setCurrentItem(c)
+                                break
+            else:
+                # 展开状态：切换子项的展开/收起
+                item.setExpanded(not item.isExpanded())
+        else:
+            self._last_page_key = item.data(0, Qt.UserRole)
+            self._switch_page(self._last_page_key)
+
+    def _popup_children_menu(self, item, children):
+        menu = QMenu(self)
+        menu.setStyleSheet("""
+            QMenu { background: #2c3e50; color: #ecf0f1;
+                    border: 1px solid #e94560;
+                    border-radius: 6px; padding: 4px; }
+            QMenu::item { padding: 6px 20px; border-radius: 4px; }
+            QMenu::item:selected { background: #e94560; }""")
+        for emoji, text, key in children:
+            action = QAction(f"{emoji}  {text}", self)
+            action.setData(key)
+            action.triggered.connect(
+                lambda checked, k=key: self._on_child_selected(k))
+            menu.addAction(action)
+        rect = self._tree.visualItemRect(item)
+        pos = self._tree.viewport().mapToGlobal(rect.bottomLeft())
+        menu.exec(pos)
+
+    def _on_child_selected(self, key):
+        """子菜单选中后：切换页面 + 更新导航高亮"""
+        self._last_page_key = key
+        self._switch_page(key)
+        # 在树中高亮对应的子项
+        for i in range(self._tree.topLevelItemCount()):
+            p = self._tree.topLevelItem(i)
+            for j in range(p.childCount()):
+                c = p.child(j)
+                if c.data(0, Qt.UserRole) == key:
+                    self._tree.setCurrentItem(c)
+                    return
+
+    # ═══════════════════════════════════
+    # 配置收集
+    # ═══════════════════════════════════
 
     def _collect_settings(self) -> dict:
         import shiboken6 as sb
@@ -725,19 +899,67 @@ class SettingsWindow(QDialog):
         s = {}
 
         # 通用
-        s["current_character"] = safe(getattr(self, "_char_combo", None), type("", (), {"currentText": lambda: self._current_char})()).currentText() if safe(getattr(self, "_char_combo", None)) else self._current_char
+        s["current_character"] = (
+            safe(getattr(self, "_char_combo", None),
+                 type("", (), {"currentText": lambda: self._current_char})()
+                 ).currentText()
+            if safe(getattr(self, "_char_combo", None))
+            else self._current_char
+        )
         s["window"] = {
-            "scale": safe(getattr(self, "_scale_slider", None), type("", (), {"value": lambda: 50})()).value() / 100.0 if safe(getattr(self, "_scale_slider", None)) else self.config.get("window", "scale", default=0.5),
-            "always_on_top": safe(getattr(self, "_always_top_cb", None), type("", (), {"isChecked": lambda: True})()).isChecked() if safe(getattr(self, "_always_top_cb", None)) else True,
+            "scale": (
+                safe(getattr(self, "_scale_slider", None),
+                     type("", (), {"value": lambda: 50})()
+                     ).value() / 100.0
+                if safe(getattr(self, "_scale_slider", None))
+                else self.config.get("window", "scale", default=0.5)
+            ),
+            "always_on_top": (
+                safe(getattr(self, "_always_top_cb", None),
+                     type("", (), {"isChecked": lambda: True})()
+                     ).isChecked()
+                if safe(getattr(self, "_always_top_cb", None))
+                else True
+            ),
         }
         s["behavior"] = {
-            "click_action": safe(getattr(self, "_click_combo", None), type("", (), {"currentData": lambda: "switch_sprite"})()).currentData() if safe(getattr(self, "_click_combo", None)) else "switch_sprite",
-            "auto_idle": safe(getattr(self, "_auto_idle_cb", None), type("", (), {"isChecked": lambda: True})()).isChecked() if safe(getattr(self, "_auto_idle_cb", None)) else True,
+            "click_action": (
+                safe(getattr(self, "_click_combo", None),
+                     type("", (), {"currentData": lambda: "switch_sprite"})()
+                     ).currentData()
+                if safe(getattr(self, "_click_combo", None))
+                else "switch_sprite"
+            ),
+            "auto_idle": (
+                safe(getattr(self, "_auto_idle_cb", None),
+                     type("", (), {"isChecked": lambda: True})()
+                     ).isChecked()
+                if safe(getattr(self, "_auto_idle_cb", None))
+                else True
+            ),
         }
         s["general"] = {
-            "typing_speed": safe(getattr(self, "_typing_speed", None), type("", (), {"value": lambda: 40})()).value() if safe(getattr(self, "_typing_speed", None)) else 40,
-            "dialog_scale": safe(getattr(self, "_dialog_scale", None), type("", (), {"value": lambda: 100})()).value() if safe(getattr(self, "_dialog_scale", None)) else 100,
-            "auto_start": safe(getattr(self, "_auto_start_cb", None), type("", (), {"isChecked": lambda: False})()).isChecked() if safe(getattr(self, "_auto_start_cb", None)) else False,
+            "typing_speed": (
+                safe(getattr(self, "_typing_speed", None),
+                     type("", (), {"value": lambda: 40})()
+                     ).value()
+                if safe(getattr(self, "_typing_speed", None))
+                else 40
+            ),
+            "dialog_scale": (
+                safe(getattr(self, "_dialog_scale", None),
+                     type("", (), {"value": lambda: 100})()
+                     ).value()
+                if safe(getattr(self, "_dialog_scale", None))
+                else 100
+            ),
+            "auto_start": (
+                safe(getattr(self, "_auto_start_cb", None),
+                     type("", (), {"isChecked": lambda: False})()
+                     ).isChecked()
+                if safe(getattr(self, "_auto_start_cb", None))
+                else False
+            ),
         }
 
         # AI
@@ -753,8 +975,10 @@ class SettingsWindow(QDialog):
                 "api_key": ai_key.text().strip() if ai_key else "",
                 "model": ai_model.text().strip() if ai_model else "",
                 "stream": ai_stream.isChecked() if ai_stream else True,
-                "post_processing": ai_post.text().strip() if ai_post else "",
-                "ignore_format_error": ai_ignore.isChecked() if ai_ignore else True,
+                "post_processing": (
+                    ai_post.text().strip() if ai_post else ""),
+                "ignore_format_error": (
+                    ai_ignore.isChecked() if ai_ignore else True),
             }
 
         # 角色提示词
@@ -762,8 +986,10 @@ class SettingsWindow(QDialog):
         fmt_prompt = safe(getattr(self, "_format_prompt", None))
         if sys_prompt or fmt_prompt:
             s["character_prompt"] = {
-                "system_prompt": sys_prompt.toPlainText() if sys_prompt else "",
-                "format_prompt": fmt_prompt.toPlainText() if fmt_prompt else "",
+                "system_prompt": (
+                    sys_prompt.toPlainText() if sys_prompt else ""),
+                "format_prompt": (
+                    fmt_prompt.toPlainText() if fmt_prompt else ""),
             }
 
         return s
@@ -772,7 +998,11 @@ class SettingsWindow(QDialog):
         cl = getattr(self, "_char_combo", None)
         if not cl:
             return None
-        return cl.currentText() if cl.currentText() != self._current_char else None
+        return (
+            cl.currentText()
+            if cl.currentText() != self._current_char
+            else None
+        )
 
     def _on_apply(self):
         v = self._collect_settings()
