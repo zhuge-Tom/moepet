@@ -59,7 +59,7 @@ DIALOG_QSS = f"""
         border-radius: 8px;
         font-size: 13px;
         font-weight: bold;
-        padding: 8px 20px;
+        padding: 6px 12px;
     }}
     QPushButton#send_btn:hover {{
         background: #ff6b6b;

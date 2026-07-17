@@ -4,6 +4,8 @@
 """
 
 import json
+import tempfile
+from datetime import datetime
 from pathlib import Path
 
 from PySide6.QtWidgets import QApplication, QDialog
@@ -13,6 +15,10 @@ from core.config import Config
 from core.character import CharacterLoader, CharacterData
 from core.signals import signals
 from core.llm_service import LLMService
+from core.ocr_service import OcrService
+from core.tts_service import TTSService
+from core.vision_service import VisionService
+from core.hotkeys import HotkeyService
 from ui.pet_window import PetWindow
 from ui.dialog_window import DialogWindow
 from ui.settings_window import SettingsWindow
@@ -33,11 +39,24 @@ class PetManager:
         self._tray: TrayIcon | None = None
 
         self._llm = LLMService()
+        self._ocr = OcrService()
+        self._ocr.completed.connect(self._on_ocr_done)
+        self._ocr.failed.connect(self._on_ocr_error)
+        self._tts = TTSService()
+        self._tts.completed.connect(self._on_tts_done)
+        self._tts.failed.connect(self._on_tts_error)
+        self._vision = VisionService()
+        self._vision.completed.connect(self._on_vision_done)
+        self._vision.failed.connect(self._on_vision_error)
+        self._screen_hotkey = HotkeyService()
+        self._screen_hotkey.triggered.connect(self._capture_screen)
+        self._screen_request_active = False
         self._configure_llm()
         self._load_chat_history()
 
         self._load_characters()
         self._connect_signals()
+        self._register_screen_hotkey()
 
     # ─── LLM ──────────────────────────────────
 
@@ -45,7 +64,7 @@ class PetManager:
         """从 config 读取 LLM 配置"""
         self._llm.configure(
             base_url=self.config.get("llm", "base_url", default=""),
-            api_key=self.config.get("llm", "api_key", default=""),
+            api_key=self.config.get_secret("llm") or self.config.get("llm", "api_key", default=""),
             model=self.config.get("llm", "model", default=""),
         )
         system_prompt = self.config.get("character_prompt", "system_prompt", default="")
@@ -66,6 +85,7 @@ class PetManager:
             self._char_data[name] = char_data
             scale = self.config.get("window", "scale", default=char_data.scale)
             win = PetWindow(char_data, scale_override=scale)
+            win.set_state("idle")
             self._windows[name] = win
 
         names = list(self._windows.keys())
@@ -79,6 +99,7 @@ class PetManager:
         signals.sprite_animation_requested.connect(self._on_anim_request)
         signals.settings_changed.connect(self._on_settings_signal)
         signals.position_changed.connect(self._on_position_changed)
+        signals.screen_capture_requested.connect(self._capture_screen)
         signals.quit_requested.connect(self._quit)
 
     # ─── 对话历史持久化 ──────────────────────────
@@ -186,6 +207,8 @@ class PetManager:
         if self._dialog is None:
             self._dialog = DialogWindow(char_name=char.name)
             self._dialog.text_submitted.connect(self._on_dialog_text)
+            self._dialog.set_typing_speed(
+                self.config.get("general", "typing_speed", default=40))
 
         # 始终定位在立绘正上方居中，紧挨着
         if win:
@@ -203,10 +226,14 @@ class PetManager:
         if not self._dialog:
             return
 
+        if self._is_screen_request(text):
+            self._capture_screen(prompt=text)
+            return
+
         # 每次发消息前重新配置 LLM，确保使用最新设置
         self._configure_llm()
 
-        api_key = self.config.get("llm", "api_key", default="")
+        api_key = self.config.get_secret("llm") or self.config.get("llm", "api_key", default="")
         if not api_key:
             self._dialog.display_text("请先在设置 → AI 模型 中配置 API Key 喵~", "assistant")
             return
@@ -216,6 +243,7 @@ class PetManager:
             return
 
         self._llm.add_user_message(text)
+        self._set_pet_state("think")
 
         stream = self.config.get("llm", "stream", default=True)
         if stream:
@@ -244,6 +272,8 @@ class PetManager:
         if self._dialog:
             self._dialog.finish_stream(full_text)
         self._save_chat_history()
+        self._set_pet_state("happy")
+        self._speak(full_text)
 
     def _on_llm_done_non_stream(self, full_text: str):
         """非流式完成"""
@@ -253,6 +283,8 @@ class PetManager:
             self._dialog._text_display.clear()
             self._dialog.display_text(full_text, "assistant")
         self._save_chat_history()
+        self._set_pet_state("happy")
+        self._speak(full_text)
 
     def _on_llm_error(self, err: str):
         """LLM 错误"""
@@ -275,6 +307,115 @@ class PetManager:
         if self._dialog:
             self._dialog.finish_stream()
             self._dialog.display_text(f"出错了: {err}", "assistant")
+        self._set_pet_state("idle")
+
+    def _set_pet_state(self, state: str):
+        win = self._windows.get(self.config.current_character)
+        if win:
+            win.set_state(state)
+
+    @staticmethod
+    def _is_screen_request(text: str) -> bool:
+        keywords = ("识图", "识别屏幕", "看屏幕", "看看屏幕", "分析屏幕", "截图", "识别这个界面")
+        return any(word in text.replace(" ", "") for word in keywords)
+
+    def _register_screen_hotkey(self):
+        self._screen_hotkey.register(self.config.get("screen_capture", "hotkey", default="Ctrl+Alt+O"))
+
+    def _capture_screen(self, prompt: str = ""):
+        """Explicit hotkey/chat request: cloud vision first, then private local OCR."""
+        if self._screen_request_active:
+            return
+        screen = QApplication.primaryScreen()
+        if not screen:
+            return
+        path = Path(tempfile.gettempdir()) / f"moepet-capture-{datetime.now():%Y%m%d-%H%M%S}.png"
+        if not screen.grabWindow(0).save(str(path), "PNG"):
+            return
+        self._ocr_path = path
+        self._screen_prompt = prompt
+        self._screen_request_active = True
+        if self._dialog:
+            self._dialog.display_text("正在读取当前屏幕...", "assistant")
+        vision_ready = self.config.get("vision", "enabled", default=False) and self.config.get("vision", "base_url", default="") and self.config.get("vision", "model", default="")
+        if vision_ready and self.config.get("screen_capture", "cloud_first", default=True):
+            self._vision.describe(path, self.config.get("vision", "base_url"), self.config.get_secret("vision"), self.config.get("vision", "model"), "")
+        else:
+            self._ocr.recognize(path)
+
+    def _on_ocr_done(self, text: str):
+        if not self._screen_request_active:
+            return
+        if not self.config.get("screen_capture", "keep_captures", default=False):
+            self._ocr_path.unlink(missing_ok=True)
+        if self._dialog:
+            self._dialog.display_text(text or "未在截图中识别到文字。", "assistant")
+        signals.ocr_completed.emit(text)
+        self._screen_request_active = False
+
+    def _on_ocr_error(self, error: str):
+        if not self._screen_request_active:
+            return
+        if getattr(self, "_ocr_path", None) and not self.config.get("screen_capture", "keep_captures", default=False):
+            self._ocr_path.unlink(missing_ok=True)
+        if self._dialog:
+            self._dialog.display_text(f"本地文字识别不可用：{error}", "assistant")
+        self._screen_request_active = False
+
+    def _on_vision_done(self, text: str):
+        if not self._screen_request_active:
+            return
+        if not self.config.get("screen_capture", "keep_captures", default=False):
+            self._ocr_path.unlink(missing_ok=True)
+        if self._dialog:
+            self._dialog.display_text(text, "assistant")
+        self._screen_request_active = False
+
+    def _on_vision_error(self, _error: str):
+        # Cloud failure never breaks the screenshot feature: fall back to local OCR.
+        if self._screen_request_active:
+            self._ocr.recognize(self._ocr_path)
+
+    def _speak(self, text: str):
+        """Generate speech only when the user has configured an authorized voice sample."""
+        if not self.config.get("tts", "enabled", default=False):
+            return
+        char = self._char_data.get(self.config.current_character)
+        if not char:
+            return
+        reference = char.voice.get("reference_audio", "")
+        if not reference:
+            return
+        reference_path = char.base_dir / "voice" / reference
+        output = Path(tempfile.gettempdir()) / "moepet-tts.wav"
+        self._set_pet_state("speak")
+        signals.tts_state_changed.emit(True)
+        self._tts.synthesize(text, self.config.get("tts", "model_path", default=""), reference_path,
+                             output, self.config.get("tts", "speed", default=1.0))
+
+    def _on_tts_done(self, audio_path: str):
+        # Qt Multimedia avoids an additional playback dependency.
+        from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput
+        from PySide6.QtCore import QUrl
+        self._audio_output = QAudioOutput(self)
+        self._audio_output.setVolume(float(self.config.get("tts", "volume", default=1.0)))
+        self._player = QMediaPlayer(self)
+        self._player.setAudioOutput(self._audio_output)
+        self._player.setSource(QUrl.fromLocalFile(audio_path))
+        self._player.mediaStatusChanged.connect(self._on_audio_status)
+        self._player.play()
+
+    def _on_audio_status(self, status):
+        from PySide6.QtMultimedia import QMediaPlayer
+        if status == QMediaPlayer.EndOfMedia:
+            self._set_pet_state("idle")
+            signals.tts_state_changed.emit(False)
+
+    def _on_tts_error(self, error: str):
+        self._set_pet_state("idle")
+        signals.tts_state_changed.emit(False)
+        if self._dialog:
+            self._dialog.display_text(f"语音合成失败：{error}", "assistant")
 
     # ─── 立绘请求 ─────────────────────────────
 
@@ -343,10 +484,12 @@ class PetManager:
         dialog_scale = self.config.get("general", "dialog_scale", default=100)
         typing_speed = self.config.get("general", "typing_speed", default=40)
         if self._dialog:
-            self._dialog._typing_timer.setInterval(typing_speed)
+            self._dialog.set_typing_speed(typing_speed)
+            self._dialog.set_dialog_scale(dialog_scale)
 
         # 重新配置 LLM
         self._configure_llm()
+        self._register_screen_hotkey()
 
         new_char = settings.get("current_character")
         if new_char and new_char != self.config.current_character:

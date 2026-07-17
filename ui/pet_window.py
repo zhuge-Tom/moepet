@@ -28,6 +28,10 @@ class PetWindow(QMainWindow):
         self._setup_window()
         self._setup_labels()
         self._setup_animator()
+        self._frame_timer = QTimer(self)
+        self._frame_timer.timeout.connect(self._next_frame)
+        self._frame_state = ""
+        self._frame_index = 0
         self._setup_menu()
         self._load_sprites()
         self._show_sprite()
@@ -63,6 +67,7 @@ class PetWindow(QMainWindow):
 
     def _setup_animator(self):
         self._animator = SpriteAnimator(self, self._label, self._overlay)
+        self._animator.size_changed.connect(self._resize_to_sprite)
 
         # 缩放防抖：拖动滑块时不立即重绘，停下来后才应用
         self._rescale_timer = QTimer(self)
@@ -145,6 +150,46 @@ class PetWindow(QMainWindow):
             self._label.resize(pm.size())
             self.resize(pm.size())
 
+    def _resize_to_sprite(self, size):
+        """Keep the transparent top-level window aligned with size animations."""
+        self._label.resize(size)
+        self.resize(size)
+        self._overlay.setGeometry(self._label.geometry())
+
+    def set_state(self, state: str):
+        """Play configured PNG frames and fall back to the idle state."""
+        cfg = self.char_data.animations.get(state) or self.char_data.animations.get("idle")
+        if not cfg or not cfg.frames:
+            self._frame_timer.stop()
+            return
+        if state == self._frame_state and self._frame_timer.isActive():
+            return
+        self._frame_state, self._frame_index = state, 0
+        self._frame_frames = [self._pixmap_for_name(n) for n in cfg.frames]
+        self._frame_frames = [p for p in self._frame_frames if p]
+        if not self._frame_frames:
+            return
+        self._frame_loop = cfg.loop
+        self._label.setPixmap(self._frame_frames[0])
+        self._label.resize(self._frame_frames[0].size())
+        self.resize(self._frame_frames[0].size())
+        self._frame_timer.start(cfg.frame_ms)
+
+    def _pixmap_for_name(self, name: str):
+        for index, info in enumerate(self.char_data.sprites):
+            if info.name == Path(name).stem and index < len(self._pixmaps):
+                return self._pixmaps[index]
+        return None
+
+    def _next_frame(self):
+        self._frame_index += 1
+        if self._frame_index >= len(self._frame_frames):
+            if not self._frame_loop:
+                self._frame_timer.stop()
+                return
+            self._frame_index = 0
+        self._label.setPixmap(self._frame_frames[self._frame_index])
+
     # ─── 外部接口 ─────────────────────────────
 
     def next_sprite(self):
@@ -178,7 +223,12 @@ class PetWindow(QMainWindow):
             self._scale = self._pending_scale
             self._pending_scale = None
             self._load_sprites()
-            self._show_sprite()
+            # Frame states cache pixmaps, so recreate the current state at the new scale.
+            if self._frame_state:
+                self._frame_timer.stop()
+                self.set_state(self._frame_state)
+            else:
+                self._show_sprite()
 
     def set_always_on_top(self, enabled: bool):
         flags = self.windowFlags()

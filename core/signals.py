@@ -17,6 +17,10 @@ class SignalHub(QObject):
     # 对话框相关
     dialog_toggle_requested = Signal()          # 请求显示/隐藏对话框
     dialog_text_received = Signal(str)          # 对话框收到新文本
+    voice_transcribed = Signal(str)
+    screen_capture_requested = Signal()
+    ocr_completed = Signal(str)
+    tts_state_changed = Signal(bool)
 
     # 角色相关
     character_switched = Signal(str)            # 角色已切换

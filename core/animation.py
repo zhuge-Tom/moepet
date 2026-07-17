@@ -7,7 +7,7 @@
 from PySide6.QtCore import (
     QPropertyAnimation, QSequentialAnimationGroup,
     QParallelAnimationGroup, QEasingCurve, QPoint, QSize,
-    QObject,
+    QObject, Signal,
 )
 from PySide6.QtWidgets import QGraphicsOpacityEffect, QWidget
 
@@ -17,6 +17,7 @@ class SpriteAnimator(QObject):
 
     FADE_DURATION = 250
     ANIM_DURATION = 300
+    size_changed = Signal(QSize)
 
     def __init__(self, parent: QWidget, label: QWidget, label_overlay: QWidget = None):
         super().__init__(parent)
@@ -131,6 +132,7 @@ class SpriteAnimator(QObject):
         a.setStartValue(base_size)
         a.setEndValue(target)
         a.setEasingCurve(QEasingCurve.OutBack)
+        a.valueChanged.connect(self.size_changed.emit)
         a.finished.connect(lambda: self._restore_size(base_size))
         a.start()
         self._active_anims = [a]
@@ -143,6 +145,7 @@ class SpriteAnimator(QObject):
         a.setStartValue(base_size)
         a.setEndValue(target)
         a.setEasingCurve(QEasingCurve.InOutQuad)
+        a.valueChanged.connect(self.size_changed.emit)
         a.finished.connect(lambda: self._restore_size(base_size))
         a.start()
         self._active_anims = [a]
@@ -172,6 +175,7 @@ class SpriteAnimator(QObject):
         a.setStartValue(self._label.size())
         a.setEndValue(size)
         a.setEasingCurve(QEasingCurve.InOutQuad)
+        a.valueChanged.connect(self.size_changed.emit)
         a.start()
         self._active_anims.append(a)
 

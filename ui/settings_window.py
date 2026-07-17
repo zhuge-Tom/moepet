@@ -27,8 +27,10 @@ NAV_TREE = [
         ("🖼️", "立绘设置", "character_sprites"),
     ]),
     ("🤖", "AI 模型", "ai", True, []),
-    ("🔊", "语音合成", "tts", False, []),
-    ("🎤", "语音输入", "asr", False, []),
+    ("🔊", "语音合成", "tts", True, []),
+    ("🎤", "语音输入", "asr", True, []),
+    ("📷", "屏幕识别", "screen", True, []),
+    ("👁", "图像理解", "vision", True, []),
     ("ℹ", "关于", "about", True, []),
 ]
 NAV_WIDE = 160
@@ -191,7 +193,6 @@ class SettingsWindow(QDialog):
 
         self._tree.itemClicked.connect(self._on_item_clicked)
         self._tree.currentItemChanged.connect(self._on_tree_changed)
-        self._tree.viewport().installEventFilter(self)
         total_rows = sum(1 + len(ch) for _, _, _, _, ch in NAV_TREE)
         self._tree.setFixedHeight(ROW_H * total_rows + 8)
         layout.addWidget(self._tree)
@@ -253,14 +254,6 @@ class SettingsWindow(QDialog):
                 c.setData(0, Qt.UserRole, ck)
                 c.setIcon(0, self._icon(ct_emoji))
                 p.addChild(c)
-
-    def eventFilter(self, obj, event):
-        if obj is self._tree.viewport() and event.type() == QEvent.MouseButtonRelease:
-            item = self._tree.itemAt(event.pos())
-            if item:
-                self._on_item_clicked(item, 0)
-                return True
-        return super().eventFilter(obj, event)
 
     def _anim_nav_width(self, target):
         cur = self._nav_frame.width()
@@ -330,6 +323,8 @@ class SettingsWindow(QDialog):
             ("ai", self._page_ai),
             ("tts", self._page_tts),
             ("asr", self._page_asr),
+            ("screen", self._page_screen),
+            ("vision", self._page_vision),
             ("about", self._page_about),
         ]
         for key, builder in page_builders:
@@ -374,7 +369,7 @@ class SettingsWindow(QDialog):
             "general": "通用设置", "character": "角色设置",
             "character_api": "接口设置", "character_sprites": "立绘设置",
             "ai": "AI 模型", "tts": "语音合成", "asr": "语音输入",
-            "about": "关于",
+            "screen": "屏幕识别", "vision": "图像理解", "about": "关于",
         }
         self._page_title.setText(titles.get(key, ""))
 
@@ -539,6 +534,7 @@ class SettingsWindow(QDialog):
         self._typing_speed.setFixedHeight(30)
         self._typing_speed.setMinimumWidth(120)
         self._typing_speed.setStyleSheet(_spin_qss)
+        self._typing_speed.setToolTip("每个字显示的间隔；数值越小越快。")
         self._row("逐字显示速度", self._typing_speed, lay)
 
         self._dialog_scale = QSpinBox()
@@ -549,6 +545,7 @@ class SettingsWindow(QDialog):
         self._dialog_scale.setFixedHeight(30)
         self._dialog_scale.setMinimumWidth(120)
         self._dialog_scale.setStyleSheet(_spin_qss)
+        self._dialog_scale.setToolTip("应用后立即调整对话框大小和控件字体。")
         self._row("对话框缩放", self._dialog_scale, lay)
 
         self._sec(lay, "行为")
@@ -787,13 +784,69 @@ class SettingsWindow(QDialog):
 
     def _page_tts(self):
         page, lay = self._make_page()
-        self._ph(lay, "语音合成（TTS）将在后续版本中支持\n音色训练计划中")
+        self._sec(lay, "本地 CosyVoice 音色克隆")
+        self._tts_enabled = QCheckBox("LLM 回复后自动朗读")
+        self._tts_enabled.setChecked(self.config.get("tts", "enabled", default=False))
+        lay.addWidget(self._tts_enabled)
+        self._tts_model = self._line_edit("用户下载的 CosyVoice 模型目录")
+        self._tts_model.setText(self.config.get("tts", "model_path", default=""))
+        self._row("模型目录", self._tts_model, lay)
+        self._tts_speed = QSpinBox()
+        self._tts_speed.setRange(50, 200)
+        self._tts_speed.setSuffix("%")
+        self._tts_speed.setValue(int(self.config.get("tts", "speed", default=1.0) * 100))
+        self._row("语速", self._tts_speed, lay)
+        self._hint(lay, "在角色 voice/ 中放置本人或已获授权的 10–60 秒参考音频。")
         lay.addStretch()
         return page
 
     def _page_asr(self):
         page, lay = self._make_page()
-        self._ph(lay, "语音输入（ASR）将在后续版本中支持")
+        self._sec(lay, "本地 faster-whisper")
+        self._asr_enabled = QCheckBox("启用按键语音输入")
+        self._asr_enabled.setChecked(self.config.get("asr", "enabled", default=False))
+        lay.addWidget(self._asr_enabled)
+        self._asr_model = self._line_edit("用户下载的 faster-whisper 模型目录")
+        self._asr_model.setText(self.config.get("asr", "model_path", default=""))
+        self._row("模型目录", self._asr_model, lay)
+        self._asr_hotkey = self._line_edit("Ctrl+Alt+Space")
+        self._asr_hotkey.setText(self.config.get("asr", "hotkey", default="Ctrl+Alt+Space"))
+        self._row("按住说话快捷键", self._asr_hotkey, lay)
+        self._hint(lay, "首次接入需安装可选语音依赖；未配置模型时不会录音。")
+        lay.addStretch()
+        return page
+
+    def _page_screen(self):
+        page, lay = self._make_page()
+        self._sec(lay, "主动截图 OCR")
+        self._screen_keep = QCheckBox("保留截图（默认识别后删除）")
+        self._screen_keep.setChecked(self.config.get("screen_capture", "keep_captures", default=False))
+        lay.addWidget(self._screen_keep)
+        self._screen_hotkey = self._line_edit("Ctrl+Alt+O")
+        self._screen_hotkey.setText(self.config.get("screen_capture", "hotkey", default="Ctrl+Alt+O"))
+        self._row("截图快捷键", self._screen_hotkey, lay)
+        self._screen_cloud_first = QCheckBox("优先使用已配置的云端视觉模型，失败时本地 OCR")
+        self._screen_cloud_first.setChecked(self.config.get("screen_capture", "cloud_first", default=True))
+        lay.addWidget(self._screen_cloud_first)
+        self._hint(lay, "在聊天中说“识别屏幕/看屏幕”或按快捷键即可截图；不会后台监控。")
+        lay.addStretch()
+        return page
+
+    def _page_vision(self):
+        page, lay = self._make_page()
+        self._sec(lay, "可选图像理解")
+        self._vision_enabled = QCheckBox("允许主动发送截图到已配置的视觉服务")
+        self._vision_enabled.setChecked(self.config.get("vision", "enabled", default=False))
+        lay.addWidget(self._vision_enabled)
+        self._vision_url = self._line_edit("本地 Ollama 或云端 OpenAI 兼容地址")
+        self._vision_url.setText(self.config.get("vision", "base_url", default=""))
+        self._row("Base URL", self._vision_url, lay)
+        self._vision_model = self._line_edit("视觉模型名称")
+        self._vision_model.setText(self.config.get("vision", "model", default=""))
+        self._row("模型", self._vision_model, lay)
+        self._vision_key = self._line_edit("可选 API Key", QLineEdit.Password)
+        self._row("API Key", self._vision_key, lay)
+        self._hint(lay, "只有你明确选择图像理解时才会发送截图；本地服务可不填 Key。")
         lay.addStretch()
         return page
 
@@ -824,6 +877,9 @@ class SettingsWindow(QDialog):
         self._switch_page(cur.data(0, Qt.UserRole))
 
     def _on_item_clicked(self, item, col):
+        # Keep navigation selection in sync before routing the page.  This also
+        # guarantees the QTreeWidget selected style is visible after a click.
+        self._tree.setCurrentItem(item)
         children = item.data(0, Qt.UserRole + 1)
         if children:
             if self._collapsed:
@@ -992,6 +1048,20 @@ class SettingsWindow(QDialog):
                     fmt_prompt.toPlainText() if fmt_prompt else ""),
             }
 
+        s["tts"] = {"enabled": safe(getattr(self, "_tts_enabled", None)).isChecked() if safe(getattr(self, "_tts_enabled", None)) else False,
+                    "model_path": safe(getattr(self, "_tts_model", None)).text().strip() if safe(getattr(self, "_tts_model", None)) else "",
+                    "speed": safe(getattr(self, "_tts_speed", None)).value() / 100.0 if safe(getattr(self, "_tts_speed", None)) else 1.0}
+        s["asr"] = {"enabled": safe(getattr(self, "_asr_enabled", None)).isChecked() if safe(getattr(self, "_asr_enabled", None)) else False,
+                    "model_path": safe(getattr(self, "_asr_model", None)).text().strip() if safe(getattr(self, "_asr_model", None)) else "",
+                    "hotkey": safe(getattr(self, "_asr_hotkey", None)).text().strip() if safe(getattr(self, "_asr_hotkey", None)) else "Ctrl+Alt+Space"}
+        s["screen_capture"] = {"keep_captures": safe(getattr(self, "_screen_keep", None)).isChecked() if safe(getattr(self, "_screen_keep", None)) else False,
+                               "hotkey": safe(getattr(self, "_screen_hotkey", None)).text().strip() if safe(getattr(self, "_screen_hotkey", None)) else "Ctrl+Alt+O",
+                               "cloud_first": safe(getattr(self, "_screen_cloud_first", None)).isChecked() if safe(getattr(self, "_screen_cloud_first", None)) else True}
+        s["vision"] = {"enabled": safe(getattr(self, "_vision_enabled", None)).isChecked() if safe(getattr(self, "_vision_enabled", None)) else False,
+                       "base_url": safe(getattr(self, "_vision_url", None)).text().strip() if safe(getattr(self, "_vision_url", None)) else "",
+                       "model": safe(getattr(self, "_vision_model", None)).text().strip() if safe(getattr(self, "_vision_model", None)) else "",
+                       "api_key": safe(getattr(self, "_vision_key", None)).text().strip() if safe(getattr(self, "_vision_key", None)) else ""}
+
         return s
 
     def get_new_character(self) -> str | None:
@@ -1006,6 +1076,11 @@ class SettingsWindow(QDialog):
 
     def _on_apply(self):
         v = self._collect_settings()
+        # API keys are written to the platform keyring, never config.json.
+        for section in ("llm", "vision"):
+            key = v.get(section, {}).pop("api_key", "")
+            if key:
+                self.config.set_secret(section, key)
         for section, data in v.items():
             if isinstance(data, dict):
                 for k, val in data.items():

@@ -1,0 +1,6 @@
+# Install only the integrations you configure locally.
+keyring>=25
+faster-whisper>=1.1
+sounddevice>=0.5
+rapidocr-onnxruntime>=1.4
+# CosyVoice follows its upstream installation instructions and model licenses.

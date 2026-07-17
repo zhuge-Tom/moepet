@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt, QTimer, Signal, QPoint, QEvent
 from PySide6.QtGui import QMouseEvent, QTextCursor
+from PySide6.QtGui import QFont
 
 from ui.theme import DIALOG_QSS
 
@@ -32,6 +33,7 @@ class DialogWindow(QDialog):
         self._history: list[dict] = []
         self._is_streaming = False
         self._stream_buffer = ""
+        self._scale_percent = 100
 
         self.setWindowFlags(
             Qt.FramelessWindowHint
@@ -40,8 +42,9 @@ class DialogWindow(QDialog):
         )
         self.setAttribute(Qt.WA_TranslucentBackground)
         self.setStyleSheet(DIALOG_QSS)
-        self.setMinimumSize(400, 240)
-        self.resize(480, 280)
+        # Reserve room for capture, input, and send controls at high DPI.
+        self.setMinimumSize(460, 240)
+        self.resize(520, 280)
 
         self._typing_timer = QTimer(self)
         self._typing_timer.setInterval(self.TYPING_INTERVAL)
@@ -80,18 +83,17 @@ class DialogWindow(QDialog):
         bottom.setContentsMargins(12, 6, 12, 0)
         bottom.setSpacing(8)
 
-        bottom.addStretch()
-
         self._input = QLineEdit()
         self._input.setObjectName("input_field")
         self._input.setPlaceholderText("说点什么...")
         self._input.setFixedHeight(32)
+        self._input.setMinimumWidth(160)
         self._input.returnPressed.connect(self._on_submit)
         bottom.addWidget(self._input, 1)
 
         self._send_btn = QPushButton("发送")
         self._send_btn.setObjectName("send_btn")
-        self._send_btn.setFixedSize(56, 32)
+        self._send_btn.setFixedSize(72, 32)
         self._send_btn.clicked.connect(self._on_submit)
         bottom.addWidget(self._send_btn)
 
@@ -175,6 +177,29 @@ class DialogWindow(QDialog):
     def set_character_name(self, name: str):
         self._char_name = name
         self._name_label.setText(name)
+
+    def set_typing_speed(self, milliseconds: int):
+        """Update the typewriter delay without interrupting active output."""
+        self._typing_timer.setInterval(max(1, milliseconds))
+
+    def set_dialog_scale(self, percent: int):
+        """Scale the dialog and its readable controls around the current top-left."""
+        percent = max(50, min(200, int(percent)))
+        if percent == self._scale_percent:
+            return
+        ratio = percent / self._scale_percent
+        self._scale_percent = percent
+        self.resize(max(460, round(self.width() * ratio)), max(240, round(self.height() * ratio)))
+        for widget in (self._name_label, self._text_display, self._input,
+                       self._send_btn):
+            font = QFont(widget.font())
+            size = font.pointSizeF()
+            if size > 0:
+                font.setPointSizeF(max(7.0, size * ratio))
+                widget.setFont(font)
+        control_height = max(32, round(32 * percent / 100))
+        self._send_btn.setFixedHeight(control_height)
+        self._input.setFixedHeight(control_height)
 
     # ─── 拖拽 ────────────────────────────────
 

@@ -22,6 +22,10 @@ class AnimConfig:
     sprite_name: str
     animation: str = ""     # bounce / shake / enlarge / shrink / tremble
     particle: str = ""      # 粒子特效 gif 路径
+    frames: list[str] = field(default_factory=list)
+    frame_ms: int = 160
+    loop: bool = True
+    priority: int = 0
 
 
 @dataclass
@@ -97,10 +101,15 @@ class CharacterLoader:
                 with open(anim_path, "r", encoding="utf-8") as f:
                     anim_raw = json.load(f)
                 for key, cfg in anim_raw.items():
+                    cfg = cfg if isinstance(cfg, dict) else {}
                     char.animations[key] = AnimConfig(
                         sprite_name=key,
                         animation=cfg.get("animation", ""),
                         particle=cfg.get("particle", ""),
+                        frames=cfg.get("frames", []),
+                        frame_ms=max(30, int(cfg.get("frame_ms", 160))),
+                        loop=bool(cfg.get("loop", True)),
+                        priority=int(cfg.get("priority", 0)),
                     )
             except (json.JSONDecodeError, OSError):
                 pass

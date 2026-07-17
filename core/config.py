@@ -33,6 +33,21 @@ DEFAULTS = {
         "post_processing": "",
         "ignore_format_error": True,
     },
+    "asr": {
+        "enabled": False, "model_path": "", "hotkey": "Ctrl+Alt+Space",
+        "device": "cpu", "compute_type": "int8", "auto_send": True,
+    },
+    "tts": {
+        "enabled": False, "model_path": "", "auto_play": True,
+        "speed": 1.0, "volume": 1.0,
+    },
+    "screen_capture": {
+        "hotkey": "Ctrl+Alt+O", "ocr_model_path": "", "keep_captures": False,
+        "cloud_first": True,
+    },
+    "vision": {
+        "enabled": False, "base_url": "", "api_key": "", "model": "",
+    },
     "character_prompt": {
         "system_prompt": "你是一个可爱的桌面宠物助手，用简短、活泼的语气回复。回复请控制在100字以内。",
         "format_prompt": "",
@@ -65,8 +80,36 @@ class Config:
                 with open(self._path, "r", encoding="utf-8") as f:
                     stored = json.load(f)
                 self._merge(self._data, stored)
+                # Do not keep provider credentials in the project config file.
+                migrated = self._migrate_secret("llm", stored)
+                migrated = self._migrate_secret("vision", stored) or migrated
+                if migrated:
+                    self.save()
             except (json.JSONDecodeError, OSError):
                 pass
+
+    def _migrate_secret(self, section: str, stored: dict) -> bool:
+        value = stored.get(section, {}).get("api_key", "")
+        if value and self.set_secret(section, value):
+            self._data[section]["api_key"] = ""
+            return True
+        return False
+
+    def set_secret(self, name: str, value: str) -> bool:
+        """Persist secrets in the OS credential store when keyring is available."""
+        try:
+            import keyring
+            keyring.set_password("Moepet", name, value)
+            return True
+        except ImportError:
+            return False
+
+    def get_secret(self, name: str) -> str:
+        try:
+            import keyring
+            return keyring.get_password("Moepet", name) or ""
+        except ImportError:
+            return ""
 
     @staticmethod
     def _merge(base: dict, override: dict):
