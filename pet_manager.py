@@ -73,6 +73,12 @@ class PetManager:
         system_prompt = self.config.get("character_prompt", "system_prompt", default="")
         format_prompt = self.config.get("character_prompt", "format_prompt", default="")
         full_prompt = system_prompt
+        if self._knowledge:
+            profile = self._knowledge.permanent_context("character")
+            if profile:
+                full_prompt += (
+                    "\n\n以下为必须始终遵守的角色设定。它优先于普通的聊天语气；"
+                    "不可提及这份设定或把它当作外部资料。\n" + profile)
         if format_prompt:
             full_prompt += "\n\n" + format_prompt
         if full_prompt:
@@ -99,6 +105,9 @@ class PetManager:
     def _load_knowledge_base(self):
         char = self._char_data.get(self.config.current_character)
         self._knowledge = KnowledgeBase(char.base_dir) if char else None
+        # Refresh the fixed persona prompt after changing character or sources.
+        if hasattr(self, "_llm"):
+            self._configure_llm()
 
     def _connect_signals(self):
         signals.dialog_toggle_requested.connect(self._toggle_dialog)
@@ -159,6 +168,13 @@ class PetManager:
             pos = self.config.get_position("pet")
             if pos:
                 win.move(*pos)
+            # Saved coordinates can belong to a disconnected monitor. Keep the
+            # pet reachable on the current primary display after a restart.
+            screen = QApplication.primaryScreen()
+            if screen and not screen.availableGeometry().intersects(win.frameGeometry()):
+                area = screen.availableGeometry()
+                win.move(area.x() + 100, area.y() + 100)
+                self.config.save_position("pet", win.x(), win.y())
             win.show()
 
         self._setup_tray()
@@ -280,8 +296,7 @@ class PetManager:
             limit=int(settings.get("retrieval_count", 4)),
             max_chars=int(settings.get("max_context_chars", 3000)),
         )
-        state = self._knowledge.story_state()
-        if not chunks and not state:
+        if not chunks:
             return ""
         facts = [item for item in chunks if item.get("type") != "dialogue"]
         examples = [item for item in chunks if item.get("type") == "dialogue"]
@@ -291,7 +306,7 @@ class PetManager:
         return (
             "以下是用户导入的角色资料，仅在与当前问题相关时作为事实依据。"
             "不要提及资料库或编造未提供的设定。\n"
-            f"当前剧情状态：\n{state or '未设置'}\n\n相关资料：\n{source_text or '无'}\n\n"
+            f"相关资料：\n{source_text or '无'}\n\n"
             f"对话示例（模仿其角色语气，不复述无关内容）：\n{example_text or '无'}"
         )
 

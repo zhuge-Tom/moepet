@@ -72,7 +72,8 @@ class CharacterLoader:
             return None
 
         try:
-            with open(config_path, "r", encoding="utf-8") as f:
+            # PowerShell and some editors emit UTF-8 BOM; accept both forms.
+            with open(config_path, "r", encoding="utf-8-sig") as f:
                 raw = json.load(f)
         except (json.JSONDecodeError, OSError):
             return None

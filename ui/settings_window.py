@@ -689,7 +689,7 @@ class SettingsWindow(QDialog):
 
     def _page_character_knowledge(self):
         page, lay = self._make_page()
-        self._sec(lay, "世界观、剧情与对话训练集")
+        self._sec(lay, "世界观、角色设定与对话示例")
         self._knowledge_enabled = QCheckBox("聊天时自动检索并使用导入资料")
         self._knowledge_enabled.setChecked(self.config.get("knowledge", "enabled", default=True))
         lay.addWidget(self._knowledge_enabled)
@@ -701,7 +701,6 @@ class SettingsWindow(QDialog):
         self._knowledge_type.addItem("世界观 / 背景", "world")
         self._knowledge_type.addItem("角色设定", "character")
         self._knowledge_type.addItem("对话示例", "dialogue")
-        self._knowledge_type.addItem("剧情记录", "plot")
         self._knowledge_type.setStyleSheet("""
             QComboBox { background: #ffffff; color: #2c3e50;
                         border: 1px solid #d3d7de; border-radius: 6px;
@@ -723,13 +722,7 @@ class SettingsWindow(QDialog):
         rebuild_btn = QPushButton("重新建立资料索引")
         rebuild_btn.clicked.connect(self._rebuild_knowledge_index)
         lay.addWidget(rebuild_btn)
-        self._sec(lay, "当前剧情状态")
-        self._story_state = QTextEdit()
-        self._story_state.setPlaceholderText("例如：第 2 章，玩家刚抵达月港；与诺瓦的信任度为 35。")
-        self._story_state.setFixedHeight(100)
-        self._story_state.setPlainText(self._knowledge_base().story_state())
-        lay.addWidget(self._story_state)
-        self._hint(lay, "导入的资料会复制到当前角色目录，点击“应用”后保存剧情状态。无需模型微调。")
+        self._hint(lay, "导入的资料会复制到当前角色目录。聊天会自由检索相关内容，无需维护剧情进度或微调模型。")
         open_knowledge_btn = QPushButton("打开当前角色资料文件夹")
         open_knowledge_btn.clicked.connect(self._open_knowledge_folder)
         lay.addWidget(open_knowledge_btn)
@@ -743,7 +736,7 @@ class SettingsWindow(QDialog):
     def _refresh_knowledge_status(self):
         base = self._knowledge_base()
         summary = base.source_summary()
-        labels = {"world": "世界观", "character": "角色设定", "dialogue": "对话示例", "plot": "剧情记录"}
+        labels = {"world": "世界观", "character": "角色设定", "dialogue": "对话示例"}
         status = "，".join(f"{labels.get(kind, kind)} {count}" for kind, count in summary.items())
         self._knowledge_status.setText(f"当前资料库：{status or '暂无资料'}（单位：检索片段）。")
 
@@ -787,8 +780,17 @@ class SettingsWindow(QDialog):
                         "请填写兼容 OpenAI Chat Completions 的接口地址。")
 
         self._ai_key = self._line_edit("sk-xxxx", QLineEdit.Password)
-        self._ai_key.setText(self.config.get("llm", "api_key", default=""))
+        self._ai_key.setText(
+            self.config.get_secret("llm") or self.config.get("llm", "api_key", default=""))
         self._row("API Key", self._ai_key, lay)
+        self._ai_key_hint = QLabel()
+        self._ai_key_hint.setStyleSheet("color: #94a3b8; font-size: 11px; margin-left: 2px;")
+        try:
+            import keyring  # noqa: F401
+            self._ai_key_hint.setText("密钥将保存到 Windows 凭据管理器。")
+        except ImportError:
+            self._ai_key_hint.setText("未安装 keyring：密钥将保存到本机 config.json（请勿提交此文件）。")
+        lay.addWidget(self._ai_key_hint)
 
         self._ai_model = self._line_edit(
             "deepseek-chat / gpt-4o-mini / ...")
@@ -1169,20 +1171,33 @@ class SettingsWindow(QDialog):
 
     def _on_apply(self):
         v = self._collect_settings()
+        for section in ("llm", "vision"):
+            key = v.get(section, {}).get("api_key", "")
+            if key and not self.config.is_valid_api_key(key):
+                QMessageBox.warning(
+                    self, "API Key 无效",
+                    "API Key 不能包含空格或换行，且长度不能超过 512 个字符。\n"
+                    "请只粘贴服务商提供的完整密钥，不要粘贴角色资料或说明文本。")
+                return
         # API keys are written to the platform keyring, never config.json.
         for section in ("llm", "vision"):
             key = v.get(section, {}).pop("api_key", "")
             if key:
-                self.config.set_secret(section, key)
+                if not self.config.set_secret(section, key):
+                    # Keep the app functional when no system credential backend exists.
+                    v.setdefault(section, {})["api_key"] = key
+            elif section == "llm":
+                # Applying unrelated settings must never erase a saved LLM key.
+                stored_key = self.config.get_secret("llm") or self.config.get(
+                    "llm", "api_key", default="")
+                if stored_key:
+                    v.setdefault("llm", {})["api_key"] = stored_key
         for section, data in v.items():
             if isinstance(data, dict):
                 for k, val in data.items():
                     self.config.set(section, k, val)
             else:
                 self.config.set(section, data)
-        story = getattr(self, "_story_state", None)
-        if story is not None:
-            self._knowledge_base().set_story_state(story.toPlainText())
         self.config.save()
         self.apply_clicked.emit(v)
 

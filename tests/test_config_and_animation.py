@@ -32,7 +32,7 @@ def test_screen_chat_intent_is_explicit():
     assert not PetManager._is_screen_request("你好，今天怎么样？")
 
 
-def test_knowledge_import_search_and_story_state(tmp_path):
+def test_knowledge_import_and_search(tmp_path):
     source = tmp_path / "world.md"
     source.write_text("# 月港\n\n诺瓦在月港经营一家星图店，讨厌谎言。", encoding="utf-8")
     base = KnowledgeBase(tmp_path / "character")
@@ -40,8 +40,6 @@ def test_knowledge_import_search_and_story_state(tmp_path):
     assert copied == 1 and not errors
     assert (base.sources_dir / "world" / "world.md").exists()
     assert "月港" in base.search("诺瓦在月港做什么？")[0]["text"]
-    base.set_story_state("第一章，玩家初到月港。")
-    assert "第一章" in base.story_state()
 
 
 def test_knowledge_keeps_import_type(tmp_path):
@@ -51,3 +49,37 @@ def test_knowledge_keeps_import_type(tmp_path):
     base.import_files([str(source)], "dialogue")
     assert base.search("你好")[0]["type"] == "dialogue"
     assert (base.sources_dir / "dialogue" / "lines.txt").exists()
+
+
+def test_secret_fallback_can_remain_in_config_when_keyring_is_missing(tmp_path, monkeypatch):
+    config = Config(tmp_path / "config.json")
+    monkeypatch.setattr(config, "set_secret", lambda _name, _value: False)
+    key = "local-development-key"
+    settings = {"llm": {"api_key": key}}
+    if not config.set_secret("llm", settings["llm"].pop("api_key")):
+        settings["llm"]["api_key"] = key
+    config.set("llm", "api_key", settings["llm"]["api_key"])
+    assert config.get("llm", "api_key") == key
+
+
+def test_api_key_validation_rejects_pasted_documents():
+    assert Config.is_valid_api_key("sk-valid-key-123")
+    assert not Config.is_valid_api_key("line one\nline two")
+    assert not Config.is_valid_api_key("has a space")
+
+
+def test_permanent_character_context_is_not_query_dependent(tmp_path):
+    source = tmp_path / "profile.md"
+    source.write_text("Noir 安静、谨慎，不会刻意卖萌。", encoding="utf-8")
+    base = KnowledgeBase(tmp_path / "character")
+    base.import_files([str(source)], "character")
+    assert "安静、谨慎" in base.permanent_context("character")
+
+
+def test_config_loads_bom_and_persists_key(tmp_path):
+    path = tmp_path / "config.json"
+    path.write_text('{"llm":{"api_key":"sk-persisted-key"}}', encoding="utf-8-sig")
+    config = Config(path)
+    assert config.get("llm", "api_key") == "sk-persisted-key"
+    config.save()
+    assert Config(path).get("llm", "api_key") == "sk-persisted-key"

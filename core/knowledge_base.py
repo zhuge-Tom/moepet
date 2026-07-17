@@ -85,13 +85,24 @@ class KnowledgeBase:
             used += len(chunk["text"])
         return result
 
-    def set_story_state(self, text: str):
-        self.root.mkdir(parents=True, exist_ok=True)
-        (self.root / "story_state.md").write_text(text.strip(), encoding="utf-8")
-
-    def story_state(self) -> str:
-        path = self.root / "story_state.md"
-        return path.read_text(encoding="utf-8").strip() if path.exists() else ""
+    def permanent_context(self, source_type: str, max_chars: int = 4000) -> str:
+        """Return all small, always-on sources such as character identity."""
+        if not self.index_path.exists():
+            self.rebuild()
+        try:
+            chunks = json.loads(self.index_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return ""
+        selected, used = [], 0
+        for item in chunks:
+            if item.get("type") != source_type:
+                continue
+            text = item["text"]
+            if used + len(text) > max_chars:
+                break
+            selected.append(text)
+            used += len(text)
+        return "\n\n".join(selected)
 
     def source_summary(self) -> dict[str, int]:
         if not self.index_path.exists():

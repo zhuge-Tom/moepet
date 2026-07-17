@@ -1,6 +1,0 @@
-{
-  "idle": {"frames": ["nuowa.png"], "frame_ms": 500, "loop": true, "priority": 0},
-  "think": {"frames": ["nuowa.png"], "frame_ms": 350, "loop": true, "priority": 1},
-  "happy": {"frames": ["nuowa.png"], "frame_ms": 220, "loop": false, "priority": 2},
-  "speak": {"frames": ["nuowa.png"], "frame_ms": 160, "loop": true, "priority": 2}
-}

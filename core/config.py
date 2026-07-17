@@ -5,11 +5,12 @@
 """
 
 import json
+import os
 from pathlib import Path
 from copy import deepcopy
 
 DEFAULTS = {
-    "current_character": "nuowa",
+    "current_character": "noir",
     "window": {
         "scale": 0.5,
         "always_on_top": True,
@@ -52,7 +53,7 @@ DEFAULTS = {
         "enabled": True, "retrieval_count": 4, "max_context_chars": 3000,
     },
     "character_prompt": {
-        "system_prompt": "你是一个可爱的桌面宠物助手，用简短、活泼的语气回复。回复请控制在100字以内。",
+        "system_prompt": "你正在扮演 Noir。使用简短、自然、温柔的中文回答。保持安静、谨慎且真诚的气质，不要刻意卖萌、过度活泼、夸张热情或使用网络梗。面对陌生话题先温和确认；尊重边界，不强迫用户或自己做不舒服的事。回复通常控制在 100 字以内。",
         "format_prompt": "",
     },
     "position": {
@@ -80,12 +81,18 @@ class Config:
     def _load(self):
         if self._path.exists():
             try:
-                with open(self._path, "r", encoding="utf-8") as f:
+                with open(self._path, "r", encoding="utf-8-sig") as f:
                     stored = json.load(f)
                 self._merge(self._data, stored)
                 # Do not keep provider credentials in the project config file.
                 migrated = self._migrate_secret("llm", stored)
                 migrated = self._migrate_secret("vision", stored) or migrated
+                # A pasted document must never be treated as an API credential.
+                for section in ("llm", "vision"):
+                    key = self._data.get(section, {}).get("api_key", "")
+                    if key and not self.is_valid_api_key(key):
+                        self._data[section]["api_key"] = ""
+                        migrated = True
                 if migrated:
                     self.save()
             except (json.JSONDecodeError, OSError):
@@ -104,15 +111,20 @@ class Config:
             import keyring
             keyring.set_password("Moepet", name, value)
             return True
-        except ImportError:
+        except (ImportError, RuntimeError):
             return False
 
     def get_secret(self, name: str) -> str:
         try:
             import keyring
             return keyring.get_password("Moepet", name) or ""
-        except ImportError:
+        except (ImportError, RuntimeError):
             return ""
+
+    @staticmethod
+    def is_valid_api_key(value: str) -> bool:
+        """Reject pasted documents/control characters before a credential is saved."""
+        return bool(value and len(value) <= 512 and not any(char.isspace() for char in value))
 
     @staticmethod
     def _merge(base: dict, override: dict):
@@ -125,8 +137,11 @@ class Config:
 
     def save(self):
         self._path.parent.mkdir(parents=True, exist_ok=True)
-        with open(self._path, "w", encoding="utf-8") as f:
+        # A replace avoids a partially written config during app shutdown.
+        temp_path = self._path.with_suffix(self._path.suffix + ".tmp")
+        with open(temp_path, "w", encoding="utf-8") as f:
             json.dump(self._data, f, ensure_ascii=False, indent=2)
+        os.replace(temp_path, self._path)
 
     def get(self, *keys, default=None):
         """路径式获取: config.get('window', 'scale')"""
@@ -156,7 +171,7 @@ class Config:
 
     @property
     def current_character(self) -> str:
-        return self._data.get("current_character", "nuowa")
+        return self._data.get("current_character", "noir")
 
     def save_position(self, key: str, x: int, y: int):
         """记住窗口位置"""
