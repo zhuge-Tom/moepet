@@ -48,6 +48,9 @@ DEFAULTS = {
     "vision": {
         "enabled": False, "base_url": "", "api_key": "", "model": "",
     },
+    "knowledge": {
+        "enabled": True, "retrieval_count": 4, "max_context_chars": 3000,
+    },
     "character_prompt": {
         "system_prompt": "你是一个可爱的桌面宠物助手，用简短、活泼的语气回复。回复请控制在100字以内。",
         "format_prompt": "",

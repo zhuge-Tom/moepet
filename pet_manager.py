@@ -19,6 +19,7 @@ from core.ocr_service import OcrService
 from core.tts_service import TTSService
 from core.vision_service import VisionService
 from core.hotkeys import HotkeyService
+from core.knowledge_base import KnowledgeBase
 from ui.pet_window import PetWindow
 from ui.dialog_window import DialogWindow
 from ui.settings_window import SettingsWindow
@@ -34,6 +35,7 @@ class PetManager:
         self._loader = CharacterLoader(base_dir / "characters")
         self._windows: dict[str, PetWindow] = {}
         self._char_data: dict[str, CharacterData] = {}
+        self._knowledge: KnowledgeBase | None = None
         self._dialog: DialogWindow | None = None
         self._settings_dlg: SettingsWindow | None = None
         self._tray: TrayIcon | None = None
@@ -55,6 +57,7 @@ class PetManager:
         self._load_chat_history()
 
         self._load_characters()
+        self._load_knowledge_base()
         self._connect_signals()
         self._register_screen_hotkey()
 
@@ -92,6 +95,10 @@ class PetManager:
         current = self.config.current_character
         for win in self._windows.values():
             win.set_character_menu(names, current, self._switch_character)
+
+    def _load_knowledge_base(self):
+        char = self._char_data.get(self.config.current_character)
+        self._knowledge = KnowledgeBase(char.base_dir) if char else None
 
     def _connect_signals(self):
         signals.dialog_toggle_requested.connect(self._toggle_dialog)
@@ -171,6 +178,7 @@ class PetManager:
             self._windows[name].show()
             self.config.set("current_character", name)
             self.config.save()
+            self._load_knowledge_base()
 
             names = list(self._windows.keys())
             for win in self._windows.values():
@@ -243,6 +251,7 @@ class PetManager:
             return
 
         self._llm.add_user_message(text)
+        self._llm.set_turn_context(self._knowledge_context(text))
         self._set_pet_state("think")
 
         stream = self.config.get("llm", "stream", default=True)
@@ -258,6 +267,33 @@ class PetManager:
             self._llm.response_finished.connect(self._on_llm_done_non_stream)
             self._llm.error_occurred.connect(self._on_llm_error)
             self._llm.send(stream=False)
+
+    def _knowledge_context(self, user_text: str) -> str:
+        """Build a bounded, turn-only roleplay context from imported user material."""
+        if not self._knowledge:
+            return ""
+        settings = self.config.get("knowledge", default={})
+        if not settings.get("enabled", True):
+            return ""
+        chunks = self._knowledge.search(
+            user_text,
+            limit=int(settings.get("retrieval_count", 4)),
+            max_chars=int(settings.get("max_context_chars", 3000)),
+        )
+        state = self._knowledge.story_state()
+        if not chunks and not state:
+            return ""
+        facts = [item for item in chunks if item.get("type") != "dialogue"]
+        examples = [item for item in chunks if item.get("type") == "dialogue"]
+        source_text = "\n\n".join(
+            f"[{item['type']}：{item['source']}]\n{item['text']}" for item in facts)
+        example_text = "\n\n".join(item["text"] for item in examples)
+        return (
+            "以下是用户导入的角色资料，仅在与当前问题相关时作为事实依据。"
+            "不要提及资料库或编造未提供的设定。\n"
+            f"当前剧情状态：\n{state or '未设置'}\n\n相关资料：\n{source_text or '无'}\n\n"
+            f"对话示例（模仿其角色语气，不复述无关内容）：\n{example_text or '无'}"
+        )
 
     def _on_llm_chunk(self, chunk: str):
         """流式输出片段"""

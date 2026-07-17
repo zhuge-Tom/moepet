@@ -17,6 +17,8 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, QPropertyAnimation, QEasingCurve, Signal, QEvent
 from PySide6.QtGui import QPainter, QFont, QIcon, QPixmap, QAction, QDesktopServices
 from PySide6.QtCore import QUrl
+from PySide6.QtWidgets import QFileDialog, QMessageBox
+from core.knowledge_base import KnowledgeBase
 
 from core.config import Config
 
@@ -25,6 +27,7 @@ NAV_TREE = [
     ("🎭", "角色设置", "character", True, [
         ("🔌", "接口设置", "character_api"),
         ("🖼️", "立绘设置", "character_sprites"),
+        ("📚", "角色资料库", "character_knowledge"),
     ]),
     ("🤖", "AI 模型", "ai", True, []),
     ("🔊", "语音合成", "tts", True, []),
@@ -320,6 +323,7 @@ class SettingsWindow(QDialog):
             ("character", self._page_character_parent),
             ("character_api", self._page_character_api),
             ("character_sprites", self._page_character_sprites),
+            ("character_knowledge", self._page_character_knowledge),
             ("ai", self._page_ai),
             ("tts", self._page_tts),
             ("asr", self._page_asr),
@@ -368,6 +372,7 @@ class SettingsWindow(QDialog):
         titles = {
             "general": "通用设置", "character": "角色设置",
             "character_api": "接口设置", "character_sprites": "立绘设置",
+            "character_knowledge": "角色资料库",
             "ai": "AI 模型", "tts": "语音合成", "asr": "语音输入",
             "screen": "屏幕识别", "vision": "图像理解", "about": "关于",
         }
@@ -409,6 +414,8 @@ class SettingsWindow(QDialog):
         h = QLabel(text)
         h.setStyleSheet("color: #94a3b8; font-size: 11px; margin-left: 2px;")
         h.setWordWrap(True)
+        h.setMinimumHeight(32)
+        h.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum)
         layout.addWidget(h)
 
     def _line_edit(self, placeholder="", echo_mode=QLineEdit.Normal):
@@ -680,6 +687,89 @@ class SettingsWindow(QDialog):
         if char_dir.exists():
             QDesktopServices.openUrl(QUrl.fromLocalFile(str(char_dir)))
 
+    def _page_character_knowledge(self):
+        page, lay = self._make_page()
+        self._sec(lay, "世界观、剧情与对话训练集")
+        self._knowledge_enabled = QCheckBox("聊天时自动检索并使用导入资料")
+        self._knowledge_enabled.setChecked(self.config.get("knowledge", "enabled", default=True))
+        lay.addWidget(self._knowledge_enabled)
+        self._knowledge_status = QLabel()
+        self._knowledge_status.setWordWrap(True)
+        self._knowledge_status.setStyleSheet("color: #64748b; font-size: 12px;")
+        lay.addWidget(self._knowledge_status)
+        self._knowledge_type = QComboBox()
+        self._knowledge_type.addItem("世界观 / 背景", "world")
+        self._knowledge_type.addItem("角色设定", "character")
+        self._knowledge_type.addItem("对话示例", "dialogue")
+        self._knowledge_type.addItem("剧情记录", "plot")
+        self._knowledge_type.setStyleSheet("""
+            QComboBox { background: #ffffff; color: #2c3e50;
+                        border: 1px solid #d3d7de; border-radius: 6px;
+                        padding: 4px 10px; min-height: 20px; }
+            QComboBox::drop-down { border: none; width: 24px; }
+            QComboBox QAbstractItemView { background: #ffffff; color: #2c3e50;
+                                          border: 1px solid #d3d7de;
+                                          selection-background-color: #fce4ec;
+                                          selection-color: #e94560;
+                                          outline: none; }
+            QComboBox QAbstractItemView::item { min-height: 26px; padding: 4px 8px; }
+            QComboBox QAbstractItemView::item:hover { background: #f5f7fa; }
+        """)
+        self._row("导入资料类型", self._knowledge_type, lay)
+        import_btn = QPushButton("导入资料文件（TXT / Markdown / JSON）")
+        import_btn.setFixedHeight(32)
+        import_btn.clicked.connect(self._import_knowledge_files)
+        lay.addWidget(import_btn)
+        rebuild_btn = QPushButton("重新建立资料索引")
+        rebuild_btn.clicked.connect(self._rebuild_knowledge_index)
+        lay.addWidget(rebuild_btn)
+        self._sec(lay, "当前剧情状态")
+        self._story_state = QTextEdit()
+        self._story_state.setPlaceholderText("例如：第 2 章，玩家刚抵达月港；与诺瓦的信任度为 35。")
+        self._story_state.setFixedHeight(100)
+        self._story_state.setPlainText(self._knowledge_base().story_state())
+        lay.addWidget(self._story_state)
+        self._hint(lay, "导入的资料会复制到当前角色目录，点击“应用”后保存剧情状态。无需模型微调。")
+        open_knowledge_btn = QPushButton("打开当前角色资料文件夹")
+        open_knowledge_btn.clicked.connect(self._open_knowledge_folder)
+        lay.addWidget(open_knowledge_btn)
+        self._refresh_knowledge_status()
+        lay.addStretch()
+        return page
+
+    def _knowledge_base(self):
+        return KnowledgeBase(self._base_dir / "characters" / self._current_char)
+
+    def _refresh_knowledge_status(self):
+        base = self._knowledge_base()
+        summary = base.source_summary()
+        labels = {"world": "世界观", "character": "角色设定", "dialogue": "对话示例", "plot": "剧情记录"}
+        status = "，".join(f"{labels.get(kind, kind)} {count}" for kind, count in summary.items())
+        self._knowledge_status.setText(f"当前资料库：{status or '暂无资料'}（单位：检索片段）。")
+
+    def _import_knowledge_files(self):
+        files, _ = QFileDialog.getOpenFileNames(
+            self, "导入角色资料", "", "资料文件 (*.txt *.md *.markdown *.json)")
+        if not files:
+            return
+        copied, errors = self._knowledge_base().import_files(
+            files, self._knowledge_type.currentData())
+        self._refresh_knowledge_status()
+        message = f"已导入 {copied} 个「{self._knowledge_type.currentText()}」文件。"
+        if errors:
+            message += "\n" + "\n".join(errors)
+        QMessageBox.information(self, "角色资料库", message)
+
+    def _rebuild_knowledge_index(self):
+        count = self._knowledge_base().rebuild()
+        self._refresh_knowledge_status()
+        QMessageBox.information(self, "角色资料库", f"已建立 {count} 个可检索片段。")
+
+    def _open_knowledge_folder(self):
+        folder = self._knowledge_base().sources_dir
+        folder.mkdir(parents=True, exist_ok=True)
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(folder)))
+
     # ═══════════════════════════════════
     # AI 模型
     # ═══════════════════════════════════
@@ -693,8 +783,8 @@ class SettingsWindow(QDialog):
         self._ai_url.setText(self.config.get("llm", "base_url", default=""))
         self._row("Base URL", self._ai_url, lay)
 
-        self._hint(lay, "支持 DeepSeek / OpenAI / 本地 Ollama 等"
-                        " OpenAI 兼容接口")
+        self._hint(lay, "支持 DeepSeek、OpenAI、本地 Ollama 等服务。\n"
+                        "请填写兼容 OpenAI Chat Completions 的接口地址。")
 
         self._ai_key = self._line_edit("sk-xxxx", QLineEdit.Password)
         self._ai_key.setText(self.config.get("llm", "api_key", default=""))
@@ -1061,6 +1151,9 @@ class SettingsWindow(QDialog):
                        "base_url": safe(getattr(self, "_vision_url", None)).text().strip() if safe(getattr(self, "_vision_url", None)) else "",
                        "model": safe(getattr(self, "_vision_model", None)).text().strip() if safe(getattr(self, "_vision_model", None)) else "",
                        "api_key": safe(getattr(self, "_vision_key", None)).text().strip() if safe(getattr(self, "_vision_key", None)) else ""}
+        s["knowledge"] = {
+            "enabled": safe(getattr(self, "_knowledge_enabled", None)).isChecked() if safe(getattr(self, "_knowledge_enabled", None)) else True,
+        }
 
         return s
 
@@ -1087,6 +1180,9 @@ class SettingsWindow(QDialog):
                     self.config.set(section, k, val)
             else:
                 self.config.set(section, data)
+        story = getattr(self, "_story_state", None)
+        if story is not None:
+            self._knowledge_base().set_story_state(story.toPlainText())
         self.config.save()
         self.apply_clicked.emit(v)
 

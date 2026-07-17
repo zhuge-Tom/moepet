@@ -25,6 +25,7 @@ class LLMService(QObject):
         self._current_reply: QNetworkReply | None = None
         self._buffer = ""
         self._streaming = False
+        self._turn_context = ""
 
     def configure(self, base_url: str, api_key: str, model: str):
         """设置 API 参数"""
@@ -44,6 +45,10 @@ class LLMService(QObject):
 
     def add_assistant_message(self, text: str):
         self._messages.append({"role": "assistant", "content": text})
+
+    def set_turn_context(self, context: str):
+        """Use retrieved material for the next request without saving it to history."""
+        self._turn_context = context
 
     def clear_history(self):
         """清空对话历史（保留系统提示词）"""
@@ -78,9 +83,13 @@ class LLMService(QObject):
         if "/chat/completions" not in url and "/responses" not in url:
             url = url + "/chat/completions"
 
+        messages = list(self._messages)
+        if self._turn_context:
+            insert_at = 1 if messages and messages[0].get("role") == "system" else 0
+            messages.insert(insert_at, {"role": "system", "content": self._turn_context})
         body = {
             "model": self._model,
-            "messages": self._messages,
+            "messages": messages,
             "stream": stream,
         }
 
@@ -90,6 +99,7 @@ class LLMService(QObject):
 
         self._streaming = stream
         self._buffer = ""
+        self._turn_context = ""
 
         if stream:
             self._current_reply = self._manager.post(request, QByteArray(json.dumps(body).encode()))
