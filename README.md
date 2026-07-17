@@ -1,27 +1,22 @@
-# Moepet - 萌系桌面宠物
+# Moepet
 
-基于 [PySide6](https://doc.qt.io/qtforpython-6/) 的 Windows 桌面宠物应用。将喜欢的角色立绘放到桌面上，支持拖拽、立绘切换、动画演出、系统托盘，以及通过 OpenAI 兼容 API 进行 AI 对话。
+基于 [PySide6](https://doc.qt.io/qtforpython-6/) 的 Windows 2D 桌面宠物。它支持 PNG 帧动画、OpenAI 兼容聊天、本地角色资料库、主动屏幕识别，以及可选的本地语音能力。
 
-> 当前内置角色：诺瓦（`noir`），来源《星空列车与白的旅行》。请仅使用你有权使用的角色素材。
+> 内置角色为 Noir，素材来源《星空列车与白的旅行》。请只导入你拥有使用权的角色素材、参考音频和资料。
 
 ## 功能
 
-- 透明、无边框、可置顶的桌面宠物窗口
-- 左键拖拽移动；短按立绘切换下一张表情
-- 立绘淡入淡出和弹跳、摇摆、震动、放大缩小等演出动画
-- 支持扫描多个角色目录，并从右键菜单切换角色
-- Galgame 风格对话窗口，支持逐字显示和流式 AI 回复
-- 支持 DeepSeek、OpenAI、Ollama 等 OpenAI Chat Completions 兼容接口
-- 对话历史按角色保存到本地，支持系统托盘、位置记忆和设置窗口
+- 透明、无边框、可置顶的桌宠；拖拽定位、立绘切换、托盘与多角色切换。
+- 基于 `animations.json` 的 PNG 帧状态：`idle`、`think`、`happy`、`speak` 等；单 PNG 角色保持兼容。
+- Galgame 风格聊天窗口，支持流式回复、逐字显示、缩放和可调显示速度。
+- 支持 DeepSeek、OpenAI、Ollama 等 OpenAI Chat Completions 兼容 API。
+- 角色资料库：导入世界观、角色设定、对话示例；角色设定固定约束人格，其余资料按问题检索。
+- 主动屏幕识别：聊天输入“识别屏幕”“看屏幕”或使用全局快捷键；云端视觉模型优先，失败时回退本地 OCR。
+- 可选本地 ASR、CosyVoice 音色克隆 TTS 服务适配；模型与依赖由用户自行配置。
 
 ## 快速开始
 
-### 环境要求
-
-- Python 3.10 或更高版本
-- Windows（当前窗口与托盘交互主要面向 Windows）
-
-### 安装与启动
+需要 Windows 与 Python 3.10+：
 
 ```powershell
 git clone https://github.com/zhuge-Tom/moepet.git
@@ -33,104 +28,108 @@ python -m pip install PySide6
 python main.py
 ```
 
-如果 PowerShell 阻止激活脚本，可直接使用虚拟环境解释器：
+PowerShell 无法激活虚拟环境时：
 
 ```powershell
 .\.venv\Scripts\python.exe -m pip install PySide6
 .\.venv\Scripts\python.exe main.py
 ```
 
-## 使用说明
+## 配置聊天模型
 
-- 左键拖拽宠物以移动位置；轻点立绘切换下一张图片。
-- 右键宠物可切换角色、打开对话框、进入设置或退出。
-- 托盘图标双击可打开设置，也可重置宠物位置。
-- 在“设置 -> AI 模型”中填写 Base URL、API Key 和模型名称；开启流式输出即可逐段显示回复。
-- 在“设置 -> 角色设置”中调整角色提示词，或打开立绘目录管理 PNG 文件。
-
-## AI 配置示例
-
-Moepet 调用 OpenAI Chat Completions 兼容接口。若 Base URL 未包含 `/chat/completions`，程序会自动补全该路径。
+在“设置 -> AI 模型”中填写 Base URL、API Key 和模型名称，点击“应用”或“确定”后即可聊天。Base URL 未包含 `/chat/completions` 时会自动补全。
 
 | 服务 | Base URL 示例 | 模型示例 |
 | --- | --- | --- |
 | DeepSeek | `https://api.deepseek.com/v1` | `deepseek-chat` |
 | OpenAI | `https://api.openai.com/v1` | `gpt-4o-mini` |
-| Ollama | `http://localhost:11434/v1` | 本地已下载的模型名 |
+| Ollama | `http://localhost:11434/v1` | 本地模型名 |
 
-API Key 通过设置窗口保存在本机的 `config.json` 中。该文件已被 `.gitignore` 忽略：不要将密钥提交到 Git，也不要在截图或日志中暴露它。若密钥已经泄露，请立即到服务商控制台轮换。
+程序优先将密钥写入 Windows 凭据管理器；没有可用的 `keyring` 时，会保存到本机 `config.json`。该文件已被 Git 忽略，绝不要提交、截图或分享 API Key。
 
-## 添加角色和立绘
+## 角色资料库
 
-每个角色是 `characters/` 下包含 `config.json` 的一个子目录。程序会自动读取该目录 `sprites/` 内的所有 PNG 文件；文件名即为立绘名称。
+打开“设置 -> 角色设置 -> 角色资料库”，先选择资料类型再导入 `TXT`、`Markdown` 或 `JSON`：
+
+- `世界观 / 背景`：地点、规则、组织与环境；聊天时按相关性检索。
+- `角色设定`：性格、身份、边界与关系；每轮固定加入系统提示词。
+- `对话示例`：用户与角色的高质量问答；按相关性作为语气示范。
+
+文件会复制到当前角色目录，路径与类型一一对应：
 
 ```text
-characters/
-└── my_character/
-    ├── config.json
-    ├── sprites/
-    │   ├── idle.png
-    │   └── happy.png
-    └── animations.json       # 可选
+characters/noir/knowledge/sources/
+├── world/
+├── character/
+└── dialogue/
 ```
 
-最小角色配置示例：
+无需维护章节、好感度或剧情状态；资料库服务于自由对话。
+
+仓库 `datasets/` 提供 Noir 的可选示例资料：
+
+- `noir_world_background.md`
+- `noir_character_profile.md`
+- `noir_dialogue_examples.json`
+
+## 屏幕与语音
+
+“设置 -> 屏幕识别”中可设置全局截图快捷键，默认 `Ctrl+Alt+O`。截图仅由聊天意图或快捷键主动触发，不会后台监听屏幕。启用并配置视觉服务时优先图像理解；否则使用本地 OCR。
+
+安装可选依赖：
+
+```powershell
+python -m pip install -r requirements-optional.txt
+```
+
+- OCR 使用 `rapidocr-onnxruntime`。
+- 快捷键使用 `keyboard`。
+- ASR 使用用户配置的 `faster-whisper` 模型，CPU 默认 `int8`。
+- TTS 使用用户自行安装与配置的 CosyVoice 模型、且仅可使用获得授权的参考音频。
+
+## 添加角色与动画
+
+每个角色是 `characters/` 下包含 `config.json` 的目录。`sprites/` 下的 PNG 会自动加载；`animations.json` 可定义帧状态。
+
+```text
+characters/my_character/
+├── config.json
+├── sprites/
+│   ├── idle.png
+│   └── speak_1.png
+└── animations.json
+```
+
+`animations.json` 示例：
 
 ```json
 {
-  "name": "角色显示名",
-  "name_en": "my_character",
-  "source": "作品来源",
-  "scale": 0.5,
-  "sprites": {
-    "idle": "idle.png",
-    "happy": "happy.png"
-  }
+  "idle": {"frames": ["idle.png"], "frame_ms": 500, "loop": true},
+  "speak": {"frames": ["speak_1.png", "idle.png"], "frame_ms": 160, "loop": true}
 }
 ```
 
-`sprites` 字段用于保存角色的语义映射；实际可显示的图片以 `sprites/` 中存在的 `.png` 文件为准。
+## 本地数据
+
+- `config.json`：窗口、模型、快捷键、提示词设置与本地密钥回退。
+- `characters/*/chat_history.json`：按角色保存的聊天记录。
+- `characters/*/knowledge/`：用户导入资料与运行时索引。
+
+以上均不应提交到仓库。删除 `config.json` 可恢复默认设置；删除聊天记录可清空对应角色的历史。
 
 ## 项目结构
 
 ```text
 moepet/
-├── main.py                  # Qt 应用入口
-├── pet_manager.py           # 窗口、角色、对话和设置的顶层协调器
-├── core/
-│   ├── animation.py         # 立绘动画
-│   ├── character.py         # 角色及立绘加载
-│   ├── config.py            # 全局配置和默认值
-│   ├── llm_service.py       # OpenAI 兼容 LLM 服务
-│   └── signals.py           # 全局信号总线
-├── ui/
-│   ├── pet_window.py        # 桌宠透明窗口与右键菜单
-│   ├── dialog_window.py     # Galgame 风格对话窗口
-│   ├── settings_window.py   # 设置窗口
-│   ├── tray_icon.py         # 系统托盘
-│   └── theme.py             # QSS 主题
-└── characters/
-    └── noir/                # 内置角色资源和配置
+├── core/          # 配置、角色、LLM、资料库、OCR/TTS/ASR/视觉服务
+├── ui/            # 桌宠、对话框、设置与托盘
+├── characters/    # 角色资源
+├── datasets/      # 可选导入资料示例
+├── tools/         # 数据集转换脚本
+└── requirements-optional.txt
 ```
-
-## 本地数据
-
-以下文件由程序在本地创建或更新，均不会提交到仓库：
-
-- `config.json`：窗口、AI 和角色提示词设置
-- `characters/*/chat_history.json`：按角色保存的对话历史
-
-删除这些文件即可分别恢复默认设置或清空对话记录。
-
-## 路线图
-
-- [ ] TTS 语音合成与角色音色配置
-- [ ] ASR 语音输入
-- [ ] 更完善的角色接口与表情联动
-- [ ] 自动待机动画和粒子特效
-- [ ] 更多角色与立绘资源管理能力
 
 ## 致谢
 
 - [PySide6](https://doc.qt.io/qtforpython-6/)
-- 所有为本项目提供灵感的桌宠和视觉小说作品
+- 所有为本项目提供灵感的桌宠与视觉小说作品
