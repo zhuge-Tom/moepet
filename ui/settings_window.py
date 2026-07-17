@@ -4,6 +4,7 @@ QTreeWidget 导航 + QStackedWidget 页面切换。
 每个页面预构建为独立 Widget，切换时仅改 index，彻底避免重叠和闪烁。
 """
 
+import json
 import os
 import subprocess
 from pathlib import Path
@@ -603,8 +604,8 @@ class SettingsWindow(QDialog):
         self._system_prompt.setPlaceholderText(
             "设定角色的性格、说话方式、回复格式...")
         self._system_prompt.setFixedHeight(120)
-        self._system_prompt.setPlainText(
-            self.config.get("character_prompt", "system_prompt", default=""))
+        prompt = self._character_prompt()
+        self._system_prompt.setPlainText(prompt.get("system_prompt", ""))
         self._system_prompt.setStyleSheet(
             "QTextEdit { border: 1px solid #d3d7de; border-radius: 8px;"
             " padding: 8px; font-size: 13px; }"
@@ -620,8 +621,7 @@ class SettingsWindow(QDialog):
         self._format_prompt.setPlaceholderText(
             "例如：每句话前加上心情标签，格式为 {心情}|{回复}")
         self._format_prompt.setFixedHeight(80)
-        self._format_prompt.setPlainText(
-            self.config.get("character_prompt", "format_prompt", default=""))
+        self._format_prompt.setPlainText(prompt.get("format_prompt", ""))
         self._format_prompt.setStyleSheet(
             "QTextEdit { border: 1px solid #d3d7de; border-radius: 8px;"
             " padding: 8px; font-size: 13px; }"
@@ -1132,13 +1132,6 @@ class SettingsWindow(QDialog):
         # 角色提示词
         sys_prompt = safe(getattr(self, "_system_prompt", None))
         fmt_prompt = safe(getattr(self, "_format_prompt", None))
-        if sys_prompt or fmt_prompt:
-            s["character_prompt"] = {
-                "system_prompt": (
-                    sys_prompt.toPlainText() if sys_prompt else ""),
-                "format_prompt": (
-                    fmt_prompt.toPlainText() if fmt_prompt else ""),
-            }
 
         s["tts"] = {"enabled": safe(getattr(self, "_tts_enabled", None)).isChecked() if safe(getattr(self, "_tts_enabled", None)) else False,
                     "model_path": safe(getattr(self, "_tts_model", None)).text().strip() if safe(getattr(self, "_tts_model", None)) else "",
@@ -1171,6 +1164,7 @@ class SettingsWindow(QDialog):
 
     def _on_apply(self):
         v = self._collect_settings()
+        self._save_character_prompt()
         for section in ("llm", "vision"):
             key = v.get(section, {}).get("api_key", "")
             if key and not self.config.is_valid_api_key(key):
@@ -1193,6 +1187,10 @@ class SettingsWindow(QDialog):
                 if stored_key:
                     v.setdefault("llm", {})["api_key"] = stored_key
         for section, data in v.items():
+            # PetManager owns role activation so it can save and reset state
+            # before changing the current role.
+            if section == "current_character":
+                continue
             if isinstance(data, dict):
                 for k, val in data.items():
                     self.config.set(section, k, val)
@@ -1200,6 +1198,32 @@ class SettingsWindow(QDialog):
                 self.config.set(section, data)
         self.config.save()
         self.apply_clicked.emit(v)
+
+    def _character_config_path(self) -> Path:
+        return self._base_dir / "characters" / self._current_char / "config.json"
+
+    def _character_prompt(self) -> dict:
+        path = self._character_config_path()
+        try:
+            data = json.loads(path.read_text(encoding="utf-8-sig"))
+        except (OSError, json.JSONDecodeError):
+            data = {}
+        prompt = data.get("character_prompt")
+        if isinstance(prompt, dict):
+            return prompt
+        return {}
+
+    def _save_character_prompt(self):
+        path = self._character_config_path()
+        try:
+            data = json.loads(path.read_text(encoding="utf-8-sig"))
+        except (OSError, json.JSONDecodeError):
+            return
+        data["character_prompt"] = {
+            "system_prompt": self._system_prompt.toPlainText(),
+            "format_prompt": self._format_prompt.toPlainText(),
+        }
+        path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
     def _on_scale_slider(self, v):
         self._scale_label.setText(f"{v}%")

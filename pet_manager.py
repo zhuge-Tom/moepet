@@ -70,8 +70,10 @@ class PetManager:
             api_key=self.config.get_secret("llm") or self.config.get("llm", "api_key", default=""),
             model=self.config.get("llm", "model", default=""),
         )
-        system_prompt = self.config.get("character_prompt", "system_prompt", default="")
-        format_prompt = self.config.get("character_prompt", "format_prompt", default="")
+        char = self._char_data.get(self.config.current_character)
+        prompt_config = char.character_prompt if char else {}
+        system_prompt = prompt_config.get("system_prompt", "")
+        format_prompt = prompt_config.get("format_prompt", "")
         full_prompt = system_prompt
         if self._knowledge:
             profile = self._knowledge.permanent_context("character")
@@ -188,6 +190,10 @@ class PetManager:
         if name == self.config.current_character:
             return
         old = self.config.current_character
+        # Reset old-role state before the new role is made active.
+        self._save_chat_history()
+        self._llm.cancel()
+        self._llm.clear_history()
         if old in self._windows:
             self._windows[old].hide()
         if name in self._windows:
@@ -195,6 +201,7 @@ class PetManager:
             self.config.set("current_character", name)
             self.config.save()
             self._load_knowledge_base()
+            self._load_chat_history()
 
             names = list(self._windows.keys())
             for win in self._windows.values():

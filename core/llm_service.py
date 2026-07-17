@@ -56,6 +56,8 @@ class LLMService(QObject):
             self._messages = [self._messages[0]]
         else:
             self._messages = []
+        # Retrieved context belongs to one turn and must not cross characters.
+        self._turn_context = ""
 
     @property
     def history(self) -> list[dict]:

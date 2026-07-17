@@ -40,6 +40,7 @@ class CharacterData:
     sprite_map: dict[str, str] = field(default_factory=dict)
     animations: dict[str, AnimConfig] = field(default_factory=dict)
     voice: dict = field(default_factory=dict)
+    character_prompt: dict = field(default_factory=dict)
     base_dir: Path = field(default_factory=Path)
 
     @property
@@ -86,6 +87,7 @@ class CharacterLoader:
             default_sprite=raw.get("default_sprite", ""),
             sprite_map=raw.get("sprites", {}),
             voice=raw.get("voice", {}),
+            character_prompt=raw.get("character_prompt", {}),
             base_dir=char_dir,
         )
 

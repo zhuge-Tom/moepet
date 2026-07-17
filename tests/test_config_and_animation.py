@@ -7,6 +7,60 @@ from pet_manager import PetManager
 from core.knowledge_base import KnowledgeBase
 
 
+def test_character_config_keeps_its_own_prompt(tmp_path):
+    char_dir = tmp_path / "pet"
+    char_dir.mkdir(parents=True)
+    (char_dir / "config.json").write_text(json.dumps({
+        "name": "Pet",
+        "character_prompt": {"system_prompt": "pet-only", "format_prompt": ""},
+    }), encoding="utf-8")
+    data = CharacterLoader(tmp_path).load("pet")
+    assert data.character_prompt["system_prompt"] == "pet-only"
+
+
+def test_role_switch_saves_old_history_and_loads_new_history(tmp_path):
+    class Window:
+        def hide(self):
+            pass
+
+        def show(self):
+            pass
+
+        def set_character_menu(self, *_args):
+            pass
+
+    class Llm:
+        def __init__(self):
+            self.cancelled = False
+            self.cleared = False
+
+        def cancel(self):
+            self.cancelled = True
+
+        def clear_history(self):
+            self.cleared = True
+
+    manager = type("Manager", (), {})()
+    manager.config = Config(tmp_path / "config.json")
+    manager.config.set("current_character", "old")
+    manager._llm = Llm()
+    manager._windows = {"old": Window(), "new": Window()}
+    manager._char_data = {}
+    manager._switch_character = lambda _name: None
+    manager._dialog = None
+    manager._tray = None
+    events = []
+    manager._save_chat_history = lambda: events.append("save-old")
+    manager._load_knowledge_base = lambda: events.append("load-knowledge")
+    manager._load_chat_history = lambda: events.append("load-new")
+
+    PetManager._switch_character(manager, "new")
+
+    assert manager.config.current_character == "new"
+    assert manager._llm.cancelled and manager._llm.cleared
+    assert events == ["save-old", "load-knowledge", "load-new"]
+
+
 def test_config_has_multimodal_defaults(tmp_path):
     config = Config(tmp_path / "config.json")
     assert config.get("asr", "compute_type") == "int8"
