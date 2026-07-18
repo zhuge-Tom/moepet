@@ -32,7 +32,8 @@ from ui.settings.service_status import (
 )
 from ui.settings.persistence import apply_settings, save_character_prompt
 from ui.settings.pages import (
-    make_about_page, make_character_parent_page, make_screen_page, make_vision_page,
+    make_about_page, make_asr_page, make_character_parent_page, make_screen_page,
+    make_tts_page, make_vision_page,
 )
 
 from core.config import Config
@@ -372,8 +373,8 @@ class SettingsWindow(QDialog):
             ("character_sprites", self._page_character_sprites),
             ("character_knowledge", self._page_character_knowledge),
             ("ai", self._page_ai),
-            ("tts", self._page_tts),
-            ("asr", self._page_asr),
+            ("tts", self._build_tts_page),
+            ("asr", self._build_asr_page),
             ("screen", self._build_screen_page),
             ("vision", self._build_vision_page),
             ("about", make_about_page),
@@ -637,6 +638,50 @@ class SettingsWindow(QDialog):
         self._vision_allow_cloud.stateChanged.connect(self._refresh_service_status_cards)
         for field in (self._vision_url, self._vision_model, self._vision_key):
             field.textChanged.connect(self._refresh_service_status_cards)
+        return page
+
+    def _build_tts_page(self):
+        page, fields, rows = make_tts_page(
+            self.config,
+            lambda layout, key, text: self._add_probe_row(
+                layout, key, text, self._prepare_tts_probe),
+        )
+        for name, widget in fields.items():
+            setattr(self, f"_{name}", widget)
+        self._tts_rows = rows
+        self._tts_local_fields = (self._tts_model,)
+        self._tts_cloud_fields = (
+            self._tts_api_url, self._tts_api_key, self._tts_api_model, self._tts_api_voice,
+        )
+        self._tts_provider.currentIndexChanged.connect(self._sync_tts_provider_fields)
+        self._tts_enabled.stateChanged.connect(self._refresh_service_status_cards)
+        for field in (self._tts_model, self._tts_api_url, self._tts_api_key,
+                      self._tts_api_model, self._tts_api_voice):
+            field.textChanged.connect(self._refresh_service_status_cards)
+        self._sync_tts_provider_fields()
+        return page
+
+    def _build_asr_page(self):
+        page, fields, rows = make_asr_page(
+            self.config,
+            lambda layout, key, text: self._add_probe_row(
+                layout, key, text, self._prepare_asr_probe),
+        )
+        for name, widget in fields.items():
+            setattr(self, f"_{name}", widget)
+        self._asr_rows = rows
+        self._asr_local_fields = (
+            self._asr_engine, self._asr_model, self._asr_device, self._asr_compute,
+        )
+        self._asr_cloud_fields = (
+            self._asr_api_url, self._asr_api_key, self._asr_api_model, self._asr_api_language,
+        )
+        self._asr_provider.currentIndexChanged.connect(self._sync_asr_provider_fields)
+        self._asr_enabled.stateChanged.connect(self._refresh_service_status_cards)
+        for field in (self._asr_model, self._asr_api_url, self._asr_api_key,
+                      self._asr_api_model):
+            field.textChanged.connect(self._refresh_service_status_cards)
+        self._sync_asr_provider_fields()
         return page
 
     def _ph(self, layout, text):
@@ -1200,10 +1245,9 @@ class SettingsWindow(QDialog):
     def _sync_tts_provider_fields(self, *_args):
         """Switch TTS forms without clearing local or cloud settings."""
         is_cloud = self._tts_provider.currentData() == "cloud"
-        for widget in self._tts_local_fields:
-            self._set_field_visible(widget, not is_cloud)
-        for widget in self._tts_cloud_fields:
-            self._set_field_visible(widget, is_cloud)
+        self._tts_rows["tts_model"].setVisible(not is_cloud)
+        for name in ("tts_api_url", "tts_api_key", "tts_api_model", "tts_api_voice"):
+            self._tts_rows[name].setVisible(is_cloud)
         self._refresh_service_status_cards()
 
     def _page_asr(self):
@@ -1296,10 +1340,12 @@ class SettingsWindow(QDialog):
     def _sync_asr_provider_fields(self, *_args):
         """Switch ASR forms without mutating either backend's draft values."""
         is_cloud = self._asr_provider.currentData() == "cloud"
-        for widget in self._asr_local_fields:
-            self._set_field_visible(widget, not is_cloud)
-        for widget in self._asr_cloud_fields:
-            self._set_field_visible(widget, is_cloud)
+        local_names = ("asr_engine", "asr_model", "asr_device", "asr_compute")
+        cloud_names = ("asr_api_url", "asr_api_key", "asr_api_model", "asr_api_language")
+        for name in local_names:
+            self._asr_rows[name].setVisible(not is_cloud)
+        for name in cloud_names:
+            self._asr_rows[name].setVisible(is_cloud)
         self._refresh_service_status_cards()
 
     def _page_screen(self):

@@ -288,6 +288,23 @@ def test_screen_and_vision_page_factories_expose_form_fields(qapp, tmp_path):
     assert {"vision_url", "vision_allow_cloud"}.issubset(vision)
 
 
+def test_voice_page_factories_switch_provider_rows(qapp, tmp_path):
+    from ui.settings.pages import make_asr_page, make_tts_page
+    from ui.settings_window import SettingsWindow
+    config = Config(tmp_path / "config.json")
+    _, tts, tts_rows = make_tts_page(config, lambda _layout, _key, _text: None)
+    _, asr, asr_rows = make_asr_page(config, lambda _layout, _key, _text: None)
+    assert {"tts_model", "tts_api_url"}.issubset(tts_rows)
+    assert {"asr_model", "asr_api_url"}.issubset(asr_rows)
+    window = SettingsWindow(config, ["noir"], "noir", tmp_path)
+    window._tts_provider.setCurrentIndex(window._tts_provider.findData("cloud"))
+    window._asr_provider.setCurrentIndex(window._asr_provider.findData("cloud"))
+    assert window._tts_rows["tts_model"].isHidden()
+    assert not window._tts_rows["tts_api_url"].isHidden()
+    assert window._asr_rows["asr_model"].isHidden()
+    assert not window._asr_rows["asr_api_url"].isHidden()
+
+
 def test_stream_finish_replaces_unprocessed_display(qapp):
     from ui.dialog_window import DialogWindow
     window = DialogWindow("Test")

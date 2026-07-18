@@ -6,7 +6,7 @@ form persistence while individual pages own their own presentation tree.
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QCheckBox, QFrame, QHBoxLayout, QLabel, QLineEdit, QPushButton,
+    QCheckBox, QComboBox, QFrame, QHBoxLayout, QLabel, QLineEdit, QPushButton,
     QSpinBox, QVBoxLayout, QWidget,
 )
 
@@ -55,6 +55,136 @@ def _row(layout: QVBoxLayout, label: str, widget: QWidget) -> None:
     row.addWidget(text)
     row.addWidget(widget, 1)
     layout.addLayout(row)
+
+
+def _field_row(layout: QVBoxLayout, label: str, widget: QWidget) -> QWidget:
+    """A hideable label/control row for provider-specific form fields."""
+    container = QWidget()
+    row = QHBoxLayout(container)
+    row.setContentsMargins(0, 0, 0, 0)
+    row.setSpacing(16)
+    text = QLabel(label)
+    text.setStyleSheet("font-size: 13px; color: #2c3e50;")
+    row.addWidget(text)
+    row.addWidget(widget, 1)
+    layout.addWidget(container)
+    return container
+
+
+def make_tts_page(config, add_probe) -> tuple[QWidget, dict[str, QWidget], dict[str, QWidget]]:
+    page, layout = _page_layout()
+    card = ServiceStatusCard("语音输出", "回复可由本地 CosyVoice 或兼容云端 TTS 朗读。")
+    layout.addWidget(card)
+    enabled = QCheckBox("LLM 回复后自动朗读")
+    enabled.setChecked(config.get("tts", "enabled", default=False))
+    layout.addWidget(enabled)
+    provider = QComboBox()
+    provider.addItem("本地 CosyVoice（使用角色授权参考音频）", "local")
+    provider.addItem("云端 OpenAI 兼容 TTS API", "cloud")
+    provider.setCurrentIndex(max(provider.findData(config.get("tts", "provider", default="local")), 0))
+    _row(layout, "语音后端", provider)
+
+    _section(layout, "本地语音")
+    model_path = _line_edit("用户下载的 CosyVoice 模型目录")
+    model_path.setText(config.get("tts", "model_path", default=""))
+    local_row = _field_row(layout, "模型目录", model_path)
+    speed = QSpinBox()
+    speed.setRange(50, 200)
+    speed.setSuffix(" %")
+    speed.setValue(int(config.get("tts", "speed", default=1.0) * 100))
+    _row(layout, "语速", speed)
+    auto_play = QCheckBox("生成后自动播放语音")
+    auto_play.setChecked(config.get("tts", "auto_play", default=True))
+    layout.addWidget(auto_play)
+
+    _section(layout, "云端 TTS API")
+    api_url = _line_edit("https://api.example.com/v1/audio/speech")
+    api_url.setText(config.get("tts", "base_url", default=""))
+    api_key = _line_edit("sk-xxxx", password=True)
+    api_key.setText(config.get_secret("tts") or config.get("tts", "api_key", default=""))
+    api_model = _line_edit("tts-1 / 供应商模型名")
+    api_model.setText(config.get("tts", "model", default="tts-1"))
+    api_voice = _line_edit("alloy / 供应商音色名")
+    api_voice.setText(config.get("tts", "voice", default="alloy"))
+    cloud_rows = {
+        "tts_api_url": _field_row(layout, "合成地址", api_url),
+        "tts_api_key": _field_row(layout, "API Key", api_key),
+        "tts_api_model": _field_row(layout, "模型", api_model),
+        "tts_api_voice": _field_row(layout, "音色", api_voice),
+    }
+    add_probe(layout, "tts", "测试语音引擎")
+    layout.addStretch()
+    fields = {"tts_status_card": card, "tts_enabled": enabled, "tts_provider": provider,
+              "tts_model": model_path, "tts_speed": speed, "tts_auto_play": auto_play,
+              "tts_api_url": api_url, "tts_api_key": api_key, "tts_api_model": api_model,
+              "tts_api_voice": api_voice}
+    rows = {"tts_model": local_row, **cloud_rows}
+    return page, fields, rows
+
+
+def make_asr_page(config, add_probe) -> tuple[QWidget, dict[str, QWidget], dict[str, QWidget]]:
+    page, layout = _page_layout()
+    card = ServiceStatusCard("按住说话", "按住快捷键录音，松开后自动转写到对话。")
+    layout.addWidget(card)
+    enabled = QCheckBox("启用按键语音输入")
+    enabled.setChecked(config.get("asr", "enabled", default=False))
+    layout.addWidget(enabled)
+    provider = QComboBox()
+    provider.addItem("本地模型（不上传音频）", "local")
+    provider.addItem("云端 OpenAI 兼容 ASR API", "cloud")
+    provider.setCurrentIndex(max(provider.findData(config.get("asr", "provider", default="local")), 0))
+    _row(layout, "识别后端", provider)
+
+    _section(layout, "本地 faster-whisper")
+    engine = QComboBox()
+    engine.addItem("faster-whisper（本地运行，推荐）", "faster-whisper")
+    model_path = _line_edit("用户下载的 faster-whisper 模型目录")
+    model_path.setText(config.get("asr", "model_path", default=""))
+    device = QComboBox()
+    device.addItem("CPU（兼容性最好）", "cpu")
+    device.addItem("CUDA GPU", "cuda")
+    device.setCurrentIndex(max(device.findData(config.get("asr", "device", default="cpu")), 0))
+    compute = QComboBox()
+    compute.addItem("int8（速度与内存平衡）", "int8")
+    compute.addItem("float16（GPU 推荐）", "float16")
+    compute.addItem("float32（精度优先）", "float32")
+    compute.setCurrentIndex(max(compute.findData(config.get("asr", "compute_type", default="int8")), 0))
+    local_rows = {
+        "asr_engine": _field_row(layout, "引擎", engine),
+        "asr_model": _field_row(layout, "模型目录", model_path),
+        "asr_device": _field_row(layout, "运行设备", device),
+        "asr_compute": _field_row(layout, "计算精度", compute),
+    }
+    hotkey = _line_edit("Ctrl+Alt+Space")
+    hotkey.setText(config.get("asr", "hotkey", default="Ctrl+Alt+Space"))
+    _row(layout, "按住说话快捷键", hotkey)
+    auto_send = QCheckBox("识别结束后自动发送到对话框")
+    auto_send.setChecked(config.get("asr", "auto_send", default=True))
+    layout.addWidget(auto_send)
+
+    _section(layout, "云端识别 API")
+    api_url = _line_edit("https://api.example.com/v1/audio/transcriptions")
+    api_url.setText(config.get("asr", "base_url", default=""))
+    api_key = _line_edit("sk-xxxx", password=True)
+    api_key.setText(config.get_secret("asr") or config.get("asr", "api_key", default=""))
+    api_model = _line_edit("whisper-1 / 供应商模型名")
+    api_model.setText(config.get("asr", "model", default="whisper-1"))
+    language = _line_edit("留空自动识别，例如 zh")
+    language.setText(config.get("asr", "language", default=""))
+    cloud_rows = {
+        "asr_api_url": _field_row(layout, "转写地址", api_url),
+        "asr_api_key": _field_row(layout, "API Key", api_key),
+        "asr_api_model": _field_row(layout, "模型", api_model),
+        "asr_api_language": _field_row(layout, "识别语言", language),
+    }
+    add_probe(layout, "asr", "测试当前识别后端")
+    layout.addStretch()
+    fields = {"asr_status_card": card, "asr_enabled": enabled, "asr_provider": provider,
+              "asr_engine": engine, "asr_model": model_path, "asr_device": device,
+              "asr_compute": compute, "asr_hotkey": hotkey, "asr_auto_send": auto_send,
+              "asr_api_url": api_url, "asr_api_key": api_key, "asr_api_model": api_model,
+              "asr_api_language": language}
+    return page, fields, {**local_rows, **cloud_rows}
 
 
 def make_screen_page(config, add_probe) -> tuple[QWidget, dict[str, QWidget]]:
