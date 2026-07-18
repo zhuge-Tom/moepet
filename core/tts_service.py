@@ -2,6 +2,7 @@
 from pathlib import Path
 import json
 from urllib.request import Request, urlopen
+from core.openai_compat import bearer_headers, is_local_endpoint
 from core.workers import BackgroundService
 
 
@@ -24,8 +25,11 @@ class TTSService(BackgroundService):
         return self.run(work)
 
     def synthesize_cloud(self, text, base_url, api_key, model, voice, output_path, speed=1.0):
-        if not base_url or not api_key or not model or not voice:
-            self.failed.emit("请完整配置云端 TTS 的地址、API Key、模型和音色")
+        if not base_url or not model or not voice:
+            self.failed.emit("请完整配置 TTS 的地址、模型和音色；本地服务可以不填 API Key")
+            return False
+        if not api_key and not is_local_endpoint(base_url):
+            self.failed.emit("云端 TTS 需要 API Key；本地服务可以不填")
             return False
 
         def work():
@@ -44,7 +48,7 @@ class TTSService(BackgroundService):
                 data=json.dumps(payload).encode("utf-8"),
                 headers={
                     "Content-Type": "application/json",
-                    "Authorization": f"Bearer {api_key}",
+                    **bearer_headers(api_key),
                 },
             )
             with urlopen(request, timeout=90) as response:

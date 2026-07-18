@@ -71,6 +71,28 @@ def _field_row(layout: QVBoxLayout, label: str, widget: QWidget) -> QWidget:
     return container
 
 
+def _model_discovery_controls(layout: QVBoxLayout) -> tuple[QPushButton, QComboBox, QLabel]:
+    """Optional model picker shared by OpenAI-compatible service pages."""
+    row = QHBoxLayout()
+    button = QPushButton("获取可用模型")
+    button.setFixedHeight(30)
+    button.setStyleSheet(
+        "QPushButton { background: #eef2ff; color: #3730a3; border: 1px solid #c7d2fe;"
+        " border-radius: 6px; padding: 4px 14px; }"
+        "QPushButton:hover { background: #e0e7ff; }")
+    status = QLabel("填写地址后可从服务读取模型列表")
+    status.setWordWrap(True)
+    status.setStyleSheet("color: #64748b; font-size: 12px;")
+    row.addWidget(button)
+    row.addWidget(status, 1)
+    layout.addLayout(row)
+    picker = QComboBox()
+    picker.setPlaceholderText("从发现的模型中选择（不会自动覆盖当前模型）")
+    picker.setVisible(False)
+    layout.addWidget(picker)
+    return button, picker, status
+
+
 def make_tts_page(config, add_probe) -> tuple[QWidget, dict[str, QWidget], dict[str, QWidget]]:
     page, layout = _page_layout()
     card = ServiceStatusCard("语音输出", "回复可由本地 CosyVoice 或兼容云端 TTS 朗读。")
@@ -112,12 +134,14 @@ def make_tts_page(config, add_probe) -> tuple[QWidget, dict[str, QWidget], dict[
         "tts_api_model": _field_row(layout, "模型", api_model),
         "tts_api_voice": _field_row(layout, "音色", api_voice),
     }
+    discover_button, discover_picker, discover_status = _model_discovery_controls(layout)
     add_probe(layout, "tts", "测试语音引擎")
     layout.addStretch()
     fields = {"tts_status_card": card, "tts_enabled": enabled, "tts_provider": provider,
               "tts_model": model_path, "tts_speed": speed, "tts_auto_play": auto_play,
               "tts_api_url": api_url, "tts_api_key": api_key, "tts_api_model": api_model,
-              "tts_api_voice": api_voice}
+              "tts_api_voice": api_voice, "tts_discover_button": discover_button,
+              "tts_model_picker": discover_picker, "tts_discover_status": discover_status}
     rows = {"tts_model": local_row, **cloud_rows}
     return page, fields, rows
 
@@ -177,13 +201,15 @@ def make_asr_page(config, add_probe) -> tuple[QWidget, dict[str, QWidget], dict[
         "asr_api_model": _field_row(layout, "模型", api_model),
         "asr_api_language": _field_row(layout, "识别语言", language),
     }
+    discover_button, discover_picker, discover_status = _model_discovery_controls(layout)
     add_probe(layout, "asr", "测试当前识别后端")
     layout.addStretch()
     fields = {"asr_status_card": card, "asr_enabled": enabled, "asr_provider": provider,
               "asr_engine": engine, "asr_model": model_path, "asr_device": device,
               "asr_compute": compute, "asr_hotkey": hotkey, "asr_auto_send": auto_send,
               "asr_api_url": api_url, "asr_api_key": api_key, "asr_api_model": api_model,
-              "asr_api_language": language}
+              "asr_api_language": language, "asr_discover_button": discover_button,
+              "asr_model_picker": discover_picker, "asr_discover_status": discover_status}
     return page, fields, {**local_rows, **cloud_rows}
 
 
@@ -202,6 +228,7 @@ def make_ai_page(config) -> tuple[QWidget, dict[str, QWidget]]:
     model.setText(config.get("llm", "model", default=""))
     _row(layout, "模型", model)
     _hint(layout, "支持 DeepSeek、OpenAI、Ollama 等兼容 Chat Completions 的服务。")
+    discover_button, discover_picker, discover_status = _model_discovery_controls(layout)
 
     _section(layout, "高级设置")
     stream = QCheckBox("启用流式输出（逐字显示）")
@@ -228,7 +255,8 @@ def make_ai_page(config) -> tuple[QWidget, dict[str, QWidget]]:
     return page, {"ai_status_card": card, "ai_url": url, "ai_key": key, "ai_model": model,
                   "ai_stream_cb": stream, "ai_post": post_processing,
                   "ai_ignore_err_cb": ignore_format_error, "ai_test_button": test_button,
-                  "test_status": status}
+                  "test_status": status, "ai_discover_button": discover_button,
+                  "ai_model_picker": discover_picker, "ai_discover_status": discover_status}
 
 
 def make_screen_page(config, add_probe) -> tuple[QWidget, dict[str, QWidget]]:
@@ -288,6 +316,7 @@ def make_vision_page(config, add_probe) -> tuple[QWidget, dict[str, QWidget]]:
     key = _line_edit("可选 API Key", password=True)
     key.setText(config.get_secret("vision") or config.get("vision", "api_key", default=""))
     _row(layout, "API Key", key)
+    discover_button, discover_picker, discover_status = _model_discovery_controls(layout)
     _section(layout, "隐私授权")
     allow_cloud = QCheckBox("我同意将主动截图上传到云端视觉服务")
     allow_cloud.setChecked(config.get("vision", "allow_cloud", default=False))
@@ -296,7 +325,10 @@ def make_vision_page(config, add_probe) -> tuple[QWidget, dict[str, QWidget]]:
     add_probe(layout, "vision", "测试图像理解服务")
     layout.addStretch()
     return page, {"vision_status_card": card, "vision_enabled": enabled, "vision_url": url,
-                  "vision_model": model, "vision_key": key, "vision_allow_cloud": allow_cloud}
+                  "vision_model": model, "vision_key": key, "vision_allow_cloud": allow_cloud,
+                  "vision_discover_button": discover_button,
+                  "vision_model_picker": discover_picker,
+                  "vision_discover_status": discover_status}
 
 
 def make_about_page() -> QWidget:

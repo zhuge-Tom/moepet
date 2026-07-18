@@ -20,10 +20,10 @@ from PySide6.QtGui import QPainter, QFont, QIcon, QPixmap, QAction, QDesktopServ
 from PySide6.QtCore import QUrl
 from PySide6.QtWidgets import QFileDialog, QMessageBox
 from core.knowledge_base import KnowledgeBase
-from core.openai_compat import chat_completions_url
+from core.openai_compat import chat_completions_url, is_local_endpoint
 from ui.settings_components import IntegrationOverview
 from ui.settings.probes import (
-    ProbeRunner, probe_cosyvoice, probe_http_endpoint, probe_local_module,
+    ModelDiscoveryRunner, ProbeRunner, probe_cosyvoice, probe_http_endpoint, probe_local_module,
     probe_ocr,
 )
 from ui.settings.service_status import (
@@ -78,6 +78,7 @@ class SettingsWindow(QDialog):
         self._anims = []
         self._probe_widgets = {}
         self._probe_runner = ProbeRunner(self)
+        self._model_runner = ModelDiscoveryRunner(self)
 
         self.setWindowTitle("Moepet 设置")
         self.setMinimumSize(580, 520)
@@ -100,6 +101,7 @@ class SettingsWindow(QDialog):
 
         self._build_ui()
         self._probe_runner.finished.connect(self._on_probe_finished)
+        self._model_runner.finished.connect(self._on_models_discovered)
         self._tree.setCurrentItem(self._tree.topLevelItem(0))
 
     def _build_ui(self):
@@ -561,6 +563,36 @@ class SettingsWindow(QDialog):
         status.setStyleSheet(
             f"color: {'#15803d' if ok else '#dc2626'}; font-size: 12px;")
 
+    def _discover_models(self, key: str, url_field, key_field, picker, status) -> None:
+        """Request provider models in the background and keep the manual model editable."""
+        button = getattr(self, f"_{key}_discover_button")
+        button.setEnabled(False)
+        status.setText("正在后台获取模型列表...")
+        status.setStyleSheet("color: #2563eb; font-size: 12px;")
+        self._model_requests = getattr(self, "_model_requests", {})
+        self._model_requests[key] = (button, picker, status)
+        self._model_runner.run(key, url_field.text().strip(), key_field.text().strip())
+
+    def _on_models_discovered(self, key: str, ok: bool, message: str, models: list) -> None:
+        request = getattr(self, "_model_requests", {}).pop(key, None)
+        if request is None:
+            return
+        button, picker, status = request
+        button.setEnabled(True)
+        status.setText(message)
+        status.setStyleSheet(
+            f"color: {'#15803d' if ok else '#dc2626'}; font-size: 12px;")
+        if not ok:
+            return
+        picker.blockSignals(True)
+        picker.clear()
+        picker.addItems(models)
+        picker.blockSignals(False)
+        picker.setVisible(True)
+        if key in ("tts", "asr"):
+            provider = getattr(self, f"_{key}_provider")
+            picker.setVisible(provider.currentData() == "cloud")
+
     def _prepare_asr_probe(self):
         provider = self._asr_provider.currentData()
         model_path = self._asr_model.text().strip()
@@ -625,6 +657,12 @@ class SettingsWindow(QDialog):
         )
         for name, widget in fields.items():
             setattr(self, f"_{name}", widget)
+        self._vision_discover_button.clicked.connect(
+            lambda: self._discover_models(
+                "vision", self._vision_url, self._vision_key,
+                self._vision_model_picker, self._vision_discover_status))
+        self._vision_model_picker.activated.connect(
+            lambda _index: self._vision_model.setText(self._vision_model_picker.currentText()))
         self._vision_enabled.stateChanged.connect(self._refresh_service_status_cards)
         self._vision_allow_cloud.stateChanged.connect(self._refresh_service_status_cards)
         for field in (self._vision_url, self._vision_model, self._vision_key):
@@ -645,6 +683,12 @@ class SettingsWindow(QDialog):
             self._tts_api_url, self._tts_api_key, self._tts_api_model, self._tts_api_voice,
         )
         self._tts_provider.currentIndexChanged.connect(self._sync_tts_provider_fields)
+        self._tts_discover_button.clicked.connect(
+            lambda: self._discover_models(
+                "tts", self._tts_api_url, self._tts_api_key,
+                self._tts_model_picker, self._tts_discover_status))
+        self._tts_model_picker.activated.connect(
+            lambda _index: self._tts_api_model.setText(self._tts_model_picker.currentText()))
         self._tts_enabled.stateChanged.connect(self._refresh_service_status_cards)
         for field in (self._tts_model, self._tts_api_url, self._tts_api_key,
                       self._tts_api_model, self._tts_api_voice):
@@ -668,6 +712,12 @@ class SettingsWindow(QDialog):
             self._asr_api_url, self._asr_api_key, self._asr_api_model, self._asr_api_language,
         )
         self._asr_provider.currentIndexChanged.connect(self._sync_asr_provider_fields)
+        self._asr_discover_button.clicked.connect(
+            lambda: self._discover_models(
+                "asr", self._asr_api_url, self._asr_api_key,
+                self._asr_model_picker, self._asr_discover_status))
+        self._asr_model_picker.activated.connect(
+            lambda _index: self._asr_api_model.setText(self._asr_model_picker.currentText()))
         self._asr_enabled.stateChanged.connect(self._refresh_service_status_cards)
         for field in (self._asr_model, self._asr_api_url, self._asr_api_key,
                       self._asr_api_model):
@@ -680,6 +730,12 @@ class SettingsWindow(QDialog):
         for name, widget in fields.items():
             setattr(self, f"_{name}", widget)
         self._ai_test_button.clicked.connect(self._test_connection)
+        self._ai_discover_button.clicked.connect(
+            lambda: self._discover_models(
+                "ai", self._ai_url, self._ai_key,
+                self._ai_model_picker, self._ai_discover_status))
+        self._ai_model_picker.activated.connect(
+            lambda _index: self._ai_model.setText(self._ai_model_picker.currentText()))
         for field in (self._ai_url, self._ai_key, self._ai_model):
             field.textChanged.connect(self._refresh_service_status_cards)
         self._refresh_service_status_cards()
@@ -1113,6 +1169,9 @@ class SettingsWindow(QDialog):
         self._tts_rows["tts_model"].setVisible(not is_cloud)
         for name in ("tts_api_url", "tts_api_key", "tts_api_model", "tts_api_voice"):
             self._tts_rows[name].setVisible(is_cloud)
+        self._tts_discover_button.setVisible(is_cloud)
+        self._tts_discover_status.setVisible(is_cloud)
+        self._tts_model_picker.setVisible(is_cloud and self._tts_model_picker.count() > 0)
         self._refresh_service_status_cards()
 
     def _sync_asr_provider_fields(self, *_args):
@@ -1124,6 +1183,9 @@ class SettingsWindow(QDialog):
             self._asr_rows[name].setVisible(not is_cloud)
         for name in cloud_names:
             self._asr_rows[name].setVisible(is_cloud)
+        self._asr_discover_button.setVisible(is_cloud)
+        self._asr_discover_status.setVisible(is_cloud)
+        self._asr_model_picker.setVisible(is_cloud and self._asr_model_picker.count() > 0)
         self._refresh_service_status_cards()
 
     def _refresh_service_status_cards(self, *_args):
@@ -1131,7 +1193,8 @@ class SettingsWindow(QDialog):
         if hasattr(self, "_ai_status_card"):
             self._ai_status_card.set_state(bool(
                 self._ai_url.text().strip()
-                and (self._ai_key.text().strip() or self.config.get_secret("llm")
+                and (is_local_endpoint(self._ai_url.text().strip())
+                     or self._ai_key.text().strip() or self.config.get_secret("llm")
                      or self.config.get("llm", "api_key", default=""))
                 and self._ai_model.text().strip()
             ))
@@ -1140,7 +1203,8 @@ class SettingsWindow(QDialog):
             ready = self._tts_enabled.isChecked() and (
                 bool(self._tts_model.text().strip()) if not cloud else bool(
                     self._tts_api_url.text().strip()
-                    and (self._tts_api_key.text().strip() or self.config.get_secret("tts")
+                    and (is_local_endpoint(self._tts_api_url.text().strip())
+                         or self._tts_api_key.text().strip() or self.config.get_secret("tts")
                          or self.config.get("tts", "api_key", default=""))
                     and self._tts_api_model.text().strip()
                     and self._tts_api_voice.text().strip()
@@ -1152,7 +1216,8 @@ class SettingsWindow(QDialog):
             ready = self._asr_enabled.isChecked() and (
                 bool(self._asr_model.text().strip()) if not cloud else bool(
                     self._asr_api_url.text().strip()
-                    and (self._asr_api_key.text().strip() or self.config.get_secret("asr")
+                    and (is_local_endpoint(self._asr_api_url.text().strip())
+                         or self._asr_api_key.text().strip() or self.config.get_secret("asr")
                          or self.config.get("asr", "api_key", default=""))
                     and self._asr_api_model.text().strip()
                 )

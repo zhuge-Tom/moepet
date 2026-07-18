@@ -1,14 +1,18 @@
 """Pure readiness rules shared by settings dashboards and service pages."""
 
 
+from core.openai_compat import is_local_endpoint
+
+
 def has_secret(config, section: str) -> bool:
     return bool(config.get_secret(section) or config.get(section, "api_key", default=""))
 
 
 def llm_ready(config) -> bool:
+    base_url = config.get("llm", "base_url", default="")
     return bool(
-        config.get("llm", "base_url", default="")
-        and has_secret(config, "llm")
+        base_url
+        and (is_local_endpoint(base_url) or has_secret(config, "llm"))
         and config.get("llm", "model", default="")
     )
 
@@ -18,9 +22,10 @@ def tts_ready(config) -> bool:
         return False
     if config.get("tts", "provider", default="local") == "local":
         return bool(config.get("tts", "model_path", default=""))
+    base_url = config.get("tts", "base_url", default="")
     return bool(
-        config.get("tts", "base_url", default="")
-        and has_secret(config, "tts")
+        base_url
+        and (is_local_endpoint(base_url) or has_secret(config, "tts"))
         and config.get("tts", "model", default="")
         and config.get("tts", "voice", default="")
     )
@@ -31,9 +36,10 @@ def asr_ready(config) -> bool:
         return False
     if config.get("asr", "provider", default="local") == "local":
         return bool(config.get("asr", "model_path", default=""))
+    base_url = config.get("asr", "base_url", default="")
     return bool(
-        config.get("asr", "base_url", default="")
-        and has_secret(config, "asr")
+        base_url
+        and (is_local_endpoint(base_url) or has_secret(config, "asr"))
         and config.get("asr", "model", default="")
     )
 

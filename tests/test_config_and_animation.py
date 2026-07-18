@@ -76,6 +76,15 @@ def test_cloud_asr_endpoint_is_completed(tmp_path):
     assert service.transcribe_cloud(tmp_path / "missing.wav", "", "", "whisper-1") is False
 
 
+def test_remote_audio_services_require_a_key_without_starting_work(tmp_path):
+    from core.asr_service import ASRService
+    from core.tts_service import TTSService
+    asr = ASRService()
+    tts = TTSService()
+    assert asr.transcribe_cloud(tmp_path / "missing.wav", "https://api.example/v1", "", "whisper-1") is False
+    assert tts.synthesize_cloud("hello", "https://api.example/v1", "", "tts-1", "alloy", tmp_path / "out.wav") is False
+
+
 def test_frame_animation_and_single_png_fallback(tmp_path):
     character_dir = tmp_path / "pet"
     sprites = character_dir / "sprites"
@@ -229,12 +238,19 @@ def test_llm_post_processing_can_be_strict_or_tolerant():
 
 
 def test_openai_compatible_urls_and_optional_auth_headers():
-    from core.openai_compat import bearer_headers, chat_completions_url
+    from core.openai_compat import (
+        bearer_headers, chat_completions_url, is_local_endpoint, model_discovery_urls,
+    )
     assert chat_completions_url("http://localhost:11434/v1") == "http://localhost:11434/v1/chat/completions"
     assert chat_completions_url("https://api.example/v1/chat/completions/") == "https://api.example/v1/chat/completions"
     assert chat_completions_url("https://api.example/v1/responses") == "https://api.example/v1/chat/completions"
     assert bearer_headers("") == {}
     assert bearer_headers("secret") == {"Authorization": "Bearer secret"}
+    assert is_local_endpoint("http://localhost:11434/v1")
+    assert is_local_endpoint("http://127.0.0.1:8000/v1")
+    assert not is_local_endpoint("https://api.example.com/v1")
+    assert model_discovery_urls("http://localhost:11434/v1") == (
+        "http://localhost:11434/v1/models", "http://localhost:11434/api/tags")
 
 
 def test_behavior_defaults_include_safe_idle_interval(tmp_path):
@@ -273,6 +289,25 @@ def test_cloud_vision_readiness_requires_upload_consent(tmp_path):
     assert vision_connection_ready("http://localhost:11434/v1", "llava", False)
 
 
+def test_local_compatible_services_are_ready_without_api_keys(tmp_path):
+    from ui.settings.service_status import asr_ready, llm_ready, tts_ready
+    config = Config(tmp_path / "config.json")
+    config.set("llm", "base_url", "http://localhost:11434/v1")
+    config.set("llm", "model", "qwen3")
+    config.set("tts", "enabled", True)
+    config.set("tts", "provider", "cloud")
+    config.set("tts", "base_url", "http://127.0.0.1:8000/v1")
+    config.set("tts", "model", "tts")
+    config.set("tts", "voice", "alloy")
+    config.set("asr", "enabled", True)
+    config.set("asr", "provider", "cloud")
+    config.set("asr", "base_url", "http://localhost:8001/v1")
+    config.set("asr", "model", "whisper")
+    assert llm_ready(config)
+    assert tts_ready(config)
+    assert asr_ready(config)
+
+
 def test_independent_settings_pages_build_without_window():
     from ui.settings.pages import make_about_page, make_character_parent_page
     assert make_about_page().layout() is not None
@@ -309,6 +344,17 @@ def test_ai_page_factory_exposes_connection_and_format_controls(qapp, tmp_path):
     from ui.settings.pages import make_ai_page
     _, fields = make_ai_page(Config(tmp_path / "config.json"))
     assert {"ai_url", "ai_key", "ai_model", "ai_post", "ai_test_button"}.issubset(fields)
+
+
+def test_settings_window_marks_local_chat_service_ready(qapp, tmp_path):
+    from ui.settings_window import SettingsWindow
+    config = Config(tmp_path / "config.json")
+    window = SettingsWindow(config, ["noir"], "noir", tmp_path)
+    window._ai_url.setText("http://localhost:11434/v1")
+    window._ai_key.clear()
+    window._ai_model.setText("qwen3")
+    window._refresh_service_status_cards()
+    assert window._ai_status_card.badge.text() == "已就绪"
 
 
 def test_stream_finish_replaces_unprocessed_display(qapp):

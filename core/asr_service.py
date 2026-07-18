@@ -3,6 +3,7 @@ import json
 import mimetypes
 from pathlib import Path
 from urllib.request import Request, urlopen
+from core.openai_compat import bearer_headers, is_local_endpoint
 from core.workers import BackgroundService
 
 
@@ -24,8 +25,11 @@ class ASRService(BackgroundService):
     def transcribe_cloud(self, audio_path: Path, base_url: str, api_key: str,
                          model: str, language: str = ""):
         """Transcribe one WAV file through an OpenAI-compatible endpoint."""
-        if not base_url or not api_key or not model:
-            self.failed.emit("请完整配置云端 ASR 的地址、API Key 和模型")
+        if not base_url or not model:
+            self.failed.emit("请完整配置 ASR 的地址和模型；本地服务可以不填 API Key")
+            return False
+        if not api_key and not is_local_endpoint(base_url):
+            self.failed.emit("云端 ASR 需要 API Key；本地服务可以不填")
             return False
 
         def work():
@@ -53,7 +57,7 @@ class ASRService(BackgroundService):
                 endpoint += "/audio/transcriptions"
             request = Request(endpoint, data=b"".join(chunks), headers={
                 "Content-Type": f"multipart/form-data; boundary={boundary}",
-                "Authorization": f"Bearer {api_key}",
+                **bearer_headers(api_key),
             })
             with urlopen(request, timeout=90) as response:
                 data = json.loads(response.read())

@@ -18,6 +18,7 @@ from core.llm_service import LLMService
 from core.ocr_service import OcrService
 from core.tts_service import TTSService
 from core.vision_service import VisionService
+from core.openai_compat import is_local_endpoint
 from core.screen_observer import ScreenObserver
 from core.asr_service import ASRService
 from core.voice_input import PushToTalkRecorder
@@ -312,8 +313,8 @@ class PetManager:
         self._configure_llm()
 
         api_key = self.config.get_secret("llm") or self.config.get("llm", "api_key", default="")
-        if not api_key:
-            self._dialog.display_text("请先在设置 → AI 模型 中配置 API Key 喵~", "assistant")
+        if not api_key and not is_local_endpoint(self.config.get("llm", "base_url", default="")):
+            self._dialog.display_text("请先在设置 → AI 模型 中配置 API Key；本地服务可以留空。", "assistant")
             return
 
         if self._llm.is_busy():
@@ -626,7 +627,7 @@ class PetManager:
             return
         self._configure_llm()
         api_key = self.config.get_secret("llm") or self.config.get("llm", "api_key", default="")
-        if not api_key:
+        if not api_key and not is_local_endpoint(self.config.get("llm", "base_url", default="")):
             return
         self._llm.add_user_message(
             "请根据你刚才注意到的事情，自然地和我说一句话。", persist=False)

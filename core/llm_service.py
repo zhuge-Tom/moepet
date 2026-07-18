@@ -8,7 +8,7 @@ import json
 import re
 from PySide6.QtCore import QObject, Signal, QByteArray, QUrl
 from PySide6.QtNetwork import QNetworkAccessManager, QNetworkRequest, QNetworkReply
-from core.openai_compat import chat_completions_url
+from core.openai_compat import bearer_headers, chat_completions_url, is_local_endpoint
 
 
 class LLMService(QObject):
@@ -102,8 +102,11 @@ class LLMService(QObject):
         if self.is_busy():
             self.cancel()
 
-        if not self._base_url or not self._api_key:
-            self.error_occurred.emit("请先在设置中配置 API 地址和密钥")
+        if not self._base_url or not self._model:
+            self.error_occurred.emit("请先在设置中配置 API 地址和模型")
+            return
+        if not self._api_key and not is_local_endpoint(self._base_url):
+            self.error_occurred.emit("请先在设置中配置 API Key；本地服务可以留空")
             return
 
         url = chat_completions_url(self._base_url)
@@ -126,7 +129,8 @@ class LLMService(QObject):
 
         request = QNetworkRequest(QUrl(url))
         request.setHeader(QNetworkRequest.ContentTypeHeader, "application/json")
-        request.setRawHeader(b"Authorization", f"Bearer {self._api_key}".encode())
+        for name, value in bearer_headers(self._api_key).items():
+            request.setRawHeader(name.encode(), value.encode())
 
         self._streaming = stream
         self._buffer = ""
