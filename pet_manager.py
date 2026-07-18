@@ -395,7 +395,14 @@ class PetManager:
         self._screen_request_active = True
         if self._dialog:
             self._dialog.display_text("正在读取当前屏幕...", "assistant")
-        vision_ready = self.config.get("vision", "enabled", default=False) and self.config.get("vision", "base_url", default="") and self.config.get("vision", "model", default="")
+        vision_url = self.config.get("vision", "base_url", default="")
+        local_vision = any(host in vision_url.lower() for host in ("localhost", "127.0.0.1", "[::1]"))
+        vision_ready = (
+            self.config.get("vision", "enabled", default=False)
+            and vision_url
+            and self.config.get("vision", "model", default="")
+            and (local_vision or self.config.get("vision", "allow_cloud", default=False))
+        )
         if vision_ready and self.config.get("screen_capture", "cloud_first", default=True):
             self._vision.describe(path, self.config.get("vision", "base_url"), self.config.get_secret("vision"), self.config.get("vision", "model"), "")
         else:
@@ -435,19 +442,34 @@ class PetManager:
             self._ocr.recognize(self._ocr_path)
 
     def _speak(self, text: str):
-        """Generate speech only when the user has configured an authorized voice sample."""
+        """Generate speech through the selected local or cloud TTS provider."""
         if not self.config.get("tts", "enabled", default=False):
             return
-        char = self._char_data.get(self.config.current_character)
-        if not char:
+        if not self.config.get("tts", "auto_play", default=True):
             return
-        reference = char.voice.get("reference_audio", "")
-        if not reference:
-            return
-        reference_path = char.base_dir / "voice" / reference
         output = Path(tempfile.gettempdir()) / "moepet-tts.wav"
         self._set_pet_state("speak")
         signals.tts_state_changed.emit(True)
+        if self.config.get("tts", "provider", default="local") == "cloud":
+            self._tts.synthesize_cloud(
+                text,
+                self.config.get("tts", "base_url", default=""),
+                self.config.get_secret("tts") or self.config.get("tts", "api_key", default=""),
+                self.config.get("tts", "model", default="tts-1"),
+                self.config.get("tts", "voice", default="alloy"),
+                output,
+                self.config.get("tts", "speed", default=1.0),
+            )
+            return
+        char = self._char_data.get(self.config.current_character)
+        if not char:
+            self._on_tts_error("未找到当前角色")
+            return
+        reference = char.voice.get("reference_audio", "")
+        if not reference:
+            self._on_tts_error("本地 CosyVoice 需要角色的授权参考音频")
+            return
+        reference_path = char.base_dir / "voice" / reference
         self._tts.synthesize(text, self.config.get("tts", "model_path", default=""), reference_path,
                              output, self.config.get("tts", "speed", default=1.0))
 

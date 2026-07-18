@@ -1,5 +1,7 @@
 """CosyVoice adapter. The dependency and model are deliberately user supplied."""
 from pathlib import Path
+import json
+from urllib.request import Request, urlopen
 from core.workers import BackgroundService
 
 
@@ -19,4 +21,37 @@ class TTSService(BackgroundService):
                 torchaudio.save(str(output_path), item["tts_speech"], voice.sample_rate)
                 return str(output_path)
             raise RuntimeError("CosyVoice 未生成音频")
+        return self.run(work)
+
+    def synthesize_cloud(self, text, base_url, api_key, model, voice, output_path, speed=1.0):
+        if not base_url or not api_key or not model or not voice:
+            self.failed.emit("请完整配置云端 TTS 的地址、API Key、模型和音色")
+            return False
+
+        def work():
+            endpoint = base_url.rstrip("/")
+            if not endpoint.endswith("/audio/speech"):
+                endpoint += "/audio/speech"
+            payload = {
+                "model": model,
+                "input": text,
+                "voice": voice,
+                "response_format": "wav",
+                "speed": max(0.25, min(float(speed), 4.0)),
+            }
+            request = Request(
+                endpoint,
+                data=json.dumps(payload).encode("utf-8"),
+                headers={
+                    "Content-Type": "application/json",
+                    "Authorization": f"Bearer {api_key}",
+                },
+            )
+            with urlopen(request, timeout=90) as response:
+                audio = response.read()
+            if not audio:
+                raise RuntimeError("云端 TTS 未返回音频数据")
+            Path(output_path).write_bytes(audio)
+            return str(output_path)
+
         return self.run(work)

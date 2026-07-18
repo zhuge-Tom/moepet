@@ -7,7 +7,10 @@ QTreeWidget 导航 + QStackedWidget 页面切换。
 import json
 import os
 import subprocess
+import threading
 from pathlib import Path
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
 
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QWidget,
@@ -50,6 +53,7 @@ _NAV_HOVER = "#3d5166"
 class SettingsWindow(QDialog):
     scale_changed = Signal(float)
     apply_clicked = Signal(dict)
+    probe_finished = Signal(str, bool, str)
 
     def __init__(self, config: Config, characters: list[str], current_char: str,
                  base_dir: Path = None, parent=None):
@@ -61,13 +65,30 @@ class SettingsWindow(QDialog):
         self._collapsed = False
         self._last_page_key = "general"
         self._anims = []
+        self._field_labels = {}
+        self._probe_widgets = {}
 
         self.setWindowTitle("Moepet 设置")
         self.setMinimumSize(580, 520)
         self.resize(760, 600)
-        self.setStyleSheet("QDialog { background: #f0f2f5; }")
+        self.setStyleSheet("""
+            QDialog { background: #f4f6f9; }
+            QCheckBox { color: #334155; spacing: 8px; font-size: 13px; }
+            QCheckBox::indicator { width: 16px; height: 16px; border: 2px solid #cbd5e1; border-radius: 4px; background: #fff; }
+            QCheckBox::indicator:checked { background: #e94560; border-color: #e94560; }
+            QComboBox { background: #fff; color: #1e293b; }
+            QComboBox::drop-down { border: none; width: 24px; }
+            QComboBox QAbstractItemView {
+                background: #ffffff; color: #1e293b;
+                border: 1px solid #cbd5e1; outline: none;
+                selection-background-color: #fce7ec; selection-color: #9f1239;
+            }
+            QComboBox QAbstractItemView::item { min-height: 28px; padding: 4px 8px; }
+            QComboBox QAbstractItemView::item:hover { background: #f8fafc; color: #1e293b; }
+        """)
 
         self._build_ui()
+        self.probe_finished.connect(self._on_probe_finished)
         self._tree.setCurrentItem(self._tree.topLevelItem(0))
 
     def _build_ui(self):
@@ -291,13 +312,19 @@ class SettingsWindow(QDialog):
     def _build_right(self):
         right = QWidget()
         layout = QVBoxLayout(right)
-        layout.setContentsMargins(24, 16, 24, 16)
-        layout.setSpacing(12)
+        layout.setContentsMargins(28, 20, 28, 0)
+        layout.setSpacing(10)
 
         self._page_title = QLabel("通用设置")
         self._page_title.setStyleSheet(
-            "font-size: 18px; font-weight: bold; color: #1e293b;")
+            "font-size: 21px; font-weight: bold; color: #172033;")
         layout.addWidget(self._page_title, alignment=Qt.AlignLeft)
+
+        self._page_description = QLabel()
+        self._page_description.setWordWrap(True)
+        self._page_description.setStyleSheet(
+            "font-size: 12px; color: #64748b; margin-bottom: 4px;")
+        layout.addWidget(self._page_description)
 
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
@@ -314,6 +341,14 @@ class SettingsWindow(QDialog):
             " QScrollBar::sub-line:vertical { height: 0; }")
 
         # QStackedWidget: 每个页面是独立的 QWidget，切换时仅改 index
+        content_card = QFrame()
+        content_card.setObjectName("settings_content_card")
+        content_card.setStyleSheet(
+            "QFrame#settings_content_card { background: #ffffff;"
+            " border: 1px solid #e2e8f0; border-radius: 12px; }")
+        card_layout = QVBoxLayout(content_card)
+        card_layout.setContentsMargins(0, 0, 0, 0)
+
         self._stack = QStackedWidget()
         self._stack.setStyleSheet("background: transparent;")
 
@@ -338,10 +373,38 @@ class SettingsWindow(QDialog):
             self._stack.addWidget(page_widget)
             self._pages[key] = page_widget
 
-        scroll.setWidget(self._stack)
-        layout.addWidget(scroll, 1)
+        # Combo popups are separate Qt windows on some Windows themes, so the
+        # dialog stylesheet alone does not reliably reach their item views.
+        for combo in self._stack.findChildren(QComboBox):
+            combo.view().setStyleSheet("""
+                QAbstractItemView {
+                    background: #ffffff;
+                    color: #1e293b;
+                    border: 1px solid #cbd5e1;
+                    selection-background-color: #fce7ec;
+                    selection-color: #9f1239;
+                    outline: none;
+                }
+                QAbstractItemView::item {
+                    min-height: 28px;
+                    padding: 4px 8px;
+                }
+                QAbstractItemView::item:hover {
+                    background: #f8fafc;
+                    color: #1e293b;
+                }
+            """)
 
+        scroll.setWidget(self._stack)
+        card_layout.addWidget(scroll)
+        layout.addWidget(content_card, 1)
+
+        footer = QFrame()
+        footer.setStyleSheet("QFrame { border-top: 1px solid #e2e8f0; background: #ffffff; }")
+        footer_layout = QHBoxLayout(footer)
+        footer_layout.setContentsMargins(0, 12, 0, 14)
         btn_row = QHBoxLayout()
+        btn_row.setSpacing(8)
         btn_row.addStretch()
         for text, slot, pri in [
             ("应用", self._on_apply, False),
@@ -363,7 +426,8 @@ class SettingsWindow(QDialog):
                     "QPushButton:hover { background: #f5f6fa; }")
             b.clicked.connect(slot)
             btn_row.addWidget(b)
-        layout.addLayout(btn_row)
+        footer_layout.addLayout(btn_row)
+        layout.addWidget(footer)
         return right
 
     def _switch_page(self, key):
@@ -378,6 +442,20 @@ class SettingsWindow(QDialog):
             "screen": "屏幕识别", "vision": "图像理解", "about": "关于",
         }
         self._page_title.setText(titles.get(key, ""))
+        descriptions = {
+            "general": "调整桌宠的显示、交互和日常行为。",
+            "character": "从左侧子项管理角色的连接、立绘与资料。",
+            "character_api": "配置当前角色的对话服务与提示词。",
+            "character_sprites": "管理当前角色使用的立绘和动画资源。",
+            "character_knowledge": "导入和维护角色在对话中参考的资料。",
+            "ai": "选择模型服务，并填写连接所需的信息。",
+            "tts": "配置回复朗读所使用的语音服务。",
+            "asr": "配置语音输入与本地识别选项。",
+            "screen": "按需启用屏幕识别，并设置快捷键和隐私选项。",
+            "vision": "配置截图后交给模型理解的方式。",
+            "about": "查看版本信息、项目说明和相关链接。",
+        }
+        self._page_description.setText(descriptions.get(key, ""))
 
     # ─── 页面构建工具 ─────────────────────────
 
@@ -385,7 +463,7 @@ class SettingsWindow(QDialog):
         """创建空白页面容器，返回 (QWidget, QVBoxLayout)"""
         w = QWidget()
         lay = QVBoxLayout(w)
-        lay.setContentsMargins(28, 24, 28, 24)
+        lay.setContentsMargins(28, 24, 28, 28)
         lay.setSpacing(16)
         return w, lay
 
@@ -397,6 +475,7 @@ class SettingsWindow(QDialog):
             "font-weight: bold; font-size: 14px;"
             " color: #475569; margin-top: 2px;")
         layout.addWidget(label)
+        return label
 
     def _row(self, label_text, widget, layout, stretch_label=True):
         """标签 + 控件 的水平行"""
@@ -408,6 +487,7 @@ class SettingsWindow(QDialog):
         row.addWidget(lbl)
         row.addWidget(widget, 1)
         layout.addLayout(row)
+        self._field_labels[id(widget)] = lbl
         return widget
 
     def _hint(self, layout, text):
@@ -418,6 +498,14 @@ class SettingsWindow(QDialog):
         h.setMinimumHeight(32)
         h.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum)
         layout.addWidget(h)
+        return h
+
+    def _set_field_visible(self, widget, visible):
+        """Show or hide a field with its label while preserving its value."""
+        label = self._field_labels.get(id(widget))
+        if label is not None:
+            label.setVisible(visible)
+        widget.setVisible(visible)
 
     def _line_edit(self, placeholder="", echo_mode=QLineEdit.Normal):
         le = QLineEdit()
@@ -429,6 +517,146 @@ class SettingsWindow(QDialog):
             " padding: 4px 10px; font-size: 13px; }"
             "QLineEdit:focus { border-color: #e94560; }")
         return le
+
+    def _add_probe_row(self, layout, key, text, prepare_probe):
+        row = QHBoxLayout()
+        button = QPushButton(text)
+        button.setFixedHeight(30)
+        button.setStyleSheet(
+            "QPushButton { background: #eef2ff; color: #3730a3;"
+            " border: 1px solid #c7d2fe; border-radius: 6px; padding: 4px 14px; }"
+            "QPushButton:hover { background: #e0e7ff; }")
+        status = QLabel("尚未测试")
+        status.setWordWrap(True)
+        status.setStyleSheet("color: #64748b; font-size: 12px;")
+        row.addWidget(button)
+        row.addWidget(status, 1)
+        layout.addLayout(row)
+        self._probe_widgets[key] = (button, status)
+        button.clicked.connect(lambda: self._start_probe(key, prepare_probe))
+
+    def _start_probe(self, key, prepare_probe):
+        button, status = self._probe_widgets[key]
+        button.setEnabled(False)
+        status.setText("正在后台测试...")
+        status.setStyleSheet("color: #2563eb; font-size: 12px;")
+        try:
+            probe = prepare_probe()
+        except Exception as exc:
+            self.probe_finished.emit(
+                key, False, f"无法准备测试：{type(exc).__name__}: {str(exc)[:120]}")
+            return
+
+        def run():
+            try:
+                ok, message = probe()
+            except Exception as exc:
+                ok, message = False, f"测试失败：{type(exc).__name__}: {str(exc)[:120]}"
+            self.probe_finished.emit(key, bool(ok), str(message))
+
+        threading.Thread(target=run, name=f"moepet-{key}-probe", daemon=True).start()
+
+    def _on_probe_finished(self, key, ok, message):
+        pair = self._probe_widgets.get(key)
+        if pair is None:
+            return
+        button, status = pair
+        button.setEnabled(True)
+        status.setText(message)
+        status.setStyleSheet(
+            f"color: {'#15803d' if ok else '#dc2626'}; font-size: 12px;")
+
+    @staticmethod
+    def _probe_local_module(module, model_path=""):
+        if model_path and not Path(model_path).is_dir():
+            return False, "模型目录不存在或不可访问"
+        __import__(module)
+        return True, "本地依赖和模型目录可用"
+
+    @staticmethod
+    def _probe_http_endpoint(url, api_key, payload=None):
+        if not url.strip():
+            return False, "请先填写服务地址"
+        headers = {"Content-Type": "application/json"}
+        if api_key.strip():
+            headers["Authorization"] = f"Bearer {api_key.strip()}"
+        body = json.dumps(payload or {}).encode("utf-8")
+        request = Request(url, data=body, headers=headers, method="POST")
+        try:
+            with urlopen(request, timeout=20) as response:
+                if 200 <= response.status < 300:
+                    return True, "服务连接和凭据验证成功"
+                return False, f"服务返回 HTTP {response.status}"
+        except HTTPError as exc:
+            if exc.code in (401, 403):
+                return False, "服务可达，但 API Key 无效或没有权限"
+            if exc.code in (400, 405):
+                return True, "服务可达并已响应测试请求"
+            return False, f"服务返回 HTTP {exc.code}"
+        except URLError as exc:
+            return False, f"无法连接服务：{getattr(exc, 'reason', exc)}"
+
+    def _prepare_asr_probe(self):
+        provider = self._asr_provider.currentData()
+        model_path = self._asr_model.text().strip()
+        url = self._asr_api_url.text().strip()
+        key = self._asr_api_key.text().strip()
+        model = self._asr_api_model.text().strip() or "whisper-1"
+        if provider == "cloud":
+            return lambda: self._probe_http_endpoint(url, key, {"model": model})
+        return lambda: self._probe_local_module("faster_whisper", model_path)
+
+    def _prepare_tts_probe(self):
+        model_path = self._tts_model.text().strip()
+        provider = self._tts_provider.currentData()
+        url = self._tts_api_url.text().strip()
+        key = self._tts_api_key.text().strip()
+        model = self._tts_api_model.text().strip() or "tts-1"
+        voice = self._tts_api_voice.text().strip() or "alloy"
+        if provider == "cloud":
+            if url and not url.rstrip("/").endswith("/audio/speech"):
+                url = url.rstrip("/") + "/audio/speech"
+            return lambda: self._probe_http_endpoint(
+                url, key, {"model": model, "input": "连接测试", "voice": voice, "response_format": "wav"})
+
+        def probe():
+            if not model_path or not Path(model_path).is_dir():
+                return False, "请先填写可访问的 CosyVoice 模型目录"
+            __import__("cosyvoice.cli.cosyvoice")
+            __import__("torchaudio")
+            return True, "CosyVoice 依赖和模型目录可用"
+
+        return probe
+
+    @staticmethod
+    def _probe_ocr():
+        from rapidocr_onnxruntime import RapidOCR
+        RapidOCR()
+        return True, "本地 OCR 引擎初始化成功"
+
+    def _prepare_ocr_probe(self):
+        return self._probe_ocr
+
+    def _prepare_vision_probe(self):
+        base_url = self._vision_url.text().strip().rstrip("/")
+        api_key = self._vision_key.text().strip()
+        model = self._vision_model.text().strip()
+        if not base_url:
+            return lambda: (False, "请先填写视觉服务地址")
+        if not model:
+            return lambda: (False, "请先填写视觉模型名称")
+        if not base_url.endswith("/chat/completions"):
+            base_url += "/chat/completions"
+        tiny_png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+        payload = {
+            "model": model,
+            "max_tokens": 8,
+            "messages": [{"role": "user", "content": [
+                {"type": "text", "text": "Reply OK."},
+                {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{tiny_png}"}},
+            ]}],
+        }
+        return lambda: self._probe_http_endpoint(base_url, api_key, payload)
 
     def _ph(self, layout, text):
         """占位提示"""
@@ -880,6 +1108,14 @@ class SettingsWindow(QDialog):
         self._tts_enabled = QCheckBox("LLM 回复后自动朗读")
         self._tts_enabled.setChecked(self.config.get("tts", "enabled", default=False))
         lay.addWidget(self._tts_enabled)
+        self._hint(lay, "语音合成是桌宠的输出能力。关闭后仅显示文字回复，不会生成或播放音频。")
+        self._tts_provider = QComboBox()
+        self._tts_provider.addItem("本地 CosyVoice（使用角色授权参考音频）", "local")
+        self._tts_provider.addItem("云端 OpenAI 兼容 TTS API", "cloud")
+        provider_index = self._tts_provider.findData(
+            self.config.get("tts", "provider", default="local"))
+        self._tts_provider.setCurrentIndex(max(provider_index, 0))
+        self._row("语音后端", self._tts_provider, lay)
         self._tts_model = self._line_edit("用户下载的 CosyVoice 模型目录")
         self._tts_model.setText(self.config.get("tts", "model_path", default=""))
         self._row("模型目录", self._tts_model, lay)
@@ -888,9 +1124,44 @@ class SettingsWindow(QDialog):
         self._tts_speed.setSuffix("%")
         self._tts_speed.setValue(int(self.config.get("tts", "speed", default=1.0) * 100))
         self._row("语速", self._tts_speed, lay)
+        self._tts_auto_play = QCheckBox("生成后自动播放语音")
+        self._tts_auto_play.setChecked(self.config.get("tts", "auto_play", default=True))
+        lay.addWidget(self._tts_auto_play)
+        self._sec(lay, "云端 TTS API")
+        self._tts_api_url = self._line_edit("https://api.example.com/v1/audio/speech")
+        self._tts_api_url.setText(self.config.get("tts", "base_url", default=""))
+        self._row("合成地址", self._tts_api_url, lay)
+        self._tts_api_key = self._line_edit("sk-xxxx", QLineEdit.Password)
+        self._tts_api_key.setText(
+            self.config.get_secret("tts") or self.config.get("tts", "api_key", default=""))
+        self._row("API Key", self._tts_api_key, lay)
+        self._tts_api_model = self._line_edit("tts-1 / 供应商模型名")
+        self._tts_api_model.setText(self.config.get("tts", "model", default="tts-1"))
+        self._row("模型", self._tts_api_model, lay)
+        self._tts_api_voice = self._line_edit("alloy / 供应商音色名")
+        self._tts_api_voice.setText(self.config.get("tts", "voice", default="alloy"))
+        self._row("音色", self._tts_api_voice, lay)
+        self._tts_local_fields = (self._tts_model,)
+        self._tts_cloud_fields = (
+            self._tts_api_url,
+            self._tts_api_key,
+            self._tts_api_model,
+            self._tts_api_voice,
+        )
+        self._tts_provider.currentIndexChanged.connect(self._sync_tts_provider_fields)
+        self._sync_tts_provider_fields()
         self._hint(lay, "在角色 voice/ 中放置本人或已获授权的 10–60 秒参考音频。")
+        self._add_probe_row(lay, "tts", "测试语音引擎", self._prepare_tts_probe)
         lay.addStretch()
         return page
+
+    def _sync_tts_provider_fields(self, *_args):
+        """Switch TTS forms without clearing local or cloud settings."""
+        is_cloud = self._tts_provider.currentData() == "cloud"
+        for widget in self._tts_local_fields:
+            self._set_field_visible(widget, not is_cloud)
+        for widget in self._tts_cloud_fields:
+            self._set_field_visible(widget, is_cloud)
 
     def _page_asr(self):
         page, lay = self._make_page()
@@ -898,18 +1169,90 @@ class SettingsWindow(QDialog):
         self._asr_enabled = QCheckBox("启用按键语音输入")
         self._asr_enabled.setChecked(self.config.get("asr", "enabled", default=False))
         lay.addWidget(self._asr_enabled)
+        self._hint(lay, "语音只会在你触发按住说话快捷键后录制和识别；未启用时不会访问麦克风。")
+
+        self._sec(lay, "识别引擎")
+        self._asr_engine = QComboBox()
+        self._asr_engine.addItem("faster-whisper（本地运行，推荐）", "faster-whisper")
+        self._row("引擎", self._asr_engine, lay)
+        self._asr_provider = QComboBox()
+        self._asr_provider.addItem("本地模型（不上传音频）", "local")
+        self._asr_provider.addItem("云端 OpenAI 兼容 ASR API", "cloud")
+        provider_index = self._asr_provider.findData(
+            self.config.get("asr", "provider", default="local"))
+        self._asr_provider.setCurrentIndex(max(provider_index, 0))
+        self._row("识别后端", self._asr_provider, lay)
         self._asr_model = self._line_edit("用户下载的 faster-whisper 模型目录")
         self._asr_model.setText(self.config.get("asr", "model_path", default=""))
         self._row("模型目录", self._asr_model, lay)
+        self._hint(lay, "请填写已下载模型的目录。模型文件不存在或依赖未安装时，识别不会启动。")
+
+        self._sec(lay, "性能与提交")
+        self._asr_device = QComboBox()
+        self._asr_device.addItem("CPU（兼容性最好）", "cpu")
+        self._asr_device.addItem("CUDA GPU（需要可用的 CUDA 环境）", "cuda")
+        device_index = self._asr_device.findData(self.config.get("asr", "device", default="cpu"))
+        self._asr_device.setCurrentIndex(max(device_index, 0))
+        self._row("运行设备", self._asr_device, lay)
+        self._asr_compute = QComboBox()
+        self._asr_compute.addItem("int8（速度与内存平衡）", "int8")
+        self._asr_compute.addItem("float16（GPU 推荐）", "float16")
+        self._asr_compute.addItem("float32（精度优先）", "float32")
+        compute_index = self._asr_compute.findData(self.config.get("asr", "compute_type", default="int8"))
+        self._asr_compute.setCurrentIndex(max(compute_index, 0))
+        self._row("计算精度", self._asr_compute, lay)
         self._asr_hotkey = self._line_edit("Ctrl+Alt+Space")
         self._asr_hotkey.setText(self.config.get("asr", "hotkey", default="Ctrl+Alt+Space"))
         self._row("按住说话快捷键", self._asr_hotkey, lay)
+        self._asr_auto_send = QCheckBox("识别结束后自动发送到对话框")
+        self._asr_auto_send.setChecked(self.config.get("asr", "auto_send", default=True))
+        lay.addWidget(self._asr_auto_send)
+        self._sec(lay, "云端识别 API")
+        self._asr_api_url = self._line_edit("https://api.example.com/v1/audio/transcriptions")
+        self._asr_api_url.setText(self.config.get("asr", "base_url", default=""))
+        self._row("转写地址", self._asr_api_url, lay)
+        self._asr_api_key = self._line_edit("sk-xxxx", QLineEdit.Password)
+        self._asr_api_key.setText(
+            self.config.get_secret("asr") or self.config.get("asr", "api_key", default=""))
+        self._row("API Key", self._asr_api_key, lay)
+        self._asr_api_model = self._line_edit("whisper-1 / 供应商模型名")
+        self._asr_api_model.setText(self.config.get("asr", "model", default="whisper-1"))
+        self._row("模型", self._asr_api_model, lay)
+        self._asr_api_language = self._line_edit("留空自动识别，例如 zh")
+        self._asr_api_language.setText(self.config.get("asr", "language", default=""))
+        self._row("识别语言", self._asr_api_language, lay)
+        self._asr_local_fields = (
+            self._asr_engine,
+            self._asr_model,
+            self._asr_device,
+            self._asr_compute,
+        )
+        self._asr_cloud_fields = (
+            self._asr_api_url,
+            self._asr_api_key,
+            self._asr_api_model,
+            self._asr_api_language,
+        )
+        self._asr_provider.currentIndexChanged.connect(
+            self._sync_asr_provider_fields)
+        self._sync_asr_provider_fields()
+        self._hint(lay, "选择云端后端时，音频会发送至该地址。当前版本先保存此配置；云端转写调用会在录音输入链路接入后启用。")
         self._hint(lay, "首次接入需安装可选语音依赖；未配置模型时不会录音。")
+        self._add_probe_row(lay, "asr", "测试当前识别后端", self._prepare_asr_probe)
         lay.addStretch()
         return page
 
+    def _sync_asr_provider_fields(self, *_args):
+        """Switch ASR forms without mutating either backend's draft values."""
+        is_cloud = self._asr_provider.currentData() == "cloud"
+        for widget in self._asr_local_fields:
+            self._set_field_visible(widget, not is_cloud)
+        for widget in self._asr_cloud_fields:
+            self._set_field_visible(widget, is_cloud)
+
     def _page_screen(self):
         page, lay = self._make_page()
+        self._hint(lay, "仅当你使用快捷键或在对话中明确要求识别屏幕时才会截图，不会在后台持续观察屏幕。")
         self._sec(lay, "主动截图 OCR")
         self._screen_keep = QCheckBox("保留截图（默认识别后删除）")
         self._screen_keep.setChecked(self.config.get("screen_capture", "keep_captures", default=False))
@@ -917,10 +1260,12 @@ class SettingsWindow(QDialog):
         self._screen_hotkey = self._line_edit("Ctrl+Alt+O")
         self._screen_hotkey.setText(self.config.get("screen_capture", "hotkey", default="Ctrl+Alt+O"))
         self._row("截图快捷键", self._screen_hotkey, lay)
+        self._sec(lay, "识别路径")
         self._screen_cloud_first = QCheckBox("优先使用已配置的云端视觉模型，失败时本地 OCR")
         self._screen_cloud_first.setChecked(self.config.get("screen_capture", "cloud_first", default=True))
         lay.addWidget(self._screen_cloud_first)
         self._hint(lay, "在聊天中说“识别屏幕/看屏幕”或按快捷键即可截图；不会后台监控。")
+        self._add_probe_row(lay, "ocr", "测试本地 OCR", self._prepare_ocr_probe)
         lay.addStretch()
         return page
 
@@ -930,6 +1275,8 @@ class SettingsWindow(QDialog):
         self._vision_enabled = QCheckBox("允许主动发送截图到已配置的视觉服务")
         self._vision_enabled.setChecked(self.config.get("vision", "enabled", default=False))
         lay.addWidget(self._vision_enabled)
+        self._hint(lay, "图像理解用于回答画面内容；本地 OCR 只提取画面中的文字。两者都只处理你主动触发的截图。")
+        self._sec(lay, "服务连接")
         self._vision_url = self._line_edit("本地 Ollama 或云端 OpenAI 兼容地址")
         self._vision_url.setText(self.config.get("vision", "base_url", default=""))
         self._row("Base URL", self._vision_url, lay)
@@ -937,8 +1284,16 @@ class SettingsWindow(QDialog):
         self._vision_model.setText(self.config.get("vision", "model", default=""))
         self._row("模型", self._vision_model, lay)
         self._vision_key = self._line_edit("可选 API Key", QLineEdit.Password)
+        self._vision_key.setText(
+            self.config.get_secret("vision") or self.config.get("vision", "api_key", default=""))
         self._row("API Key", self._vision_key, lay)
+        self._sec(lay, "隐私与回退")
+        self._vision_allow_cloud = QCheckBox("我同意将主动截图上传到云端视觉服务")
+        self._vision_allow_cloud.setChecked(self.config.get("vision", "allow_cloud", default=False))
+        lay.addWidget(self._vision_allow_cloud)
+        self._hint(lay, "本地地址（localhost、127.0.0.1）无需授权。云端地址必须勾选此项才会接收截图；服务失败时会自动回退到本地 OCR。")
         self._hint(lay, "只有你明确选择图像理解时才会发送截图；本地服务可不填 Key。")
+        self._add_probe_row(lay, "vision", "测试图像理解服务", self._prepare_vision_probe)
         lay.addStretch()
         return page
 
@@ -1135,17 +1490,32 @@ class SettingsWindow(QDialog):
 
         s["tts"] = {"enabled": safe(getattr(self, "_tts_enabled", None)).isChecked() if safe(getattr(self, "_tts_enabled", None)) else False,
                     "model_path": safe(getattr(self, "_tts_model", None)).text().strip() if safe(getattr(self, "_tts_model", None)) else "",
-                    "speed": safe(getattr(self, "_tts_speed", None)).value() / 100.0 if safe(getattr(self, "_tts_speed", None)) else 1.0}
+                    "speed": safe(getattr(self, "_tts_speed", None)).value() / 100.0 if safe(getattr(self, "_tts_speed", None)) else 1.0,
+                    "auto_play": safe(getattr(self, "_tts_auto_play", None)).isChecked() if safe(getattr(self, "_tts_auto_play", None)) else True,
+                    "provider": safe(getattr(self, "_tts_provider", None)).currentData() if safe(getattr(self, "_tts_provider", None)) else "local",
+                    "base_url": safe(getattr(self, "_tts_api_url", None)).text().strip() if safe(getattr(self, "_tts_api_url", None)) else "",
+                    "api_key": safe(getattr(self, "_tts_api_key", None)).text().strip() if safe(getattr(self, "_tts_api_key", None)) else "",
+                    "model": safe(getattr(self, "_tts_api_model", None)).text().strip() if safe(getattr(self, "_tts_api_model", None)) else "tts-1",
+                    "voice": safe(getattr(self, "_tts_api_voice", None)).text().strip() if safe(getattr(self, "_tts_api_voice", None)) else "alloy"}
         s["asr"] = {"enabled": safe(getattr(self, "_asr_enabled", None)).isChecked() if safe(getattr(self, "_asr_enabled", None)) else False,
                     "model_path": safe(getattr(self, "_asr_model", None)).text().strip() if safe(getattr(self, "_asr_model", None)) else "",
-                    "hotkey": safe(getattr(self, "_asr_hotkey", None)).text().strip() if safe(getattr(self, "_asr_hotkey", None)) else "Ctrl+Alt+Space"}
+                    "hotkey": safe(getattr(self, "_asr_hotkey", None)).text().strip() if safe(getattr(self, "_asr_hotkey", None)) else "Ctrl+Alt+Space",
+                    "device": safe(getattr(self, "_asr_device", None)).currentData() if safe(getattr(self, "_asr_device", None)) else "cpu",
+                    "compute_type": safe(getattr(self, "_asr_compute", None)).currentData() if safe(getattr(self, "_asr_compute", None)) else "int8",
+                    "auto_send": safe(getattr(self, "_asr_auto_send", None)).isChecked() if safe(getattr(self, "_asr_auto_send", None)) else True,
+                    "provider": safe(getattr(self, "_asr_provider", None)).currentData() if safe(getattr(self, "_asr_provider", None)) else "local",
+                    "base_url": safe(getattr(self, "_asr_api_url", None)).text().strip() if safe(getattr(self, "_asr_api_url", None)) else "",
+                    "api_key": safe(getattr(self, "_asr_api_key", None)).text().strip() if safe(getattr(self, "_asr_api_key", None)) else "",
+                    "model": safe(getattr(self, "_asr_api_model", None)).text().strip() if safe(getattr(self, "_asr_api_model", None)) else "whisper-1",
+                    "language": safe(getattr(self, "_asr_api_language", None)).text().strip() if safe(getattr(self, "_asr_api_language", None)) else ""}
         s["screen_capture"] = {"keep_captures": safe(getattr(self, "_screen_keep", None)).isChecked() if safe(getattr(self, "_screen_keep", None)) else False,
                                "hotkey": safe(getattr(self, "_screen_hotkey", None)).text().strip() if safe(getattr(self, "_screen_hotkey", None)) else "Ctrl+Alt+O",
                                "cloud_first": safe(getattr(self, "_screen_cloud_first", None)).isChecked() if safe(getattr(self, "_screen_cloud_first", None)) else True}
         s["vision"] = {"enabled": safe(getattr(self, "_vision_enabled", None)).isChecked() if safe(getattr(self, "_vision_enabled", None)) else False,
                        "base_url": safe(getattr(self, "_vision_url", None)).text().strip() if safe(getattr(self, "_vision_url", None)) else "",
                        "model": safe(getattr(self, "_vision_model", None)).text().strip() if safe(getattr(self, "_vision_model", None)) else "",
-                       "api_key": safe(getattr(self, "_vision_key", None)).text().strip() if safe(getattr(self, "_vision_key", None)) else ""}
+                       "api_key": safe(getattr(self, "_vision_key", None)).text().strip() if safe(getattr(self, "_vision_key", None)) else "",
+                       "allow_cloud": safe(getattr(self, "_vision_allow_cloud", None)).isChecked() if safe(getattr(self, "_vision_allow_cloud", None)) else False}
         s["knowledge"] = {
             "enabled": safe(getattr(self, "_knowledge_enabled", None)).isChecked() if safe(getattr(self, "_knowledge_enabled", None)) else True,
         }
@@ -1165,7 +1535,7 @@ class SettingsWindow(QDialog):
     def _on_apply(self):
         v = self._collect_settings()
         self._save_character_prompt()
-        for section in ("llm", "vision"):
+        for section in ("llm", "vision", "asr", "tts"):
             key = v.get(section, {}).get("api_key", "")
             if key and not self.config.is_valid_api_key(key):
                 QMessageBox.warning(
@@ -1174,7 +1544,7 @@ class SettingsWindow(QDialog):
                     "请只粘贴服务商提供的完整密钥，不要粘贴角色资料或说明文本。")
                 return
         # API keys are written to the platform keyring, never config.json.
-        for section in ("llm", "vision"):
+        for section in ("llm", "vision", "asr", "tts"):
             key = v.get(section, {}).pop("api_key", "")
             if key:
                 if not self.config.set_secret(section, key):

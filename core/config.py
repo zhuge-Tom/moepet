@@ -37,10 +37,14 @@ DEFAULTS = {
     "asr": {
         "enabled": False, "model_path": "", "hotkey": "Ctrl+Alt+Space",
         "device": "cpu", "compute_type": "int8", "auto_send": True,
+        "provider": "local", "base_url": "", "api_key": "",
+        "model": "whisper-1", "language": "",
     },
     "tts": {
         "enabled": False, "model_path": "", "auto_play": True,
         "speed": 1.0, "volume": 1.0,
+        "provider": "local", "base_url": "", "api_key": "",
+        "model": "tts-1", "voice": "alloy",
     },
     "screen_capture": {
         "hotkey": "Ctrl+Alt+O", "ocr_model_path": "", "keep_captures": False,
@@ -48,6 +52,7 @@ DEFAULTS = {
     },
     "vision": {
         "enabled": False, "base_url": "", "api_key": "", "model": "",
+        "allow_cloud": False,
     },
     "knowledge": {
         "enabled": True, "retrieval_count": 4, "max_context_chars": 3000,
