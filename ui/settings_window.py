@@ -21,7 +21,7 @@ from PySide6.QtCore import QUrl
 from PySide6.QtWidgets import QFileDialog, QMessageBox
 from core.knowledge_base import KnowledgeBase
 from core.openai_compat import chat_completions_url
-from ui.settings_components import IntegrationOverview, ServiceStatusCard
+from ui.settings_components import IntegrationOverview
 from ui.settings.probes import (
     ProbeRunner, probe_cosyvoice, probe_http_endpoint, probe_local_module,
     probe_ocr,
@@ -76,7 +76,6 @@ class SettingsWindow(QDialog):
         self._collapsed = False
         self._last_page_key = "general"
         self._anims = []
-        self._field_labels = {}
         self._probe_widgets = {}
         self._probe_runner = ProbeRunner(self)
 
@@ -499,7 +498,6 @@ class SettingsWindow(QDialog):
         row.addWidget(lbl)
         row.addWidget(widget, 1)
         layout.addLayout(row)
-        self._field_labels[id(widget)] = lbl
         return widget
 
     def _hint(self, layout, text):
@@ -511,13 +509,6 @@ class SettingsWindow(QDialog):
         h.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum)
         layout.addWidget(h)
         return h
-
-    def _set_field_visible(self, widget, visible):
-        """Show or hide a field with its label while preserving its value."""
-        label = self._field_labels.get(id(widget))
-        if label is not None:
-            label.setVisible(visible)
-        widget.setVisible(visible)
 
     def _line_edit(self, placeholder="", echo_mode=QLineEdit.Normal):
         le = QLineEdit()
@@ -1077,81 +1068,6 @@ class SettingsWindow(QDialog):
     # AI 模型
     # ═══════════════════════════════════
 
-    def _page_ai(self):
-        page, lay = self._make_page()
-
-        self._ai_status_card = ServiceStatusCard(
-            "对话模型", "用于角色对话与主动观察后的自然回应。")
-        self._ai_status_card.set_state(llm_ready(self.config))
-        lay.addWidget(self._ai_status_card)
-
-        self._sec(lay, "OpenAI 兼容 API")
-
-        self._ai_url = self._line_edit("https://api.deepseek.com/v1")
-        self._ai_url.setText(self.config.get("llm", "base_url", default=""))
-        self._row("Base URL", self._ai_url, lay)
-
-        self._hint(lay, "支持 DeepSeek、OpenAI、本地 Ollama 等服务。\n"
-                        "请填写兼容 OpenAI Chat Completions 的接口地址。")
-
-        self._ai_key = self._line_edit("sk-xxxx", QLineEdit.Password)
-        self._ai_key.setText(
-            self.config.get_secret("llm") or self.config.get("llm", "api_key", default=""))
-        self._row("API Key", self._ai_key, lay)
-        self._ai_key_hint = QLabel()
-        self._ai_key_hint.setStyleSheet("color: #94a3b8; font-size: 11px; margin-left: 2px;")
-        try:
-            import keyring  # noqa: F401
-            self._ai_key_hint.setText("密钥将保存到 Windows 凭据管理器。")
-        except ImportError:
-            self._ai_key_hint.setText("未安装 keyring：密钥将保存到本机 config.json（请勿提交此文件）。")
-        lay.addWidget(self._ai_key_hint)
-
-        self._ai_model = self._line_edit(
-            "deepseek-chat / gpt-4o-mini / ...")
-        self._ai_model.setText(self.config.get("llm", "model", default=""))
-        self._row("Model", self._ai_model, lay)
-        for field in (self._ai_url, self._ai_key, self._ai_model):
-            field.textChanged.connect(self._refresh_service_status_cards)
-
-        self._sec(lay, "高级设定")
-
-        self._ai_stream_cb = QCheckBox("启用流式输出（逐字显示）")
-        self._ai_stream_cb.setChecked(
-            self.config.get("llm", "stream", default=True))
-        lay.addWidget(self._ai_stream_cb)
-
-        self._ai_post = self._line_edit("例如 <think>.*?</think>")
-        self._ai_post.setText(
-            self.config.get("llm", "post_processing", default=""))
-        self._row("回复后处理（正则）", self._ai_post, lay)
-
-        self._hint(lay, "用正则表达式删除回复中不需要的部分，如模型思考过程")
-
-        self._ai_ignore_err_cb = QCheckBox("忽略格式错误")
-        self._ai_ignore_err_cb.setChecked(
-            self.config.get("llm", "ignore_format_error", default=True))
-        lay.addWidget(self._ai_ignore_err_cb)
-
-        lay.addSpacing(4)
-        test_btn = QPushButton("🔗 测试连接")
-        test_btn.setFixedHeight(32)
-        test_btn.setStyleSheet(
-            "QPushButton { background: #3498db; color: #fff;"
-            " border: none; border-radius: 7px;"
-            " padding: 7px 22px; font-size: 13px; }"
-            "QPushButton:hover { background: #2980b9; }")
-        test_btn.clicked.connect(self._test_connection)
-        lay.addWidget(test_btn)
-
-        self._test_status = QLabel("")
-        self._test_status.setWordWrap(True)
-        self._test_status.setStyleSheet("font-size: 12px; padding: 4px;")
-        lay.addWidget(self._test_status)
-
-        lay.addStretch()
-        return page
-
     def _test_connection(self):
         """测试 API 连接"""
         from core.llm_service import LLMService
@@ -1191,67 +1107,6 @@ class SettingsWindow(QDialog):
         lay.addStretch()
         return page
 
-    def _page_tts(self):
-        page, lay = self._make_page()
-        self._tts_status_card = ServiceStatusCard(
-            "语音输出", "回复可由本地 CosyVoice 或兼容云端 TTS 朗读。")
-        self._tts_status_card.set_state(tts_ready(self.config))
-        lay.addWidget(self._tts_status_card)
-        self._sec(lay, "本地 CosyVoice 音色克隆")
-        self._tts_enabled = QCheckBox("LLM 回复后自动朗读")
-        self._tts_enabled.setChecked(self.config.get("tts", "enabled", default=False))
-        lay.addWidget(self._tts_enabled)
-        self._hint(lay, "语音合成是桌宠的输出能力。关闭后仅显示文字回复，不会生成或播放音频。")
-        self._tts_provider = QComboBox()
-        self._tts_provider.addItem("本地 CosyVoice（使用角色授权参考音频）", "local")
-        self._tts_provider.addItem("云端 OpenAI 兼容 TTS API", "cloud")
-        provider_index = self._tts_provider.findData(
-            self.config.get("tts", "provider", default="local"))
-        self._tts_provider.setCurrentIndex(max(provider_index, 0))
-        self._row("语音后端", self._tts_provider, lay)
-        self._tts_model = self._line_edit("用户下载的 CosyVoice 模型目录")
-        self._tts_model.setText(self.config.get("tts", "model_path", default=""))
-        self._row("模型目录", self._tts_model, lay)
-        self._tts_speed = QSpinBox()
-        self._tts_speed.setRange(50, 200)
-        self._tts_speed.setSuffix("%")
-        self._tts_speed.setValue(int(self.config.get("tts", "speed", default=1.0) * 100))
-        self._row("语速", self._tts_speed, lay)
-        self._tts_auto_play = QCheckBox("生成后自动播放语音")
-        self._tts_auto_play.setChecked(self.config.get("tts", "auto_play", default=True))
-        lay.addWidget(self._tts_auto_play)
-        self._sec(lay, "云端 TTS API")
-        self._tts_api_url = self._line_edit("https://api.example.com/v1/audio/speech")
-        self._tts_api_url.setText(self.config.get("tts", "base_url", default=""))
-        self._row("合成地址", self._tts_api_url, lay)
-        self._tts_api_key = self._line_edit("sk-xxxx", QLineEdit.Password)
-        self._tts_api_key.setText(
-            self.config.get_secret("tts") or self.config.get("tts", "api_key", default=""))
-        self._row("API Key", self._tts_api_key, lay)
-        self._tts_api_model = self._line_edit("tts-1 / 供应商模型名")
-        self._tts_api_model.setText(self.config.get("tts", "model", default="tts-1"))
-        self._row("模型", self._tts_api_model, lay)
-        self._tts_api_voice = self._line_edit("alloy / 供应商音色名")
-        self._tts_api_voice.setText(self.config.get("tts", "voice", default="alloy"))
-        self._row("音色", self._tts_api_voice, lay)
-        self._tts_local_fields = (self._tts_model,)
-        self._tts_cloud_fields = (
-            self._tts_api_url,
-            self._tts_api_key,
-            self._tts_api_model,
-            self._tts_api_voice,
-        )
-        self._tts_provider.currentIndexChanged.connect(self._sync_tts_provider_fields)
-        self._tts_enabled.stateChanged.connect(self._refresh_service_status_cards)
-        for field in (self._tts_model, self._tts_api_url, self._tts_api_key,
-                      self._tts_api_model, self._tts_api_voice):
-            field.textChanged.connect(self._refresh_service_status_cards)
-        self._sync_tts_provider_fields()
-        self._hint(lay, "在角色 voice/ 中放置本人或已获授权的 10–60 秒参考音频。")
-        self._add_probe_row(lay, "tts", "测试语音引擎", self._prepare_tts_probe)
-        lay.addStretch()
-        return page
-
     def _sync_tts_provider_fields(self, *_args):
         """Switch TTS forms without clearing local or cloud settings."""
         is_cloud = self._tts_provider.currentData() == "cloud"
@@ -1259,93 +1114,6 @@ class SettingsWindow(QDialog):
         for name in ("tts_api_url", "tts_api_key", "tts_api_model", "tts_api_voice"):
             self._tts_rows[name].setVisible(is_cloud)
         self._refresh_service_status_cards()
-
-    def _page_asr(self):
-        page, lay = self._make_page()
-        self._asr_status_card = ServiceStatusCard(
-            "按住说话", "按住配置的快捷键录音，松开后自动转写到对话。")
-        self._asr_status_card.set_state(asr_ready(self.config))
-        lay.addWidget(self._asr_status_card)
-        self._sec(lay, "本地 faster-whisper")
-        self._asr_enabled = QCheckBox("启用按键语音输入")
-        self._asr_enabled.setChecked(self.config.get("asr", "enabled", default=False))
-        lay.addWidget(self._asr_enabled)
-        self._hint(lay, "语音只会在你触发按住说话快捷键后录制和识别；未启用时不会访问麦克风。")
-
-        self._sec(lay, "识别引擎")
-        self._asr_engine = QComboBox()
-        self._asr_engine.addItem("faster-whisper（本地运行，推荐）", "faster-whisper")
-        self._row("引擎", self._asr_engine, lay)
-        self._asr_provider = QComboBox()
-        self._asr_provider.addItem("本地模型（不上传音频）", "local")
-        self._asr_provider.addItem("云端 OpenAI 兼容 ASR API", "cloud")
-        provider_index = self._asr_provider.findData(
-            self.config.get("asr", "provider", default="local"))
-        self._asr_provider.setCurrentIndex(max(provider_index, 0))
-        self._row("识别后端", self._asr_provider, lay)
-        self._asr_model = self._line_edit("用户下载的 faster-whisper 模型目录")
-        self._asr_model.setText(self.config.get("asr", "model_path", default=""))
-        self._row("模型目录", self._asr_model, lay)
-        self._hint(lay, "请填写已下载模型的目录。模型文件不存在或依赖未安装时，识别不会启动。")
-
-        self._sec(lay, "性能与提交")
-        self._asr_device = QComboBox()
-        self._asr_device.addItem("CPU（兼容性最好）", "cpu")
-        self._asr_device.addItem("CUDA GPU（需要可用的 CUDA 环境）", "cuda")
-        device_index = self._asr_device.findData(self.config.get("asr", "device", default="cpu"))
-        self._asr_device.setCurrentIndex(max(device_index, 0))
-        self._row("运行设备", self._asr_device, lay)
-        self._asr_compute = QComboBox()
-        self._asr_compute.addItem("int8（速度与内存平衡）", "int8")
-        self._asr_compute.addItem("float16（GPU 推荐）", "float16")
-        self._asr_compute.addItem("float32（精度优先）", "float32")
-        compute_index = self._asr_compute.findData(self.config.get("asr", "compute_type", default="int8"))
-        self._asr_compute.setCurrentIndex(max(compute_index, 0))
-        self._row("计算精度", self._asr_compute, lay)
-        self._asr_hotkey = self._line_edit("Ctrl+Alt+Space")
-        self._asr_hotkey.setText(self.config.get("asr", "hotkey", default="Ctrl+Alt+Space"))
-        self._row("按住说话快捷键", self._asr_hotkey, lay)
-        self._asr_auto_send = QCheckBox("识别结束后自动发送到对话框")
-        self._asr_auto_send.setChecked(self.config.get("asr", "auto_send", default=True))
-        lay.addWidget(self._asr_auto_send)
-        self._sec(lay, "云端识别 API")
-        self._asr_api_url = self._line_edit("https://api.example.com/v1/audio/transcriptions")
-        self._asr_api_url.setText(self.config.get("asr", "base_url", default=""))
-        self._row("转写地址", self._asr_api_url, lay)
-        self._asr_api_key = self._line_edit("sk-xxxx", QLineEdit.Password)
-        self._asr_api_key.setText(
-            self.config.get_secret("asr") or self.config.get("asr", "api_key", default=""))
-        self._row("API Key", self._asr_api_key, lay)
-        self._asr_api_model = self._line_edit("whisper-1 / 供应商模型名")
-        self._asr_api_model.setText(self.config.get("asr", "model", default="whisper-1"))
-        self._row("模型", self._asr_api_model, lay)
-        self._asr_api_language = self._line_edit("留空自动识别，例如 zh")
-        self._asr_api_language.setText(self.config.get("asr", "language", default=""))
-        self._row("识别语言", self._asr_api_language, lay)
-        self._asr_local_fields = (
-            self._asr_engine,
-            self._asr_model,
-            self._asr_device,
-            self._asr_compute,
-        )
-        self._asr_cloud_fields = (
-            self._asr_api_url,
-            self._asr_api_key,
-            self._asr_api_model,
-            self._asr_api_language,
-        )
-        self._asr_provider.currentIndexChanged.connect(
-            self._sync_asr_provider_fields)
-        self._asr_enabled.stateChanged.connect(self._refresh_service_status_cards)
-        for field in (self._asr_model, self._asr_api_url, self._asr_api_key,
-                      self._asr_api_model):
-            field.textChanged.connect(self._refresh_service_status_cards)
-        self._sync_asr_provider_fields()
-        self._hint(lay, "选择云端后端时，音频会发送至该地址。当前版本先保存此配置；云端转写调用会在录音输入链路接入后启用。")
-        self._hint(lay, "首次接入需安装可选语音依赖；未配置模型时不会录音。")
-        self._add_probe_row(lay, "asr", "测试当前识别后端", self._prepare_asr_probe)
-        lay.addStretch()
-        return page
 
     def _sync_asr_provider_fields(self, *_args):
         """Switch ASR forms without mutating either backend's draft values."""
@@ -1357,80 +1125,6 @@ class SettingsWindow(QDialog):
         for name in cloud_names:
             self._asr_rows[name].setVisible(is_cloud)
         self._refresh_service_status_cards()
-
-    def _page_screen(self):
-        page, lay = self._make_page()
-        self._hint(lay, "手动识别仅在你使用快捷键或聊天中明确要求时截图。主动观察为独立的明确授权功能。")
-        self._sec(lay, "主动截图 OCR")
-        self._screen_keep = QCheckBox("保留截图（默认识别后删除）")
-        self._screen_keep.setChecked(self.config.get("screen_capture", "keep_captures", default=False))
-        lay.addWidget(self._screen_keep)
-        self._screen_hotkey = self._line_edit("Ctrl+Alt+O")
-        self._screen_hotkey.setText(self.config.get("screen_capture", "hotkey", default="Ctrl+Alt+O"))
-        self._row("截图快捷键", self._screen_hotkey, lay)
-        self._sec(lay, "识别路径")
-        self._screen_cloud_first = QCheckBox("优先使用已配置的云端视觉模型，失败时本地 OCR")
-        self._screen_cloud_first.setChecked(self.config.get("screen_capture", "cloud_first", default=True))
-        lay.addWidget(self._screen_cloud_first)
-        self._sec(lay, "主动屏幕观察（可选）")
-        self._screen_auto_observe = QCheckBox("允许角色在随机间隔内观察屏幕并自然回应")
-        self._screen_auto_observe.setChecked(self.config.get("screen_capture", "auto_observe", default=False))
-        lay.addWidget(self._screen_auto_observe)
-        self._screen_observe_min = QSpinBox()
-        self._screen_observe_min.setRange(1, 120)
-        self._screen_observe_min.setSuffix(" 分钟")
-        self._screen_observe_min.setValue(max(1, int(self.config.get("screen_capture", "observe_min_interval", default=300)) // 60))
-        self._row("最短间隔", self._screen_observe_min, lay)
-        self._screen_observe_max = QSpinBox()
-        self._screen_observe_max.setRange(1, 240)
-        self._screen_observe_max.setSuffix(" 分钟")
-        self._screen_observe_max.setValue(max(1, int(self.config.get("screen_capture", "observe_max_interval", default=900)) // 60))
-        self._row("最长间隔", self._screen_observe_max, lay)
-        self._screen_observe_cooldown = QSpinBox()
-        self._screen_observe_cooldown.setRange(1, 240)
-        self._screen_observe_cooldown.setSuffix(" 分钟")
-        self._screen_observe_cooldown.setValue(max(1, int(self.config.get("screen_capture", "observe_cooldown", default=600)) // 60))
-        self._row("回应冷却", self._screen_observe_cooldown, lay)
-        self._hint(lay, "主动观察默认关闭；需启用图像理解，云端视觉服务还必须在图像理解页确认上传授权。截图按“保留截图”选项处理。")
-        self._add_probe_row(lay, "ocr", "测试本地 OCR", self._prepare_ocr_probe)
-        lay.addStretch()
-        return page
-
-    def _page_vision(self):
-        page, lay = self._make_page()
-        self._vision_status_card = ServiceStatusCard(
-            "图像理解", "用于手动识图和已授权的主动屏幕观察。")
-        self._vision_status_card.set_state(vision_ready(self.config))
-        lay.addWidget(self._vision_status_card)
-        self._sec(lay, "可选图像理解")
-        self._vision_enabled = QCheckBox("允许主动发送截图到已配置的视觉服务")
-        self._vision_enabled.setChecked(self.config.get("vision", "enabled", default=False))
-        lay.addWidget(self._vision_enabled)
-        self._hint(lay, "图像理解用于回答画面内容；本地 OCR 只提取画面中的文字。两者都只处理你主动触发的截图。")
-        self._sec(lay, "服务连接")
-        self._vision_url = self._line_edit("本地 Ollama 或云端 OpenAI 兼容地址")
-        self._vision_url.setText(self.config.get("vision", "base_url", default=""))
-        self._row("Base URL", self._vision_url, lay)
-        self._vision_model = self._line_edit("视觉模型名称")
-        self._vision_model.setText(self.config.get("vision", "model", default=""))
-        self._row("模型", self._vision_model, lay)
-        self._vision_key = self._line_edit("可选 API Key", QLineEdit.Password)
-        self._vision_key.setText(
-            self.config.get_secret("vision") or self.config.get("vision", "api_key", default=""))
-        self._row("API Key", self._vision_key, lay)
-        self._sec(lay, "隐私与回退")
-        self._vision_allow_cloud = QCheckBox("我同意将主动截图上传到云端视觉服务")
-        self._vision_allow_cloud.setChecked(self.config.get("vision", "allow_cloud", default=False))
-        lay.addWidget(self._vision_allow_cloud)
-        self._vision_enabled.stateChanged.connect(self._refresh_service_status_cards)
-        self._vision_allow_cloud.stateChanged.connect(self._refresh_service_status_cards)
-        for field in (self._vision_url, self._vision_model, self._vision_key):
-            field.textChanged.connect(self._refresh_service_status_cards)
-        self._hint(lay, "本地地址（localhost、127.0.0.1）无需授权。云端地址必须勾选此项才会接收截图；服务失败时会自动回退到本地 OCR。")
-        self._hint(lay, "只有你明确选择图像理解时才会发送截图；本地服务可不填 Key。")
-        self._add_probe_row(lay, "vision", "测试图像理解服务", self._prepare_vision_probe)
-        lay.addStretch()
-        return page
 
     def _refresh_service_status_cards(self, *_args):
         """Reflect the in-progress form, not only the last saved config."""
@@ -1469,24 +1163,6 @@ class SettingsWindow(QDialog):
                 self._vision_url.text().strip(), self._vision_model.text().strip(),
                 self._vision_allow_cloud.isChecked(), self._vision_enabled.isChecked(),
             ))
-
-    def _page_about(self):
-        page, lay = self._make_page()
-        about = QLabel(
-            "Moepet - 萌系桌面宠物\n"
-            "基于 PySide6 的桌面宠物应用\n\n"
-            "支持多角色切换、AI 对话、Galgame 风格对话框、\n"
-            "立绘动画演出、系统托盘等功能。\n\n"
-            "GitHub: zhuge-Tom/moepet")
-        about.setStyleSheet("color: #555; font-size: 13px; padding: 16px;")
-        about.setAlignment(Qt.AlignCenter)
-        lay.addWidget(about)
-        lay.addStretch()
-        return page
-
-    # ═══════════════════════════════════
-    # 导航事件
-    # ═══════════════════════════════════
 
     def _on_tree_changed(self, cur, prev):
         if not cur:
