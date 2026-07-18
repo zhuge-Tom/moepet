@@ -286,8 +286,13 @@ class PetManager:
         if self._dialog is None:
             self._dialog = DialogWindow(char_name=char.name)
             self._dialog.text_submitted.connect(self._on_dialog_text)
+            self._dialog.voice_pressed.connect(self._start_voice_input)
+            self._dialog.voice_released.connect(self._stop_voice_input)
+            self._dialog.screen_capture_requested.connect(self._capture_screen)
             self._dialog.set_typing_speed(
                 self.config.get("general", "typing_speed", default=40))
+
+        self._refresh_dialog_capabilities()
 
         # 始终定位在立绘正上方居中，紧挨着
         if win:
@@ -437,7 +442,7 @@ class PetManager:
             )
 
     def _start_voice_input(self):
-        if not self._asr.is_busy():
+        if self.config.get("asr", "enabled", default=False) and not self._asr.is_busy():
             self._voice_recorder.start()
 
     def _stop_voice_input(self):
@@ -498,6 +503,14 @@ class PetManager:
     def _on_voice_error(self, error: str):
         if self._dialog:
             self._dialog.display_text(error, "assistant")
+
+    def _refresh_dialog_capabilities(self):
+        """Reflect configured integrations in the persistent chat controls."""
+        if self._dialog is None:
+            return
+        self._dialog.set_voice_available(self.config.get("asr", "enabled", default=False))
+        # OCR has its own local fallback, so manual capture is always reachable.
+        self._dialog.set_screen_available(True)
 
     def _ensure_dialog_and_send(self, text: str):
         if self._dialog is None or not self._dialog.isVisible():
@@ -832,6 +845,7 @@ class PetManager:
         if self._dialog:
             self._dialog.set_typing_speed(typing_speed)
             self._dialog.set_dialog_scale(dialog_scale)
+            self._refresh_dialog_capabilities()
 
         # 重新配置 LLM
         self._configure_llm()

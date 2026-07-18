@@ -20,6 +20,9 @@ class DialogWindow(QDialog):
     """Galgame 风格对话框"""
 
     text_submitted = Signal(str)
+    voice_pressed = Signal()
+    voice_released = Signal()
+    screen_capture_requested = Signal()
 
     TYPING_INTERVAL = 40  # 逐字显示间隔（毫秒）
 
@@ -90,6 +93,21 @@ class DialogWindow(QDialog):
         self._input.setMinimumWidth(160)
         self._input.returnPressed.connect(self._on_submit)
         bottom.addWidget(self._input, 1)
+
+        self._voice_btn = QPushButton("按住说话")
+        self._voice_btn.setObjectName("voice_btn")
+        self._voice_btn.setFixedHeight(32)
+        self._voice_btn.setToolTip("按住录音，松开后转写")
+        self._voice_btn.pressed.connect(self.voice_pressed)
+        self._voice_btn.released.connect(self.voice_released)
+        bottom.addWidget(self._voice_btn)
+
+        self._screen_btn = QPushButton("识图")
+        self._screen_btn.setObjectName("screen_btn")
+        self._screen_btn.setFixedHeight(32)
+        self._screen_btn.setToolTip("识别当前屏幕")
+        self._screen_btn.clicked.connect(self.screen_capture_requested)
+        bottom.addWidget(self._screen_btn)
 
         self._send_btn = QPushButton("发送")
         self._send_btn.setObjectName("send_btn")
@@ -186,6 +204,18 @@ class DialogWindow(QDialog):
         """Update the typewriter delay without interrupting active output."""
         self._typing_timer.setInterval(max(1, milliseconds))
 
+    def set_voice_available(self, available: bool) -> None:
+        """Keep the microphone action discoverable without exposing a broken control."""
+        self._voice_btn.setEnabled(available)
+        self._voice_btn.setToolTip(
+            "按住录音，松开后转写" if available else "请先在设置中启用并配置语音输入")
+
+    def set_screen_available(self, available: bool) -> None:
+        """Manual screen capture remains useful with either vision or local OCR."""
+        self._screen_btn.setEnabled(available)
+        self._screen_btn.setToolTip(
+            "识别当前屏幕" if available else "请先配置本地 OCR 或图像理解服务")
+
     def set_dialog_scale(self, percent: int):
         """Scale the dialog and its readable controls around the current top-left."""
         percent = max(50, min(200, int(percent)))
@@ -195,7 +225,7 @@ class DialogWindow(QDialog):
         self._scale_percent = percent
         self.resize(max(460, round(self.width() * ratio)), max(240, round(self.height() * ratio)))
         for widget in (self._name_label, self._text_display, self._input,
-                       self._send_btn):
+                       self._voice_btn, self._screen_btn, self._send_btn):
             font = QFont(widget.font())
             size = font.pointSizeF()
             if size > 0:
@@ -204,6 +234,8 @@ class DialogWindow(QDialog):
         control_height = max(32, round(32 * percent / 100))
         self._send_btn.setFixedHeight(control_height)
         self._input.setFixedHeight(control_height)
+        self._voice_btn.setFixedHeight(control_height)
+        self._screen_btn.setFixedHeight(control_height)
 
     # ─── 拖拽 ────────────────────────────────
 

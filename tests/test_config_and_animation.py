@@ -366,6 +366,22 @@ def test_stream_finish_replaces_unprocessed_display(qapp):
     assert window._text_display.toPlainText() == "visible"
 
 
+def test_dialog_exposes_voice_and_screen_actions(qapp):
+    from ui.dialog_window import DialogWindow
+    window = DialogWindow("Test")
+    events = []
+    window.voice_pressed.connect(lambda: events.append("voice-start"))
+    window.voice_released.connect(lambda: events.append("voice-stop"))
+    window.screen_capture_requested.connect(lambda: events.append("screen"))
+    assert window._voice_btn.isEnabled()
+    window._voice_btn.pressed.emit()
+    window._voice_btn.released.emit()
+    window._screen_btn.click()
+    assert events == ["voice-start", "voice-stop", "screen"]
+    window.set_voice_available(False)
+    assert not window._voice_btn.isEnabled()
+
+
 def test_voice_recorder_cancel_discards_active_stream():
     from core.voice_input import PushToTalkRecorder
     class Stream:

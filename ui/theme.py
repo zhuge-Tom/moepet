@@ -67,6 +67,24 @@ DIALOG_QSS = f"""
     QPushButton#send_btn:pressed {{
         background: #c0392b;
     }}
+    QPushButton#voice_btn, QPushButton#screen_btn {{
+        background: #24375e;
+        color: #dbeafe;
+        border: 1px solid #365486;
+        border-radius: 8px;
+        font-size: 12px;
+        padding: 6px 10px;
+    }}
+    QPushButton#voice_btn:hover, QPushButton#screen_btn:hover {{
+        background: #304a7d;
+        border-color: #e94560;
+        color: white;
+    }}
+    QPushButton#voice_btn:disabled, QPushButton#screen_btn:disabled {{
+        color: #64748b;
+        background: #1e293b;
+        border-color: #334155;
+    }}
     QPushButton#history_btn {{
         background: transparent;
         color: #888;
