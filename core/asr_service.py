@@ -1,5 +1,8 @@
 """Optional local faster-whisper transcription service."""
+import json
+import mimetypes
 from pathlib import Path
+from urllib.request import Request, urlopen
 from core.workers import BackgroundService
 
 
@@ -16,4 +19,44 @@ class ASRService(BackgroundService):
             model = WhisperModel(model_path, device=device, compute_type=compute_type)
             segments, info = model.transcribe(str(audio_path), vad_filter=True)
             return {"text": "".join(s.text for s in segments).strip(), "language": info.language}
+        return self.run(work)
+
+    def transcribe_cloud(self, audio_path: Path, base_url: str, api_key: str,
+                         model: str, language: str = ""):
+        """Transcribe one WAV file through an OpenAI-compatible endpoint."""
+        if not base_url or not api_key or not model:
+            self.failed.emit("请完整配置云端 ASR 的地址、API Key 和模型")
+            return False
+
+        def work():
+            boundary = "----moepet-asr-boundary"
+            fields = {"model": model}
+            if language:
+                fields["language"] = language
+            chunks = []
+            for name, value in fields.items():
+                chunks.extend((
+                    f"--{boundary}\r\n".encode(),
+                    f'Content-Disposition: form-data; name="{name}"\r\n\r\n'.encode(),
+                    str(value).encode("utf-8"), b"\r\n",
+                ))
+            mime = mimetypes.guess_type(audio_path.name)[0] or "audio/wav"
+            chunks.extend((
+                f"--{boundary}\r\n".encode(),
+                f'Content-Disposition: form-data; name="file"; filename="{audio_path.name}"\r\n'.encode(),
+                f"Content-Type: {mime}\r\n\r\n".encode(),
+                audio_path.read_bytes(), b"\r\n",
+                f"--{boundary}--\r\n".encode(),
+            ))
+            endpoint = base_url.rstrip("/")
+            if not endpoint.endswith("/audio/transcriptions"):
+                endpoint += "/audio/transcriptions"
+            request = Request(endpoint, data=b"".join(chunks), headers={
+                "Content-Type": f"multipart/form-data; boundary={boundary}",
+                "Authorization": f"Bearer {api_key}",
+            })
+            with urlopen(request, timeout=90) as response:
+                data = json.loads(response.read())
+            return {"text": str(data.get("text", "")).strip(), "language": language}
+
         return self.run(work)

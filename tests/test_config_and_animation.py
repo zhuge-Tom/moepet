@@ -65,6 +65,14 @@ def test_config_has_multimodal_defaults(tmp_path):
     config = Config(tmp_path / "config.json")
     assert config.get("asr", "compute_type") == "int8"
     assert config.get("screen_capture", "keep_captures") is False
+    assert config.get("screen_capture", "auto_observe") is False
+    assert config.get("screen_capture", "observe_min_interval") == 300
+
+
+def test_cloud_asr_endpoint_is_completed(tmp_path):
+    from core.asr_service import ASRService
+    service = ASRService()
+    assert service.transcribe_cloud(tmp_path / "missing.wav", "", "", "whisper-1") is False
 
 
 def test_frame_animation_and_single_png_fallback(tmp_path):
@@ -137,3 +145,22 @@ def test_config_loads_bom_and_persists_key(tmp_path):
     assert config.get("llm", "api_key") == "sk-persisted-key"
     config.save()
     assert Config(path).get("llm", "api_key") == "sk-persisted-key"
+
+
+def test_config_migrates_new_provider_secrets(tmp_path, monkeypatch):
+    path = tmp_path / "config.json"
+    path.write_text('{"asr":{"api_key":"asr-key"},"tts":{"api_key":"tts-key"}}', encoding="utf-8")
+    saved = {}
+    monkeypatch.setattr(Config, "set_secret", lambda _self, name, value: saved.setdefault(name, value) is not None)
+    config = Config(path)
+    assert saved == {"asr": "asr-key", "tts": "tts-key"}
+    assert config.get("asr", "api_key") == ""
+    assert config.get("tts", "api_key") == ""
+
+
+def test_screen_observer_clamps_intervals():
+    from core.screen_observer import ScreenObserver
+    observer = ScreenObserver()
+    observer.configure(False, 1, 2)
+    assert observer._min_seconds == 60
+    assert observer._max_seconds == 60

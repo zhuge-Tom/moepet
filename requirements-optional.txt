@@ -2,5 +2,6 @@
 keyring>=25
 faster-whisper>=1.1
 sounddevice>=0.5
+keyboard>=0.13
 rapidocr-onnxruntime>=1.4
 # CosyVoice follows its upstream installation instructions and model licenses.

@@ -49,6 +49,9 @@ DEFAULTS = {
     "screen_capture": {
         "hotkey": "Ctrl+Alt+O", "ocr_model_path": "", "keep_captures": False,
         "cloud_first": True,
+        # Active observation is deliberately opt-in. Values are seconds.
+        "auto_observe": False, "observe_min_interval": 300,
+        "observe_max_interval": 900, "observe_cooldown": 600,
     },
     "vision": {
         "enabled": False, "base_url": "", "api_key": "", "model": "",
@@ -90,10 +93,11 @@ class Config:
                     stored = json.load(f)
                 self._merge(self._data, stored)
                 # Do not keep provider credentials in the project config file.
-                migrated = self._migrate_secret("llm", stored)
-                migrated = self._migrate_secret("vision", stored) or migrated
+                migrated = False
+                for section in ("llm", "vision", "asr", "tts"):
+                    migrated = self._migrate_secret(section, stored) or migrated
                 # A pasted document must never be treated as an API credential.
-                for section in ("llm", "vision"):
+                for section in ("llm", "vision", "asr", "tts"):
                     key = self._data.get(section, {}).get("api_key", "")
                     if key and not self.is_valid_api_key(key):
                         self._data[section]["api_key"] = ""

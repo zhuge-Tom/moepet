@@ -5,7 +5,7 @@
 
 import json
 import tempfile
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from PySide6.QtWidgets import QApplication, QDialog
@@ -18,6 +18,9 @@ from core.llm_service import LLMService
 from core.ocr_service import OcrService
 from core.tts_service import TTSService
 from core.vision_service import VisionService
+from core.screen_observer import ScreenObserver
+from core.asr_service import ASRService
+from core.voice_input import PushToTalkRecorder
 from core.hotkeys import HotkeyService
 from core.knowledge_base import KnowledgeBase
 from ui.pet_window import PetWindow
@@ -50,9 +53,20 @@ class PetManager:
         self._vision = VisionService()
         self._vision.completed.connect(self._on_vision_done)
         self._vision.failed.connect(self._on_vision_error)
+        self._asr = ASRService()
+        self._asr.completed.connect(self._on_asr_done)
+        self._asr.failed.connect(self._on_asr_error)
+        self._voice_recorder = PushToTalkRecorder()
+        self._voice_recorder.completed.connect(self._on_voice_recorded)
+        self._voice_recorder.failed.connect(self._on_voice_error)
         self._screen_hotkey = HotkeyService()
         self._screen_hotkey.triggered.connect(self._capture_screen)
         self._screen_request_active = False
+        self._asr_hotkey = HotkeyService()
+        self._screen_mode = "manual"
+        self._last_observation_at: datetime | None = None
+        self._screen_observer = ScreenObserver()
+        self._screen_observer.observation_requested.connect(self._observe_screen)
         self._configure_llm()
         self._load_chat_history()
 
@@ -60,6 +74,8 @@ class PetManager:
         self._load_knowledge_base()
         self._connect_signals()
         self._register_screen_hotkey()
+        self._register_asr_hotkey()
+        self._configure_screen_observer()
 
     # ─── LLM ──────────────────────────────────
 
@@ -380,7 +396,110 @@ class PetManager:
     def _register_screen_hotkey(self):
         self._screen_hotkey.register(self.config.get("screen_capture", "hotkey", default="Ctrl+Alt+O"))
 
-    def _capture_screen(self, prompt: str = ""):
+    def _register_asr_hotkey(self):
+        self._asr_hotkey.unregister_push_to_talk()
+        if self.config.get("asr", "enabled", default=False):
+            self._asr_hotkey.register_push_to_talk(
+                self.config.get("asr", "hotkey", default="Ctrl+Alt+Space"),
+                self._start_voice_input, self._stop_voice_input,
+            )
+
+    def _start_voice_input(self):
+        if not self._asr.is_busy():
+            self._voice_recorder.start()
+
+    def _stop_voice_input(self):
+        if self._voice_recorder.recording:
+            path = Path(tempfile.gettempdir()) / f"moepet-voice-{datetime.now():%Y%m%d-%H%M%S}.wav"
+            self._voice_recorder.stop(path)
+
+    def _on_voice_recorded(self, audio_path: str):
+        path = Path(audio_path)
+        self._active_voice_path = path
+        if self._dialog:
+            self._dialog.display_text("正在识别语音...", "assistant")
+        if self.config.get("asr", "provider", default="local") == "cloud":
+            self._asr.transcribe_cloud(
+                path, self.config.get("asr", "base_url", default=""),
+                self.config.get_secret("asr") or self.config.get("asr", "api_key", default=""),
+                self.config.get("asr", "model", default="whisper-1"),
+                self.config.get("asr", "language", default=""),
+            )
+        else:
+            self._asr.transcribe(
+                path, self.config.get("asr", "model_path", default=""),
+                self.config.get("asr", "device", default="cpu"),
+                self.config.get("asr", "compute_type", default="int8"),
+            )
+
+    def _on_asr_done(self, result: dict):
+        path = getattr(self, "_active_voice_path", None)
+        if path:
+            path.unlink(missing_ok=True)
+        self._active_voice_path = None
+        text = (result or {}).get("text", "").strip()
+        signals.voice_transcribed.emit(text)
+        if not text:
+            if self._dialog:
+                self._dialog.display_text("没有听清，请再试一次。", "assistant")
+            return
+        if self.config.get("asr", "auto_send", default=True):
+            self._ensure_dialog_and_send(text)
+        elif self._dialog:
+            self._dialog.display_text(f"语音识别：{text}", "user")
+
+    def _on_asr_error(self, error: str):
+        path = getattr(self, "_active_voice_path", None)
+        if path:
+            path.unlink(missing_ok=True)
+        self._active_voice_path = None
+        if self._dialog:
+            self._dialog.display_text(f"语音识别失败：{error}", "assistant")
+
+    def _on_voice_error(self, error: str):
+        if self._dialog:
+            self._dialog.display_text(error, "assistant")
+
+    def _ensure_dialog_and_send(self, text: str):
+        if self._dialog is None or not self._dialog.isVisible():
+            self._toggle_dialog()
+        if self._dialog:
+            self._dialog.display_instant(text, "user")
+        self._on_dialog_text(text)
+
+    def _vision_is_ready(self) -> bool:
+        """Return whether screenshots may be sent to the configured vision API."""
+        vision_url = self.config.get("vision", "base_url", default="")
+        local_vision = any(host in vision_url.lower() for host in ("localhost", "127.0.0.1", "[::1]"))
+        return bool(
+            self.config.get("vision", "enabled", default=False)
+            and vision_url
+            and self.config.get("vision", "model", default="")
+            and (local_vision or self.config.get("vision", "allow_cloud", default=False))
+        )
+
+    def _configure_screen_observer(self):
+        screen = self.config.get("screen_capture", default={})
+        enabled = bool(screen.get("auto_observe", False)) and self._vision_is_ready()
+        self._screen_observer.configure(
+            enabled,
+            screen.get("observe_min_interval", 300),
+            screen.get("observe_max_interval", 900),
+        )
+
+    def _observe_screen(self):
+        """Start one consented, random-interval visual observation."""
+        screen = self.config.get("screen_capture", default={})
+        cooldown = max(60, int(screen.get("observe_cooldown", 600)))
+        if self._last_observation_at and datetime.now() - self._last_observation_at < timedelta(seconds=cooldown):
+            self._screen_observer.schedule_next()
+            return
+        if not self._llm.is_busy() and self._vision_is_ready():
+            self._capture_screen(mode="observation")
+        else:
+            self._screen_observer.schedule_next()
+
+    def _capture_screen(self, prompt: str = "", mode: str = "manual"):
         """Explicit hotkey/chat request: cloud vision first, then private local OCR."""
         if self._screen_request_active:
             return
@@ -392,18 +511,11 @@ class PetManager:
             return
         self._ocr_path = path
         self._screen_prompt = prompt
+        self._screen_mode = mode
         self._screen_request_active = True
-        if self._dialog:
+        if self._dialog and mode == "manual":
             self._dialog.display_text("正在读取当前屏幕...", "assistant")
-        vision_url = self.config.get("vision", "base_url", default="")
-        local_vision = any(host in vision_url.lower() for host in ("localhost", "127.0.0.1", "[::1]"))
-        vision_ready = (
-            self.config.get("vision", "enabled", default=False)
-            and vision_url
-            and self.config.get("vision", "model", default="")
-            and (local_vision or self.config.get("vision", "allow_cloud", default=False))
-        )
-        if vision_ready and self.config.get("screen_capture", "cloud_first", default=True):
+        if self._vision_is_ready() and (mode == "observation" or self.config.get("screen_capture", "cloud_first", default=True)):
             self._vision.describe(path, self.config.get("vision", "base_url"), self.config.get_secret("vision"), self.config.get("vision", "model"), "")
         else:
             self._ocr.recognize(path)
@@ -432,14 +544,62 @@ class PetManager:
             return
         if not self.config.get("screen_capture", "keep_captures", default=False):
             self._ocr_path.unlink(missing_ok=True)
-        if self._dialog:
+        observation = self._screen_mode == "observation"
+        if observation:
+            self._last_observation_at = datetime.now()
+            self._respond_to_observation(text)
+        elif self._dialog:
             self._dialog.display_text(text, "assistant")
         self._screen_request_active = False
+        if observation:
+            self._screen_observer.schedule_next()
 
     def _on_vision_error(self, _error: str):
         # Cloud failure never breaks the screenshot feature: fall back to local OCR.
-        if self._screen_request_active:
+        if self._screen_request_active and self._screen_mode != "observation":
             self._ocr.recognize(self._ocr_path)
+        elif self._screen_request_active:
+            if not self.config.get("screen_capture", "keep_captures", default=False):
+                self._ocr_path.unlink(missing_ok=True)
+            self._screen_request_active = False
+            self._screen_observer.schedule_next()
+
+    def _respond_to_observation(self, description: str):
+        """Let the active character react briefly to a visual observation."""
+        description = (description or "").strip()
+        if not description or self._llm.is_busy():
+            return
+        self._configure_llm()
+        api_key = self.config.get_secret("llm") or self.config.get("llm", "api_key", default="")
+        if not api_key:
+            return
+        self._llm.add_user_message("请根据你刚才注意到的事情，自然地和我说一句话。")
+        self._llm.set_turn_context(
+            "屏幕观察结果（仅用于本轮）：\n"
+            f"{description}\n\n"
+            "请自然、简短地回应；不要提及截图、监控或系统提示。"
+        )
+        self._llm.response_finished.connect(self._on_observation_reply)
+        self._llm.error_occurred.connect(self._on_observation_error)
+        self._set_pet_state("think")
+        self._llm.send(stream=False)
+
+    def _on_observation_reply(self, text: str):
+        self._llm.response_finished.disconnect(self._on_observation_reply)
+        self._llm.error_occurred.disconnect(self._on_observation_error)
+        if self._dialog:
+            self._dialog.display_text(text, "assistant")
+        self._save_chat_history()
+        self._set_pet_state("happy")
+        self._speak(text)
+
+    def _on_observation_error(self, _error: str):
+        try:
+            self._llm.response_finished.disconnect(self._on_observation_reply)
+            self._llm.error_occurred.disconnect(self._on_observation_error)
+        except RuntimeError:
+            pass
+        self._set_pet_state("idle")
 
     def _speak(self, text: str):
         """Generate speech through the selected local or cloud TTS provider."""
@@ -570,6 +730,8 @@ class PetManager:
         # 重新配置 LLM
         self._configure_llm()
         self._register_screen_hotkey()
+        self._register_asr_hotkey()
+        self._configure_screen_observer()
 
         new_char = settings.get("current_character")
         if new_char and new_char != self.config.current_character:
@@ -590,6 +752,9 @@ class PetManager:
     # ─── 退出 ────────────────────────────────
 
     def _quit(self):
+        self._screen_observer.stop()
+        self._screen_hotkey.close()
+        self._asr_hotkey.close()
         self._save_chat_history()
         current = self.config.current_character
         win = self._windows.get(current)

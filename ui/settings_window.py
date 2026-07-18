@@ -23,6 +23,7 @@ from PySide6.QtGui import QPainter, QFont, QIcon, QPixmap, QAction, QDesktopServ
 from PySide6.QtCore import QUrl
 from PySide6.QtWidgets import QFileDialog, QMessageBox
 from core.knowledge_base import KnowledgeBase
+from ui.settings_components import IntegrationOverview, ServiceStatusCard
 
 from core.config import Config
 
@@ -673,6 +674,25 @@ class SettingsWindow(QDialog):
     def _page_general(self):
         page, lay = self._make_page()
 
+        llm_ready = bool(
+            self.config.get("llm", "base_url", default="") and
+            (self.config.get_secret("llm") or self.config.get("llm", "api_key", default="")) and
+            self.config.get("llm", "model", default=""))
+        tts_ready = bool(self.config.get("tts", "enabled", default=False))
+        asr_ready = bool(self.config.get("asr", "enabled", default=False))
+        vision_ready = bool(
+            self.config.get("vision", "enabled", default=False) and
+            self.config.get("vision", "base_url", default="") and
+            self.config.get("vision", "model", default=""))
+        observe_ready = bool(self.config.get("screen_capture", "auto_observe", default=False) and vision_ready)
+        overview = IntegrationOverview("Moepet 控制中心", [
+            ("1. 角色对话", "连接你的 OpenAI 兼容聊天模型。", llm_ready, "ai"),
+            ("2. 语音朗读", "为角色回复选择本地或云端 TTS。", tts_ready, "tts"),
+            ("3. 按住说话", "按住快捷键录音，松开后自动转写。", asr_ready, "asr"),
+            ("4. 识图与观察", "手动识图，或在明确授权后随机观察屏幕。", observe_ready, "screen"),
+        ], self._open_page)
+        lay.addWidget(overview)
+
         self._sec(lay, "软件设置")
 
         char_lbl = QLabel("角色选择")
@@ -958,6 +978,22 @@ class SettingsWindow(QDialog):
         lay.addStretch()
         return page
 
+    def _open_page(self, key: str):
+        """Route dashboard actions through the same navigation state as clicks."""
+        self._last_page_key = key
+        self._switch_page(key)
+        for index in range(self._tree.topLevelItemCount()):
+            parent = self._tree.topLevelItem(index)
+            if parent.data(0, Qt.UserRole) == key:
+                self._tree.setCurrentItem(parent)
+                return
+            for child_index in range(parent.childCount()):
+                child = parent.child(child_index)
+                if child.data(0, Qt.UserRole) == key:
+                    parent.setExpanded(True)
+                    self._tree.setCurrentItem(child)
+                    return
+
     def _knowledge_base(self):
         return KnowledgeBase(self._base_dir / "characters" / self._current_char)
 
@@ -997,6 +1033,14 @@ class SettingsWindow(QDialog):
 
     def _page_ai(self):
         page, lay = self._make_page()
+
+        self._ai_status_card = ServiceStatusCard(
+            "对话模型", "用于角色对话与主动观察后的自然回应。")
+        self._ai_status_card.set_state(bool(
+            self.config.get("llm", "base_url", default="") and
+            (self.config.get_secret("llm") or self.config.get("llm", "api_key", default="")) and
+            self.config.get("llm", "model", default="")))
+        lay.addWidget(self._ai_status_card)
 
         self._sec(lay, "OpenAI 兼容 API")
 
@@ -1104,6 +1148,15 @@ class SettingsWindow(QDialog):
 
     def _page_tts(self):
         page, lay = self._make_page()
+        self._tts_status_card = ServiceStatusCard(
+            "语音输出", "回复可由本地 CosyVoice 或兼容云端 TTS 朗读。")
+        provider = self.config.get("tts", "provider", default="local")
+        ready = bool(self.config.get("tts", "enabled", default=False)) and (
+            bool(self.config.get("tts", "model_path", default="")) if provider == "local" else
+            bool(self.config.get("tts", "base_url", default="") and self.config.get("tts", "model", default=""))
+        )
+        self._tts_status_card.set_state(ready)
+        lay.addWidget(self._tts_status_card)
         self._sec(lay, "本地 CosyVoice 音色克隆")
         self._tts_enabled = QCheckBox("LLM 回复后自动朗读")
         self._tts_enabled.setChecked(self.config.get("tts", "enabled", default=False))
@@ -1165,6 +1218,15 @@ class SettingsWindow(QDialog):
 
     def _page_asr(self):
         page, lay = self._make_page()
+        self._asr_status_card = ServiceStatusCard(
+            "按住说话", "按住配置的快捷键录音，松开后自动转写到对话。")
+        provider = self.config.get("asr", "provider", default="local")
+        ready = bool(self.config.get("asr", "enabled", default=False)) and (
+            bool(self.config.get("asr", "model_path", default="")) if provider == "local" else
+            bool(self.config.get("asr", "base_url", default="") and self.config.get("asr", "model", default=""))
+        )
+        self._asr_status_card.set_state(ready)
+        lay.addWidget(self._asr_status_card)
         self._sec(lay, "本地 faster-whisper")
         self._asr_enabled = QCheckBox("启用按键语音输入")
         self._asr_enabled.setChecked(self.config.get("asr", "enabled", default=False))
@@ -1252,7 +1314,7 @@ class SettingsWindow(QDialog):
 
     def _page_screen(self):
         page, lay = self._make_page()
-        self._hint(lay, "仅当你使用快捷键或在对话中明确要求识别屏幕时才会截图，不会在后台持续观察屏幕。")
+        self._hint(lay, "手动识别仅在你使用快捷键或聊天中明确要求时截图。主动观察为独立的明确授权功能。")
         self._sec(lay, "主动截图 OCR")
         self._screen_keep = QCheckBox("保留截图（默认识别后删除）")
         self._screen_keep.setChecked(self.config.get("screen_capture", "keep_captures", default=False))
@@ -1264,13 +1326,39 @@ class SettingsWindow(QDialog):
         self._screen_cloud_first = QCheckBox("优先使用已配置的云端视觉模型，失败时本地 OCR")
         self._screen_cloud_first.setChecked(self.config.get("screen_capture", "cloud_first", default=True))
         lay.addWidget(self._screen_cloud_first)
-        self._hint(lay, "在聊天中说“识别屏幕/看屏幕”或按快捷键即可截图；不会后台监控。")
+        self._sec(lay, "主动屏幕观察（可选）")
+        self._screen_auto_observe = QCheckBox("允许角色在随机间隔内观察屏幕并自然回应")
+        self._screen_auto_observe.setChecked(self.config.get("screen_capture", "auto_observe", default=False))
+        lay.addWidget(self._screen_auto_observe)
+        self._screen_observe_min = QSpinBox()
+        self._screen_observe_min.setRange(1, 120)
+        self._screen_observe_min.setSuffix(" 分钟")
+        self._screen_observe_min.setValue(max(1, int(self.config.get("screen_capture", "observe_min_interval", default=300)) // 60))
+        self._row("最短间隔", self._screen_observe_min, lay)
+        self._screen_observe_max = QSpinBox()
+        self._screen_observe_max.setRange(1, 240)
+        self._screen_observe_max.setSuffix(" 分钟")
+        self._screen_observe_max.setValue(max(1, int(self.config.get("screen_capture", "observe_max_interval", default=900)) // 60))
+        self._row("最长间隔", self._screen_observe_max, lay)
+        self._screen_observe_cooldown = QSpinBox()
+        self._screen_observe_cooldown.setRange(1, 240)
+        self._screen_observe_cooldown.setSuffix(" 分钟")
+        self._screen_observe_cooldown.setValue(max(1, int(self.config.get("screen_capture", "observe_cooldown", default=600)) // 60))
+        self._row("回应冷却", self._screen_observe_cooldown, lay)
+        self._hint(lay, "主动观察默认关闭；需启用图像理解，云端视觉服务还必须在图像理解页确认上传授权。截图按“保留截图”选项处理。")
         self._add_probe_row(lay, "ocr", "测试本地 OCR", self._prepare_ocr_probe)
         lay.addStretch()
         return page
 
     def _page_vision(self):
         page, lay = self._make_page()
+        self._vision_status_card = ServiceStatusCard(
+            "图像理解", "用于手动识图和已授权的主动屏幕观察。")
+        self._vision_status_card.set_state(bool(
+            self.config.get("vision", "enabled", default=False) and
+            self.config.get("vision", "base_url", default="") and
+            self.config.get("vision", "model", default="")))
+        lay.addWidget(self._vision_status_card)
         self._sec(lay, "可选图像理解")
         self._vision_enabled = QCheckBox("允许主动发送截图到已配置的视觉服务")
         self._vision_enabled.setChecked(self.config.get("vision", "enabled", default=False))
@@ -1510,7 +1598,11 @@ class SettingsWindow(QDialog):
                     "language": safe(getattr(self, "_asr_api_language", None)).text().strip() if safe(getattr(self, "_asr_api_language", None)) else ""}
         s["screen_capture"] = {"keep_captures": safe(getattr(self, "_screen_keep", None)).isChecked() if safe(getattr(self, "_screen_keep", None)) else False,
                                "hotkey": safe(getattr(self, "_screen_hotkey", None)).text().strip() if safe(getattr(self, "_screen_hotkey", None)) else "Ctrl+Alt+O",
-                               "cloud_first": safe(getattr(self, "_screen_cloud_first", None)).isChecked() if safe(getattr(self, "_screen_cloud_first", None)) else True}
+                               "cloud_first": safe(getattr(self, "_screen_cloud_first", None)).isChecked() if safe(getattr(self, "_screen_cloud_first", None)) else True,
+                               "auto_observe": safe(getattr(self, "_screen_auto_observe", None)).isChecked() if safe(getattr(self, "_screen_auto_observe", None)) else False,
+                               "observe_min_interval": (safe(getattr(self, "_screen_observe_min", None)).value() if safe(getattr(self, "_screen_observe_min", None)) else 5) * 60,
+                               "observe_max_interval": (safe(getattr(self, "_screen_observe_max", None)).value() if safe(getattr(self, "_screen_observe_max", None)) else 15) * 60,
+                               "observe_cooldown": (safe(getattr(self, "_screen_observe_cooldown", None)).value() if safe(getattr(self, "_screen_observe_cooldown", None)) else 10) * 60}
         s["vision"] = {"enabled": safe(getattr(self, "_vision_enabled", None)).isChecked() if safe(getattr(self, "_vision_enabled", None)) else False,
                        "base_url": safe(getattr(self, "_vision_url", None)).text().strip() if safe(getattr(self, "_vision_url", None)) else "",
                        "model": safe(getattr(self, "_vision_model", None)).text().strip() if safe(getattr(self, "_vision_model", None)) else "",
