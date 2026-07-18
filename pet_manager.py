@@ -63,6 +63,7 @@ class PetManager:
         self._screen_hotkey = HotkeyService()
         self._screen_hotkey.triggered.connect(self._capture_screen)
         self._screen_request_active = False
+        self._role_epoch = 0
         self._asr_hotkey = HotkeyService()
         self._screen_mode = "manual"
         self._last_observation_at: datetime | None = None
@@ -219,6 +220,7 @@ class PetManager:
             return
         old = self.config.current_character
         # Reset old-role state before the new role is made active.
+        self._cancel_role_async_work()
         self._save_chat_history()
         self._llm.cancel()
         self._llm.clear_history()
@@ -246,6 +248,23 @@ class PetManager:
                     self._tray.setToolTip(f"Moepet - {char.name}")
 
             signals.character_switched.emit(name)
+
+    def _cancel_role_async_work(self):
+        """Invalidate background results that belong to the outgoing role."""
+        self._role_epoch += 1
+        if self._screen_request_active:
+            self._finish_screen_request()
+        self._voice_recorder.cancel()
+        path = getattr(self, "_active_voice_path", None)
+        if path:
+            path.unlink(missing_ok=True)
+        self._active_voice_path = None
+        self._voice_epoch = None
+        player = getattr(self, "_player", None)
+        if player is not None:
+            player.stop()
+        self._player_epoch = None
+        self._tts_epoch = None
 
     # ─── 对话框 ───────────────────────────────
 
@@ -428,6 +447,7 @@ class PetManager:
     def _on_voice_recorded(self, audio_path: str):
         path = Path(audio_path)
         self._active_voice_path = path
+        self._voice_epoch = self._role_epoch
         if self._dialog:
             self._dialog.display_text("正在识别语音...", "assistant")
         if self.config.get("asr", "provider", default="local") == "cloud":
@@ -449,6 +469,9 @@ class PetManager:
         if path:
             path.unlink(missing_ok=True)
         self._active_voice_path = None
+        if getattr(self, "_voice_epoch", None) != self._role_epoch:
+            return
+        self._voice_epoch = None
         text = (result or {}).get("text", "").strip()
         signals.voice_transcribed.emit(text)
         if not text:
@@ -465,6 +488,9 @@ class PetManager:
         if path:
             path.unlink(missing_ok=True)
         self._active_voice_path = None
+        if getattr(self, "_voice_epoch", None) != self._role_epoch:
+            return
+        self._voice_epoch = None
         if self._dialog:
             self._dialog.display_text(f"语音识别失败：{error}", "assistant")
 
@@ -640,10 +666,9 @@ class PetManager:
         if not self.config.get("tts", "auto_play", default=True):
             return
         output = Path(tempfile.gettempdir()) / "moepet-tts.wav"
-        self._set_pet_state("speak")
-        signals.tts_state_changed.emit(True)
+        self._tts_epoch = self._role_epoch
         if self.config.get("tts", "provider", default="local") == "cloud":
-            self._tts.synthesize_cloud(
+            started = self._tts.synthesize_cloud(
                 text,
                 self.config.get("tts", "base_url", default=""),
                 self.config.get_secret("tts") or self.config.get("tts", "api_key", default=""),
@@ -652,20 +677,32 @@ class PetManager:
                 output,
                 self.config.get("tts", "speed", default=1.0),
             )
+            if started:
+                self._set_pet_state("speak")
+                signals.tts_state_changed.emit(True)
             return
         char = self._char_data.get(self.config.current_character)
         if not char:
+            self._tts_epoch = None
             self._on_tts_error("未找到当前角色")
             return
         reference = char.voice.get("reference_audio", "")
         if not reference:
+            self._tts_epoch = None
             self._on_tts_error("本地 CosyVoice 需要角色的授权参考音频")
             return
         reference_path = char.base_dir / "voice" / reference
-        self._tts.synthesize(text, self.config.get("tts", "model_path", default=""), reference_path,
-                             output, self.config.get("tts", "speed", default=1.0))
+        started = self._tts.synthesize(
+            text, self.config.get("tts", "model_path", default=""), reference_path,
+            output, self.config.get("tts", "speed", default=1.0))
+        if started:
+            self._set_pet_state("speak")
+            signals.tts_state_changed.emit(True)
 
     def _on_tts_done(self, audio_path: str):
+        if getattr(self, "_tts_epoch", None) != self._role_epoch:
+            Path(audio_path).unlink(missing_ok=True)
+            return
         # Qt Multimedia avoids an additional playback dependency.
         from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput
         from PySide6.QtCore import QUrl
@@ -675,15 +712,19 @@ class PetManager:
         self._player.setAudioOutput(self._audio_output)
         self._player.setSource(QUrl.fromLocalFile(audio_path))
         self._player.mediaStatusChanged.connect(self._on_audio_status)
+        self._player_epoch = self._role_epoch
         self._player.play()
 
     def _on_audio_status(self, status):
         from PySide6.QtMultimedia import QMediaPlayer
-        if status == QMediaPlayer.EndOfMedia:
+        if status == QMediaPlayer.EndOfMedia and getattr(self, "_player_epoch", None) == self._role_epoch:
             self._set_pet_state("idle")
             signals.tts_state_changed.emit(False)
 
     def _on_tts_error(self, error: str):
+        if getattr(self, "_tts_epoch", None) not in (None, self._role_epoch):
+            return
+        self._tts_epoch = None
         self._set_pet_state("idle")
         signals.tts_state_changed.emit(False)
         if self._dialog:
@@ -820,6 +861,7 @@ class PetManager:
 
     def _quit(self):
         self._screen_observer.stop()
+        self._cancel_role_async_work()
         self._screen_hotkey.close()
         self._asr_hotkey.close()
         self._save_chat_history()

@@ -67,3 +67,15 @@ class PushToTalkRecorder(QObject):
         except Exception as exc:
             self.failed.emit(f"保存录音失败：{exc}")
             return False
+
+    def cancel(self) -> None:
+        """Discard an in-progress push-to-talk recording without emitting audio."""
+        if not self.recording:
+            return
+        stream, self._stream = self._stream, None
+        try:
+            stream.stop()
+            stream.close()
+        except Exception:
+            pass
+        self._chunks = queue.Queue()

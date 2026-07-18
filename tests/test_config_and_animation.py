@@ -49,6 +49,7 @@ def test_role_switch_saves_old_history_and_loads_new_history(tmp_path):
     manager._switch_character = lambda _name: None
     manager._dialog = None
     manager._tray = None
+    manager._cancel_role_async_work = lambda: events.append("cancel-async")
     events = []
     manager._save_chat_history = lambda: events.append("save-old")
     manager._load_knowledge_base = lambda: events.append("load-knowledge")
@@ -58,7 +59,7 @@ def test_role_switch_saves_old_history_and_loads_new_history(tmp_path):
 
     assert manager.config.current_character == "new"
     assert manager._llm.cancelled and manager._llm.cleared
-    assert events == ["save-old", "load-knowledge", "load-new"]
+    assert events == ["cancel-async", "save-old", "load-knowledge", "load-new"]
 
 
 def test_config_has_multimodal_defaults(tmp_path):
@@ -294,6 +295,20 @@ def test_stream_finish_replaces_unprocessed_display(qapp):
     window.append_stream("visible<think>hidden</think>")
     window.finish_stream("visible")
     assert window._text_display.toPlainText() == "visible"
+
+
+def test_voice_recorder_cancel_discards_active_stream():
+    from core.voice_input import PushToTalkRecorder
+    class Stream:
+        def __init__(self):
+            self.stopped = self.closed = False
+        def stop(self): self.stopped = True
+        def close(self): self.closed = True
+    recorder = PushToTalkRecorder()
+    stream = Stream()
+    recorder._stream = stream
+    recorder.cancel()
+    assert stream.stopped and stream.closed and not recorder.recording
 
 
 def test_tray_observation_state_updates_without_signal(qapp):
