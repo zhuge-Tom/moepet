@@ -264,6 +264,10 @@ class PetWindow(QMainWindow):
         self.setWindowFlags(flags)
         self.show()
 
+    def set_opacity(self, opacity: float):
+        """Set the whole transparent pet window opacity within Qt's safe range."""
+        self.setWindowOpacity(max(0.3, min(1.0, float(opacity))))
+
     def set_character_menu(self, names: list[str], current: str, callback):
         """更新角色切换子菜单"""
         self._switch_menu.clear()

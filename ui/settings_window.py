@@ -706,6 +706,14 @@ class SettingsWindow(QDialog):
         scale_row.addWidget(self._scale_label)
         lay.addLayout(scale_row)
 
+        self._opacity = QSpinBox()
+        self._opacity.setRange(30, 100)
+        self._opacity.setSuffix(" %")
+        self._opacity.setValue(
+            int(self.config.get("window", "opacity", default=1.0) * 100))
+        self._opacity.setFixedHeight(30)
+        self._row("桌宠透明度", self._opacity, lay)
+
         _spin_qss = (
             "QSpinBox { border: 1px solid #d3d7de; border-radius: 6px;"
             " padding: 4px 8px; font-size: 13px; padding-right: 24px; }"
@@ -1451,6 +1459,13 @@ class SettingsWindow(QDialog):
                      ).isChecked()
                 if safe(getattr(self, "_always_top_cb", None))
                 else True
+            ),
+            "opacity": (
+                safe(getattr(self, "_opacity", None),
+                     type("", (), {"value": lambda: 100})()
+                     ).value() / 100.0
+                if safe(getattr(self, "_opacity", None))
+                else 1.0
             ),
         }
         s["behavior"] = {

@@ -239,3 +239,11 @@ def test_behavior_defaults_include_safe_idle_interval(tmp_path):
     config = Config(tmp_path / "config.json")
     assert config.get("behavior", "click_action") == "switch_sprite"
     assert config.get("behavior", "idle_interval") == 30
+
+
+def test_startup_command_uses_current_interpreter(monkeypatch, tmp_path):
+    from core.startup import launch_command
+    import sys
+    command = launch_command(tmp_path / "main.py")
+    assert sys.executable in command
+    assert "main.py" in command

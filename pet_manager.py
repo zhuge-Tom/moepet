@@ -21,6 +21,7 @@ from core.vision_service import VisionService
 from core.screen_observer import ScreenObserver
 from core.asr_service import ASRService
 from core.voice_input import PushToTalkRecorder
+from core.startup import set_enabled as set_startup_enabled
 from core.hotkeys import HotkeyService
 from core.knowledge_base import KnowledgeBase
 from ui.pet_window import PetWindow
@@ -114,6 +115,7 @@ class PetManager:
             self._char_data[name] = char_data
             scale = self.config.get("window", "scale", default=char_data.scale)
             win = PetWindow(char_data, scale_override=scale)
+            win.set_opacity(self.config.get("window", "opacity", default=1.0))
             win.set_state("idle")
             win.configure_behavior(
                 self.config.get("behavior", "click_action", default="switch_sprite"),
@@ -729,6 +731,7 @@ class PetManager:
         """应用所有设置"""
         always_on_top = self.config.get("window", "always_on_top", default=True)
         scale = self.config.get("window", "scale", default=0.5)
+        opacity = self.config.get("window", "opacity", default=1.0)
         click_action = self.config.get("behavior", "click_action", default="switch_sprite")
         auto_idle = self.config.get("behavior", "auto_idle", default=True)
         idle_interval = self.config.get("behavior", "idle_interval", default=30)
@@ -736,7 +739,13 @@ class PetManager:
         for win in self._windows.values():
             win.set_always_on_top(always_on_top)
             win.rescale(scale)
+            win.set_opacity(opacity)
             win.configure_behavior(click_action, auto_idle, idle_interval)
+
+        startup_ok, startup_error = set_startup_enabled(
+            self.config.get("general", "auto_start", default=False), self.base_dir / "main.py")
+        if not startup_ok and startup_error and self._dialog:
+            self._dialog.display_text(startup_error, "assistant")
 
         # 更新对话框缩放比例
         dialog_scale = self.config.get("general", "dialog_scale", default=100)
