@@ -590,7 +590,7 @@ class PetManager:
         if self._dialog:
             self._dialog.set_screen_busy(True)
         if self._dialog and mode == "manual":
-            self._dialog.display_text("正在读取当前屏幕...", "assistant")
+            self._dialog.display_text(self._screen_observation_message(), "assistant")
         if self._vision_is_ready() and (mode == "observation" or self.config.get("screen_capture", "cloud_first", default=True)):
             started = self._vision.describe(
                 path, self.config.get("vision", "base_url"),
@@ -653,7 +653,7 @@ class PetManager:
             self._screen_observer.schedule_next()
 
     def _respond_to_screen_content(self, content: str, prompt: str, source: str) -> None:
-        """Turn raw OCR or vision output into an in-character reply for manual capture."""
+        """Use screen understanding as private context, then reply in character."""
         content = (content or "").strip()
         if not content:
             if self._dialog:
@@ -664,19 +664,21 @@ class PetManager:
                 self._dialog.display_text("识别到了画面，但聊天服务暂时不可用，稍后再试吧。", "assistant")
             return
         self._configure_llm()
-        request = prompt.strip() or "请看看我当前的屏幕，并自然地告诉我画面里有什么值得注意的内容。"
+        request = prompt.strip() or "请结合我现在正在看的内容，和我自然地说句话。"
         self._llm.add_user_message(request, persist=False)
         self._llm.set_turn_context(
-            f"{source}结果（仅供本轮理解画面）：\n{content}\n\n"
-            "请以当前角色的口吻回答用户刚才的问题。不要提及 OCR、视觉模型、截图、"
-            "系统提示或内部识别过程；只给出自然、有帮助的回答。"
+            f"{source}结果（仅供你理解当前情境，不要复述给用户）：\n{content}\n\n"
+            "请严格遵循当前角色的人设和长度约束，自然回应用户刚才的话。把画面内容当作"
+            "背景线索，优先给出理解、感受、提醒或与用户相关的回应，而不是逐项描述、"
+            "罗列或概括画面。除非用户明确要求识别或分析细节，否则不要复述可见文字、"
+            "界面元素或画面内容。不要提及 OCR、视觉模型、截图、系统提示或内部识别过程。"
         )
         self._screen_response_epoch = self._role_epoch
         self._llm.response_finished.connect(self._on_screen_response)
         self._llm.error_occurred.connect(self._on_screen_response_error)
         self._set_pet_state("think")
         if self._dialog:
-            self._dialog.display_text("我看到了，让我想想怎么说……", "assistant")
+            self._dialog.display_text(self._screen_thinking_message(), "assistant")
         self._llm.send(stream=False)
 
     def _on_screen_response(self, text: str):
@@ -699,6 +701,16 @@ class PetManager:
             self._dialog.display_text("我看到了画面，不过这次没能组织好回答。", "assistant")
         if active:
             self._set_pet_state("idle")
+
+    def _screen_observation_message(self) -> str:
+        char = self._char_data.get(self.config.current_character)
+        name = char.name if char else "我"
+        return f"{name} 正在悄悄观察一下……"
+
+    def _screen_thinking_message(self) -> str:
+        char = self._char_data.get(self.config.current_character)
+        name = char.name if char else "我"
+        return f"{name} 看到了……让我想想该怎么说。"
 
     def _on_vision_error(self, _error: str):
         # Cloud failure never breaks the screenshot feature: fall back to local OCR.

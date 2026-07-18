@@ -381,12 +381,23 @@ def test_manual_screen_content_is_routed_through_character_llm(tmp_path):
     manager._set_pet_state = lambda _state: None
     manager._on_screen_response = lambda _text: None
     manager._on_screen_response_error = lambda _error: None
+    manager._screen_thinking_message = lambda: "Noir 看到了……让我想想该怎么说。"
     PetManager._respond_to_screen_content(manager, "A document editor is open.", "", "视觉理解")
     assert manager._llm.user_messages[0][1] is False
     assert "A document editor is open." in manager._llm.context
     assert manager._llm.sent
     assert manager._dialog.messages[-1][1] == "assistant"
     assert "A document editor is open." not in manager._dialog.messages[-1][0]
+    assert "背景线索" in manager._llm.context
+    assert "不是逐项描述" in manager._llm.context
+
+
+def test_screen_observation_messages_use_current_character_name(tmp_path):
+    manager = type("Manager", (), {})()
+    manager.config = Config(tmp_path / "config.json")
+    manager._char_data = {"noir": type("Character", (), {"name": "Noir"})()}
+    assert PetManager._screen_observation_message(manager) == "Noir 正在悄悄观察一下……"
+    assert PetManager._screen_thinking_message(manager) == "Noir 看到了……让我想想该怎么说。"
 
 
 def test_cloud_vision_readiness_requires_upload_consent(tmp_path):
