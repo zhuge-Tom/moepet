@@ -262,3 +262,10 @@ def test_screen_request_cleanup_resets_transient_state(tmp_path):
     assert manager._screen_mode == "manual"
     assert manager._screen_prompt == ""
     assert manager._screen_request_active is False
+
+
+def test_cloud_vision_readiness_requires_upload_consent(tmp_path):
+    from ui.settings.service_status import vision_connection_ready
+    assert not vision_connection_ready("https://vision.example/v1", "vision-model", False)
+    assert vision_connection_ready("https://vision.example/v1", "vision-model", True)
+    assert vision_connection_ready("http://localhost:11434/v1", "llava", False)

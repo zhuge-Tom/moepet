@@ -26,7 +26,8 @@ from ui.settings.probes import (
     probe_ocr,
 )
 from ui.settings.service_status import (
-    asr_ready, llm_ready, observation_ready, tts_ready, vision_ready,
+    asr_ready, llm_ready, observation_ready, tts_ready, vision_connection_ready,
+    vision_ready,
 )
 from ui.settings.persistence import apply_settings, save_character_prompt
 
@@ -1029,6 +1030,8 @@ class SettingsWindow(QDialog):
             "deepseek-chat / gpt-4o-mini / ...")
         self._ai_model.setText(self.config.get("llm", "model", default=""))
         self._row("Model", self._ai_model, lay)
+        for field in (self._ai_url, self._ai_key, self._ai_model):
+            field.textChanged.connect(self._refresh_service_status_cards)
 
         self._sec(lay, "高级设定")
 
@@ -1158,6 +1161,10 @@ class SettingsWindow(QDialog):
             self._tts_api_voice,
         )
         self._tts_provider.currentIndexChanged.connect(self._sync_tts_provider_fields)
+        self._tts_enabled.stateChanged.connect(self._refresh_service_status_cards)
+        for field in (self._tts_model, self._tts_api_url, self._tts_api_key,
+                      self._tts_api_model, self._tts_api_voice):
+            field.textChanged.connect(self._refresh_service_status_cards)
         self._sync_tts_provider_fields()
         self._hint(lay, "在角色 voice/ 中放置本人或已获授权的 10–60 秒参考音频。")
         self._add_probe_row(lay, "tts", "测试语音引擎", self._prepare_tts_probe)
@@ -1171,6 +1178,7 @@ class SettingsWindow(QDialog):
             self._set_field_visible(widget, not is_cloud)
         for widget in self._tts_cloud_fields:
             self._set_field_visible(widget, is_cloud)
+        self._refresh_service_status_cards()
 
     def _page_asr(self):
         page, lay = self._make_page()
@@ -1248,6 +1256,10 @@ class SettingsWindow(QDialog):
         )
         self._asr_provider.currentIndexChanged.connect(
             self._sync_asr_provider_fields)
+        self._asr_enabled.stateChanged.connect(self._refresh_service_status_cards)
+        for field in (self._asr_model, self._asr_api_url, self._asr_api_key,
+                      self._asr_api_model):
+            field.textChanged.connect(self._refresh_service_status_cards)
         self._sync_asr_provider_fields()
         self._hint(lay, "选择云端后端时，音频会发送至该地址。当前版本先保存此配置；云端转写调用会在录音输入链路接入后启用。")
         self._hint(lay, "首次接入需安装可选语音依赖；未配置模型时不会录音。")
@@ -1262,6 +1274,7 @@ class SettingsWindow(QDialog):
             self._set_field_visible(widget, not is_cloud)
         for widget in self._asr_cloud_fields:
             self._set_field_visible(widget, is_cloud)
+        self._refresh_service_status_cards()
 
     def _page_screen(self):
         page, lay = self._make_page()
@@ -1327,11 +1340,53 @@ class SettingsWindow(QDialog):
         self._vision_allow_cloud = QCheckBox("我同意将主动截图上传到云端视觉服务")
         self._vision_allow_cloud.setChecked(self.config.get("vision", "allow_cloud", default=False))
         lay.addWidget(self._vision_allow_cloud)
+        self._vision_enabled.stateChanged.connect(self._refresh_service_status_cards)
+        self._vision_allow_cloud.stateChanged.connect(self._refresh_service_status_cards)
+        for field in (self._vision_url, self._vision_model, self._vision_key):
+            field.textChanged.connect(self._refresh_service_status_cards)
         self._hint(lay, "本地地址（localhost、127.0.0.1）无需授权。云端地址必须勾选此项才会接收截图；服务失败时会自动回退到本地 OCR。")
         self._hint(lay, "只有你明确选择图像理解时才会发送截图；本地服务可不填 Key。")
         self._add_probe_row(lay, "vision", "测试图像理解服务", self._prepare_vision_probe)
         lay.addStretch()
         return page
+
+    def _refresh_service_status_cards(self, *_args):
+        """Reflect the in-progress form, not only the last saved config."""
+        if hasattr(self, "_ai_status_card"):
+            self._ai_status_card.set_state(bool(
+                self._ai_url.text().strip()
+                and (self._ai_key.text().strip() or self.config.get_secret("llm")
+                     or self.config.get("llm", "api_key", default=""))
+                and self._ai_model.text().strip()
+            ))
+        if hasattr(self, "_tts_status_card"):
+            cloud = self._tts_provider.currentData() == "cloud"
+            ready = self._tts_enabled.isChecked() and (
+                bool(self._tts_model.text().strip()) if not cloud else bool(
+                    self._tts_api_url.text().strip()
+                    and (self._tts_api_key.text().strip() or self.config.get_secret("tts")
+                         or self.config.get("tts", "api_key", default=""))
+                    and self._tts_api_model.text().strip()
+                    and self._tts_api_voice.text().strip()
+                )
+            )
+            self._tts_status_card.set_state(ready)
+        if hasattr(self, "_asr_status_card"):
+            cloud = self._asr_provider.currentData() == "cloud"
+            ready = self._asr_enabled.isChecked() and (
+                bool(self._asr_model.text().strip()) if not cloud else bool(
+                    self._asr_api_url.text().strip()
+                    and (self._asr_api_key.text().strip() or self.config.get_secret("asr")
+                         or self.config.get("asr", "api_key", default=""))
+                    and self._asr_api_model.text().strip()
+                )
+            )
+            self._asr_status_card.set_state(ready)
+        if hasattr(self, "_vision_status_card"):
+            self._vision_status_card.set_state(vision_connection_ready(
+                self._vision_url.text().strip(), self._vision_model.text().strip(),
+                self._vision_allow_cloud.isChecked(), self._vision_enabled.isChecked(),
+            ))
 
     def _page_about(self):
         page, lay = self._make_page()

@@ -39,11 +39,20 @@ def asr_ready(config) -> bool:
 
 
 def vision_ready(config) -> bool:
-    return bool(
-        config.get("vision", "enabled", default=False)
-        and config.get("vision", "base_url", default="")
-        and config.get("vision", "model", default="")
+    return vision_connection_ready(
+        config.get("vision", "base_url", default=""),
+        config.get("vision", "model", default=""),
+        config.get("vision", "allow_cloud", default=False),
+        config.get("vision", "enabled", default=False),
     )
+
+
+def vision_connection_ready(base_url: str, model: str, allow_cloud: bool,
+                            enabled: bool = True) -> bool:
+    """Require explicit consent before a non-local vision endpoint is usable."""
+    endpoint = base_url.lower()
+    local = any(host in endpoint for host in ("localhost", "127.0.0.1", "[::1]"))
+    return bool(enabled and base_url and model and (local or allow_cloud))
 
 
 def observation_ready(config) -> bool:
