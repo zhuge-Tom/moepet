@@ -277,6 +277,15 @@ def test_independent_settings_pages_build_without_window():
     assert make_character_parent_page().layout() is not None
 
 
+def test_screen_and_vision_page_factories_expose_form_fields(qapp, tmp_path):
+    from ui.settings.pages import make_screen_page, make_vision_page
+    config = Config(tmp_path / "config.json")
+    _, screen = make_screen_page(config, lambda _layout, _key, _text: None)
+    _, vision = make_vision_page(config, lambda _layout, _key, _text: None)
+    assert {"screen_hotkey", "screen_auto_observe"}.issubset(screen)
+    assert {"vision_url", "vision_allow_cloud"}.issubset(vision)
+
+
 def test_stream_finish_replaces_unprocessed_display(qapp):
     from ui.dialog_window import DialogWindow
     window = DialogWindow("Test")

@@ -30,7 +30,9 @@ from ui.settings.service_status import (
     vision_ready,
 )
 from ui.settings.persistence import apply_settings, save_character_prompt
-from ui.settings.pages import make_about_page, make_character_parent_page
+from ui.settings.pages import (
+    make_about_page, make_character_parent_page, make_screen_page, make_vision_page,
+)
 
 from core.config import Config
 
@@ -371,8 +373,8 @@ class SettingsWindow(QDialog):
             ("ai", self._page_ai),
             ("tts", self._page_tts),
             ("asr", self._page_asr),
-            ("screen", self._page_screen),
-            ("vision", self._page_vision),
+            ("screen", self._build_screen_page),
+            ("vision", self._build_vision_page),
             ("about", make_about_page),
         ]
         for key, builder in page_builders:
@@ -613,6 +615,30 @@ class SettingsWindow(QDialog):
             ]}],
         }
         return lambda: probe_http_endpoint(base_url, api_key, payload)
+
+    def _build_screen_page(self):
+        page, fields = make_screen_page(
+            self.config,
+            lambda layout, key, text: self._add_probe_row(
+                layout, key, text, self._prepare_ocr_probe),
+        )
+        for name, widget in fields.items():
+            setattr(self, f"_{name}", widget)
+        return page
+
+    def _build_vision_page(self):
+        page, fields = make_vision_page(
+            self.config,
+            lambda layout, key, text: self._add_probe_row(
+                layout, key, text, self._prepare_vision_probe),
+        )
+        for name, widget in fields.items():
+            setattr(self, f"_{name}", widget)
+        self._vision_enabled.stateChanged.connect(self._refresh_service_status_cards)
+        self._vision_allow_cloud.stateChanged.connect(self._refresh_service_status_cards)
+        for field in (self._vision_url, self._vision_model, self._vision_key):
+            field.textChanged.connect(self._refresh_service_status_cards)
+        return page
 
     def _ph(self, layout, text):
         """占位提示"""
