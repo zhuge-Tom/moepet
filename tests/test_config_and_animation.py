@@ -233,3 +233,9 @@ def test_openai_compatible_urls_and_optional_auth_headers():
     assert chat_completions_url("https://api.example/v1/chat/completions/") == "https://api.example/v1/chat/completions"
     assert bearer_headers("") == {}
     assert bearer_headers("secret") == {"Authorization": "Bearer secret"}
+
+
+def test_behavior_defaults_include_safe_idle_interval(tmp_path):
+    config = Config(tmp_path / "config.json")
+    assert config.get("behavior", "click_action") == "switch_sprite"
+    assert config.get("behavior", "idle_interval") == 30

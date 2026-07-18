@@ -773,6 +773,15 @@ class SettingsWindow(QDialog):
             self.config.get("behavior", "auto_idle", default=True))
         lay.addWidget(self._auto_idle_cb)
 
+        self._idle_interval = QSpinBox()
+        self._idle_interval.setRange(5, 600)
+        self._idle_interval.setSuffix(" 秒")
+        self._idle_interval.setValue(
+            self.config.get("behavior", "idle_interval", default=30))
+        self._idle_interval.setFixedHeight(30)
+        self._idle_interval.setStyleSheet(_spin_qss)
+        self._row("恢复待机时间", self._idle_interval, lay)
+
         lay.addStretch()
         return page
 
@@ -1458,6 +1467,13 @@ class SettingsWindow(QDialog):
                      ).isChecked()
                 if safe(getattr(self, "_auto_idle_cb", None))
                 else True
+            ),
+            "idle_interval": (
+                safe(getattr(self, "_idle_interval", None),
+                     type("", (), {"value": lambda: 30})()
+                     ).value()
+                if safe(getattr(self, "_idle_interval", None))
+                else 30
             ),
         }
         s["general"] = {

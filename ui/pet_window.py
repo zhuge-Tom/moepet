@@ -32,6 +32,12 @@ class PetWindow(QMainWindow):
         self._frame_timer.timeout.connect(self._next_frame)
         self._frame_state = ""
         self._frame_index = 0
+        self._idle_timer = QTimer(self)
+        self._idle_timer.setSingleShot(True)
+        self._idle_timer.timeout.connect(self._return_to_idle)
+        self._click_action = "switch_sprite"
+        self._auto_idle = True
+        self._idle_interval_seconds = 30
         self._setup_menu()
         self._load_sprites()
         self._show_sprite()
@@ -174,6 +180,25 @@ class PetWindow(QMainWindow):
         self._label.resize(self._frame_frames[0].size())
         self.resize(self._frame_frames[0].size())
         self._frame_timer.start(cfg.frame_ms)
+        if state != "idle" and self._auto_idle:
+            self._idle_timer.start(self._idle_interval_seconds * 1000)
+        elif state == "idle":
+            self._idle_timer.stop()
+
+    def configure_behavior(self, click_action: str, auto_idle: bool,
+                           idle_interval_seconds: int) -> None:
+        """Apply interaction choices without reloading character assets."""
+        self._click_action = click_action
+        self._auto_idle = bool(auto_idle)
+        self._idle_interval_seconds = max(5, int(idle_interval_seconds))
+        if not self._auto_idle:
+            self._idle_timer.stop()
+        elif self._frame_state and self._frame_state != "idle":
+            self._idle_timer.start(self._idle_interval_seconds * 1000)
+
+    def _return_to_idle(self) -> None:
+        if self._auto_idle:
+            self.set_state("idle")
 
     def _pixmap_for_name(self, name: str):
         for index, info in enumerate(self.char_data.sprites):
@@ -285,11 +310,17 @@ class PetWindow(QMainWindow):
             delta = end_pos - self._drag_start
             if delta.manhattanLength() < 5:
                 # 点击 → 切换立绘
-                self.next_sprite()
+                self._handle_click_action()
             else:
                 # 拖拽结束 → 记住位置
                 signals.position_changed.emit(self.x(), self.y())
             self._drag_pos = QPoint()
+
+    def _handle_click_action(self) -> None:
+        if self._click_action == "switch_sprite":
+            self.next_sprite()
+        elif self._click_action == "bounce":
+            self.play_animation("bounce")
 
     def contextMenuEvent(self, event):
         self._menu.exec(event.globalPos())

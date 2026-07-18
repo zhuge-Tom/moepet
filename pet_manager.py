@@ -115,6 +115,11 @@ class PetManager:
             scale = self.config.get("window", "scale", default=char_data.scale)
             win = PetWindow(char_data, scale_override=scale)
             win.set_state("idle")
+            win.configure_behavior(
+                self.config.get("behavior", "click_action", default="switch_sprite"),
+                self.config.get("behavior", "auto_idle", default=True),
+                self.config.get("behavior", "idle_interval", default=30),
+            )
             self._windows[name] = win
 
         names = list(self._windows.keys())
@@ -724,10 +729,14 @@ class PetManager:
         """应用所有设置"""
         always_on_top = self.config.get("window", "always_on_top", default=True)
         scale = self.config.get("window", "scale", default=0.5)
+        click_action = self.config.get("behavior", "click_action", default="switch_sprite")
+        auto_idle = self.config.get("behavior", "auto_idle", default=True)
+        idle_interval = self.config.get("behavior", "idle_interval", default=30)
 
         for win in self._windows.values():
             win.set_always_on_top(always_on_top)
             win.rescale(scale)
+            win.configure_behavior(click_action, auto_idle, idle_interval)
 
         # 更新对话框缩放比例
         dialog_scale = self.config.get("general", "dialog_scale", default=100)
