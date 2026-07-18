@@ -24,6 +24,10 @@ class PetWindow(QMainWindow):
         self._current_index = 0
         self._drag_pos = QPoint()
         self._drag_start = QPoint()
+        self._click_timer = QTimer(self)
+        self._click_timer.setSingleShot(True)
+        self._click_timer.setInterval(220)
+        self._click_timer.timeout.connect(self._handle_click_action)
 
         self._setup_window()
         self._setup_labels()
@@ -284,11 +288,14 @@ class PetWindow(QMainWindow):
         """把 label 的鼠标事件转发给窗口"""
         if obj is self._label and event.type() in (
             QEvent.MouseButtonPress,
+            QEvent.MouseButtonDblClick,
             QEvent.MouseMove,
             QEvent.MouseButtonRelease,
         ):
             if event.type() == QEvent.MouseButtonPress:
                 self.mousePressEvent(event)
+            elif event.type() == QEvent.MouseButtonDblClick:
+                self.mouseDoubleClickEvent(event)
             elif event.type() == QEvent.MouseMove:
                 self.mouseMoveEvent(event)
             elif event.type() == QEvent.MouseButtonRelease:
@@ -313,12 +320,19 @@ class PetWindow(QMainWindow):
             end_pos = event.globalPosition().toPoint()
             delta = end_pos - self._drag_start
             if delta.manhattanLength() < 5:
-                # 点击 → 切换立绘
-                self._handle_click_action()
+                # Delay a single click briefly so a double click can cancel it.
+                self._click_timer.start()
             else:
                 # 拖拽结束 → 记住位置
                 signals.position_changed.emit(self.x(), self.y())
             self._drag_pos = QPoint()
+
+    def mouseDoubleClickEvent(self, event: QMouseEvent):
+        """Toggle the dialog without also treating the second click as a sprite action."""
+        if event.button() == Qt.LeftButton:
+            self._click_timer.stop()
+            signals.dialog_toggle_requested.emit()
+            event.accept()
 
     def _handle_click_action(self) -> None:
         if self._click_action == "switch_sprite":

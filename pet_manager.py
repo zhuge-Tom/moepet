@@ -198,22 +198,22 @@ class PetManager:
         current = self.config.current_character
         if current in self._windows:
             win = self._windows[current]
-            pos = self.config.get_position("pet")
-            if pos:
-                win.move(*pos)
-            # Saved coordinates can belong to a disconnected monitor. Keep the
-            # pet reachable on the current primary display after a restart.
             screen = QApplication.primaryScreen()
-            if screen and not screen.availableGeometry().intersects(win.frameGeometry()):
+            if screen:
                 area = screen.availableGeometry()
-                win.move(area.x() + 100, area.y() + 100)
+                margin = 24
+                win.move(
+                    area.right() - win.width() - margin + 1,
+                    area.bottom() - win.height() - margin + 1,
+                )
                 self.config.save_position("pet", win.x(), win.y())
             win.show()
 
         self._setup_tray()
 
-        if self.config.get("dialog", "visible", default=False):
-            self._toggle_dialog()
+        # Chat is opt-in at every launch; double-clicking the portrait toggles it.
+        self.config.set("dialog", "visible", False)
+        self.config.save()
         if self._needs_initial_setup():
             self._open_settings(initial_page="ai")
 
@@ -908,9 +908,15 @@ class PetManager:
         if x == -1 and y == -1:
             current = self.config.current_character
             win = self._windows.get(current)
-            if win:
-                win.move(100, 100)
-                self.config.save_position("pet", 100, 100)
+            screen = QApplication.primaryScreen()
+            if win and screen:
+                area = screen.availableGeometry()
+                margin = 24
+                win.move(
+                    area.right() - win.width() - margin + 1,
+                    area.bottom() - win.height() - margin + 1,
+                )
+                self.config.save_position("pet", win.x(), win.y())
         else:
             self.config.save_position("pet", x, y)
 

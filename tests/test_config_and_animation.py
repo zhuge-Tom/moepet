@@ -3,6 +3,8 @@ import json
 import os
 
 import pytest
+from PySide6.QtCore import QPoint, Qt
+from PySide6.QtGui import QMouseEvent
 from PySide6.QtWidgets import QApplication
 
 from core.character import CharacterLoader
@@ -108,6 +110,49 @@ def test_frame_animation_and_single_png_fallback(tmp_path):
     data = CharacterLoader(tmp_path).load("pet")
     assert data.animations["idle"].frames == ["idle.png"]
     assert data.animations["idle"].frame_ms == 100
+
+
+def test_portrait_double_click_toggles_dialog_without_sprite_action(qapp, tmp_path):
+    from ui.pet_window import PetWindow
+    char_dir = tmp_path / "pet"
+    sprites = char_dir / "sprites"
+    sprites.mkdir(parents=True)
+    (char_dir / "config.json").write_text(json.dumps({"name": "Pet"}), encoding="utf-8")
+    window = PetWindow(CharacterLoader(tmp_path).load("pet"))
+    toggles = []
+    signals = __import__("core.signals", fromlist=["signals"]).signals
+    signals.dialog_toggle_requested.connect(lambda: toggles.append(True))
+    window._click_timer.start()
+    event = QMouseEvent(QMouseEvent.MouseButtonDblClick, QPoint(1, 1), QPoint(1, 1),
+                        Qt.LeftButton, Qt.LeftButton, Qt.NoModifier)
+    window.mouseDoubleClickEvent(event)
+    assert toggles == [True]
+    assert not window._click_timer.isActive()
+
+
+def test_start_places_portrait_bottom_right_and_closes_dialog(tmp_path, monkeypatch):
+    class Window:
+        def __init__(self): self.moves = []
+        def width(self): return 100
+        def height(self): return 200
+        def move(self, x, y): self.moves.append((x, y))
+        def show(self): pass
+        def x(self): return self.moves[-1][0]
+        def y(self): return self.moves[-1][1]
+    class Area:
+        def right(self): return 1919
+        def bottom(self): return 1079
+    class Screen:
+        def availableGeometry(self): return Area()
+    manager = type("Manager", (), {})()
+    manager.config = Config(tmp_path / "config.json")
+    manager._windows = {"noir": Window()}
+    manager._setup_tray = lambda: None
+    manager._needs_initial_setup = lambda: False
+    monkeypatch.setattr("pet_manager.QApplication.primaryScreen", lambda: Screen())
+    PetManager.start(manager)
+    assert manager._windows["noir"].moves == [(1796, 856)]
+    assert manager.config.get("dialog", "visible") is False
 
 
 def test_screen_chat_intent_is_explicit():
