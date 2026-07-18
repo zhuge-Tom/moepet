@@ -20,6 +20,7 @@ from PySide6.QtGui import QPainter, QFont, QIcon, QPixmap, QAction, QDesktopServ
 from PySide6.QtCore import QUrl
 from PySide6.QtWidgets import QFileDialog, QMessageBox
 from core.knowledge_base import KnowledgeBase
+from core.openai_compat import chat_completions_url
 from ui.settings_components import IntegrationOverview, ServiceStatusCard
 from ui.settings.probes import (
     ProbeRunner, probe_cosyvoice, probe_http_endpoint, probe_local_module,
@@ -596,15 +597,13 @@ class SettingsWindow(QDialog):
         return probe_ocr
 
     def _prepare_vision_probe(self):
-        base_url = self._vision_url.text().strip().rstrip("/")
+        base_url = chat_completions_url(self._vision_url.text().strip())
         api_key = self._vision_key.text().strip()
         model = self._vision_model.text().strip()
         if not base_url:
             return lambda: (False, "请先填写视觉服务地址")
         if not model:
             return lambda: (False, "请先填写视觉模型名称")
-        if not base_url.endswith("/chat/completions"):
-            base_url += "/chat/completions"
         tiny_png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
         payload = {
             "model": model,

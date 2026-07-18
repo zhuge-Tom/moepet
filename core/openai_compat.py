@@ -4,8 +4,11 @@
 def chat_completions_url(base_url: str) -> str:
     """Return a chat-completions endpoint without duplicating an explicit path."""
     endpoint = base_url.rstrip("/")
-    if endpoint.endswith("/chat/completions") or endpoint.endswith("/responses"):
+    if endpoint.endswith("/chat/completions"):
         return endpoint
+    if endpoint.endswith("/responses"):
+        # Moepet sends Chat Completions payloads, not Responses API payloads.
+        return endpoint.removesuffix("/responses") + "/chat/completions"
     return f"{endpoint}/chat/completions"
 
 

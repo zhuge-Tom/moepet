@@ -231,6 +231,7 @@ def test_openai_compatible_urls_and_optional_auth_headers():
     from core.openai_compat import bearer_headers, chat_completions_url
     assert chat_completions_url("http://localhost:11434/v1") == "http://localhost:11434/v1/chat/completions"
     assert chat_completions_url("https://api.example/v1/chat/completions/") == "https://api.example/v1/chat/completions"
+    assert chat_completions_url("https://api.example/v1/responses") == "https://api.example/v1/chat/completions"
     assert bearer_headers("") == {}
     assert bearer_headers("secret") == {"Authorization": "Bearer secret"}
 
