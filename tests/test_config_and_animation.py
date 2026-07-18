@@ -187,3 +187,18 @@ def test_llm_excludes_transient_turns_from_saved_history():
         {"role": "user", "content": "normal turn"},
         {"role": "assistant", "content": "reply"},
     ]
+
+
+def test_cloud_service_readiness_requires_credentials(tmp_path):
+    from ui.settings.service_status import asr_ready, tts_ready
+    config = Config(tmp_path / "config.json")
+    config.set("asr", "enabled", True)
+    config.set("asr", "provider", "cloud")
+    config.set("asr", "base_url", "https://example.test")
+    config.set("asr", "model", "whisper-1")
+    config.set("tts", "enabled", True)
+    config.set("tts", "provider", "cloud")
+    config.set("tts", "base_url", "https://example.test")
+    config.set("tts", "model", "tts-1")
+    assert not asr_ready(config)
+    assert not tts_ready(config)

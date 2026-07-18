@@ -7,10 +7,7 @@ QTreeWidget 导航 + QStackedWidget 页面切换。
 import json
 import os
 import subprocess
-import threading
 from pathlib import Path
-from urllib.error import HTTPError, URLError
-from urllib.request import Request, urlopen
 
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QWidget,
@@ -24,6 +21,13 @@ from PySide6.QtCore import QUrl
 from PySide6.QtWidgets import QFileDialog, QMessageBox
 from core.knowledge_base import KnowledgeBase
 from ui.settings_components import IntegrationOverview, ServiceStatusCard
+from ui.settings.probes import (
+    ProbeRunner, probe_cosyvoice, probe_http_endpoint, probe_local_module,
+    probe_ocr,
+)
+from ui.settings.service_status import (
+    asr_ready, llm_ready, observation_ready, tts_ready, vision_ready,
+)
 
 from core.config import Config
 
@@ -54,7 +58,6 @@ _NAV_HOVER = "#3d5166"
 class SettingsWindow(QDialog):
     scale_changed = Signal(float)
     apply_clicked = Signal(dict)
-    probe_finished = Signal(str, bool, str)
 
     def __init__(self, config: Config, characters: list[str], current_char: str,
                  base_dir: Path = None, parent=None):
@@ -68,6 +71,7 @@ class SettingsWindow(QDialog):
         self._anims = []
         self._field_labels = {}
         self._probe_widgets = {}
+        self._probe_runner = ProbeRunner(self)
 
         self.setWindowTitle("Moepet 设置")
         self.setMinimumSize(580, 520)
@@ -89,7 +93,7 @@ class SettingsWindow(QDialog):
         """)
 
         self._build_ui()
-        self.probe_finished.connect(self._on_probe_finished)
+        self._probe_runner.finished.connect(self._on_probe_finished)
         self._tree.setCurrentItem(self._tree.topLevelItem(0))
 
     def _build_ui(self):
@@ -544,18 +548,10 @@ class SettingsWindow(QDialog):
         try:
             probe = prepare_probe()
         except Exception as exc:
-            self.probe_finished.emit(
+            self._on_probe_finished(
                 key, False, f"无法准备测试：{type(exc).__name__}: {str(exc)[:120]}")
             return
-
-        def run():
-            try:
-                ok, message = probe()
-            except Exception as exc:
-                ok, message = False, f"测试失败：{type(exc).__name__}: {str(exc)[:120]}"
-            self.probe_finished.emit(key, bool(ok), str(message))
-
-        threading.Thread(target=run, name=f"moepet-{key}-probe", daemon=True).start()
+        self._probe_runner.run(key, probe)
 
     def _on_probe_finished(self, key, ok, message):
         pair = self._probe_widgets.get(key)
@@ -567,36 +563,6 @@ class SettingsWindow(QDialog):
         status.setStyleSheet(
             f"color: {'#15803d' if ok else '#dc2626'}; font-size: 12px;")
 
-    @staticmethod
-    def _probe_local_module(module, model_path=""):
-        if model_path and not Path(model_path).is_dir():
-            return False, "模型目录不存在或不可访问"
-        __import__(module)
-        return True, "本地依赖和模型目录可用"
-
-    @staticmethod
-    def _probe_http_endpoint(url, api_key, payload=None):
-        if not url.strip():
-            return False, "请先填写服务地址"
-        headers = {"Content-Type": "application/json"}
-        if api_key.strip():
-            headers["Authorization"] = f"Bearer {api_key.strip()}"
-        body = json.dumps(payload or {}).encode("utf-8")
-        request = Request(url, data=body, headers=headers, method="POST")
-        try:
-            with urlopen(request, timeout=20) as response:
-                if 200 <= response.status < 300:
-                    return True, "服务连接和凭据验证成功"
-                return False, f"服务返回 HTTP {response.status}"
-        except HTTPError as exc:
-            if exc.code in (401, 403):
-                return False, "服务可达，但 API Key 无效或没有权限"
-            if exc.code in (400, 405):
-                return True, "服务可达并已响应测试请求"
-            return False, f"服务返回 HTTP {exc.code}"
-        except URLError as exc:
-            return False, f"无法连接服务：{getattr(exc, 'reason', exc)}"
-
     def _prepare_asr_probe(self):
         provider = self._asr_provider.currentData()
         model_path = self._asr_model.text().strip()
@@ -604,8 +570,8 @@ class SettingsWindow(QDialog):
         key = self._asr_api_key.text().strip()
         model = self._asr_api_model.text().strip() or "whisper-1"
         if provider == "cloud":
-            return lambda: self._probe_http_endpoint(url, key, {"model": model})
-        return lambda: self._probe_local_module("faster_whisper", model_path)
+            return lambda: probe_http_endpoint(url, key, {"model": model})
+        return lambda: probe_local_module("faster_whisper", model_path)
 
     def _prepare_tts_probe(self):
         model_path = self._tts_model.text().strip()
@@ -617,26 +583,12 @@ class SettingsWindow(QDialog):
         if provider == "cloud":
             if url and not url.rstrip("/").endswith("/audio/speech"):
                 url = url.rstrip("/") + "/audio/speech"
-            return lambda: self._probe_http_endpoint(
+            return lambda: probe_http_endpoint(
                 url, key, {"model": model, "input": "连接测试", "voice": voice, "response_format": "wav"})
-
-        def probe():
-            if not model_path or not Path(model_path).is_dir():
-                return False, "请先填写可访问的 CosyVoice 模型目录"
-            __import__("cosyvoice.cli.cosyvoice")
-            __import__("torchaudio")
-            return True, "CosyVoice 依赖和模型目录可用"
-
-        return probe
-
-    @staticmethod
-    def _probe_ocr():
-        from rapidocr_onnxruntime import RapidOCR
-        RapidOCR()
-        return True, "本地 OCR 引擎初始化成功"
+        return lambda: probe_cosyvoice(model_path)
 
     def _prepare_ocr_probe(self):
-        return self._probe_ocr
+        return probe_ocr
 
     def _prepare_vision_probe(self):
         base_url = self._vision_url.text().strip().rstrip("/")
@@ -657,7 +609,7 @@ class SettingsWindow(QDialog):
                 {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{tiny_png}"}},
             ]}],
         }
-        return lambda: self._probe_http_endpoint(base_url, api_key, payload)
+        return lambda: probe_http_endpoint(base_url, api_key, payload)
 
     def _ph(self, layout, text):
         """占位提示"""
@@ -674,22 +626,16 @@ class SettingsWindow(QDialog):
     def _page_general(self):
         page, lay = self._make_page()
 
-        llm_ready = bool(
-            self.config.get("llm", "base_url", default="") and
-            (self.config.get_secret("llm") or self.config.get("llm", "api_key", default="")) and
-            self.config.get("llm", "model", default=""))
-        tts_ready = bool(self.config.get("tts", "enabled", default=False))
-        asr_ready = bool(self.config.get("asr", "enabled", default=False))
-        vision_ready = bool(
-            self.config.get("vision", "enabled", default=False) and
-            self.config.get("vision", "base_url", default="") and
-            self.config.get("vision", "model", default=""))
-        observe_ready = bool(self.config.get("screen_capture", "auto_observe", default=False) and vision_ready)
+        llm_is_ready = llm_ready(self.config)
+        tts_is_ready = tts_ready(self.config)
+        asr_is_ready = asr_ready(self.config)
+        vision_is_ready = vision_ready(self.config)
+        observe_is_ready = observation_ready(self.config)
         overview = IntegrationOverview("Moepet 控制中心", [
-            ("1. 角色对话", "连接你的 OpenAI 兼容聊天模型。", llm_ready, "ai"),
-            ("2. 语音朗读", "为角色回复选择本地或云端 TTS。", tts_ready, "tts"),
-            ("3. 按住说话", "按住快捷键录音，松开后自动转写。", asr_ready, "asr"),
-            ("4. 识图与观察", "手动识图，或在明确授权后随机观察屏幕。", observe_ready, "screen"),
+            ("1. 角色对话", "连接你的 OpenAI 兼容聊天模型。", llm_is_ready, "ai"),
+            ("2. 语音朗读", "为角色回复选择本地或云端 TTS。", tts_is_ready, "tts"),
+            ("3. 按住说话", "按住快捷键录音，松开后自动转写。", asr_is_ready, "asr"),
+            ("4. 识图与观察", "手动识图，或在明确授权后随机观察屏幕。", observe_is_ready, "screen"),
         ], self._open_page)
         lay.addWidget(overview)
 
@@ -1036,10 +982,7 @@ class SettingsWindow(QDialog):
 
         self._ai_status_card = ServiceStatusCard(
             "对话模型", "用于角色对话与主动观察后的自然回应。")
-        self._ai_status_card.set_state(bool(
-            self.config.get("llm", "base_url", default="") and
-            (self.config.get_secret("llm") or self.config.get("llm", "api_key", default="")) and
-            self.config.get("llm", "model", default="")))
+        self._ai_status_card.set_state(llm_ready(self.config))
         lay.addWidget(self._ai_status_card)
 
         self._sec(lay, "OpenAI 兼容 API")
@@ -1150,12 +1093,7 @@ class SettingsWindow(QDialog):
         page, lay = self._make_page()
         self._tts_status_card = ServiceStatusCard(
             "语音输出", "回复可由本地 CosyVoice 或兼容云端 TTS 朗读。")
-        provider = self.config.get("tts", "provider", default="local")
-        ready = bool(self.config.get("tts", "enabled", default=False)) and (
-            bool(self.config.get("tts", "model_path", default="")) if provider == "local" else
-            bool(self.config.get("tts", "base_url", default="") and self.config.get("tts", "model", default=""))
-        )
-        self._tts_status_card.set_state(ready)
+        self._tts_status_card.set_state(tts_ready(self.config))
         lay.addWidget(self._tts_status_card)
         self._sec(lay, "本地 CosyVoice 音色克隆")
         self._tts_enabled = QCheckBox("LLM 回复后自动朗读")
@@ -1220,12 +1158,7 @@ class SettingsWindow(QDialog):
         page, lay = self._make_page()
         self._asr_status_card = ServiceStatusCard(
             "按住说话", "按住配置的快捷键录音，松开后自动转写到对话。")
-        provider = self.config.get("asr", "provider", default="local")
-        ready = bool(self.config.get("asr", "enabled", default=False)) and (
-            bool(self.config.get("asr", "model_path", default="")) if provider == "local" else
-            bool(self.config.get("asr", "base_url", default="") and self.config.get("asr", "model", default=""))
-        )
-        self._asr_status_card.set_state(ready)
+        self._asr_status_card.set_state(asr_ready(self.config))
         lay.addWidget(self._asr_status_card)
         self._sec(lay, "本地 faster-whisper")
         self._asr_enabled = QCheckBox("启用按键语音输入")
@@ -1354,10 +1287,7 @@ class SettingsWindow(QDialog):
         page, lay = self._make_page()
         self._vision_status_card = ServiceStatusCard(
             "图像理解", "用于手动识图和已授权的主动屏幕观察。")
-        self._vision_status_card.set_state(bool(
-            self.config.get("vision", "enabled", default=False) and
-            self.config.get("vision", "base_url", default="") and
-            self.config.get("vision", "model", default="")))
+        self._vision_status_card.set_state(vision_ready(self.config))
         lay.addWidget(self._vision_status_card)
         self._sec(lay, "可选图像理解")
         self._vision_enabled = QCheckBox("允许主动发送截图到已配置的视觉服务")
