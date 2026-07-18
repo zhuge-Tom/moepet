@@ -213,6 +213,18 @@ class PetManager:
 
         if self.config.get("dialog", "visible", default=False):
             self._toggle_dialog()
+        if self._needs_initial_setup():
+            self._open_settings(initial_page="ai")
+
+    def _needs_initial_setup(self) -> bool:
+        """Open the focused first-run setup only when chat cannot yet be used."""
+        base_url = self.config.get("llm", "base_url", default="")
+        api_key = self.config.get_secret("llm") or self.config.get("llm", "api_key", default="")
+        return not bool(
+            base_url
+            and self.config.get("llm", "model", default="")
+            and (api_key or is_local_endpoint(base_url))
+        )
 
     # ─── 角色切换 ─────────────────────────────
 
@@ -795,7 +807,7 @@ class PetManager:
         if self._tray:
             self._tray.set_observation_enabled(enabled)
 
-    def _open_settings(self):
+    def _open_settings(self, initial_page: str = ""):
         if self._settings_dlg and self._settings_dlg.isVisible():
             self._settings_dlg.activateWindow()
             return
@@ -822,6 +834,8 @@ class PetManager:
         dlg.finished.connect(on_finished)
         self._settings_dlg = dlg
         dlg.show()
+        if initial_page:
+            dlg.open_page(initial_page)
 
     def _on_live_scale(self, scale: float):
         current = self.config.current_character

@@ -1375,6 +1375,10 @@ class SettingsWindow(QDialog):
                     self._tree.setCurrentItem(c)
                     return
 
+    def open_page(self, key: str) -> None:
+        """Public routing hook used by first-run setup and tray shortcuts."""
+        self._open_page(key)
+
     # ═══════════════════════════════════
     # 配置收集
     # ═══════════════════════════════════

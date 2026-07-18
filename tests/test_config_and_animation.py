@@ -1,10 +1,21 @@
 from pathlib import Path
 import json
+import os
+
+import pytest
+from PySide6.QtWidgets import QApplication
 
 from core.character import CharacterLoader
 from core.config import Config
 from pet_manager import PetManager
 from core.knowledge_base import KnowledgeBase
+
+
+@pytest.fixture(scope="session")
+def qapp():
+    """Provide one offscreen Qt application for widget tests."""
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    return QApplication.instance() or QApplication([])
 
 
 def test_character_config_keeps_its_own_prompt(tmp_path):
@@ -307,6 +318,23 @@ def test_local_compatible_services_are_ready_without_api_keys(tmp_path):
     assert llm_ready(config)
     assert tts_ready(config)
     assert asr_ready(config)
+
+
+def test_initial_setup_accepts_local_llm_without_key(tmp_path):
+    manager = type("Manager", (), {})()
+    manager.config = Config(tmp_path / "config.json")
+    manager.config.set("llm", "base_url", "http://localhost:11434/v1")
+    manager.config.set("llm", "model", "qwen3")
+    assert not PetManager._needs_initial_setup(manager)
+    manager.config.set("llm", "base_url", "https://api.example/v1")
+    assert PetManager._needs_initial_setup(manager)
+
+
+def test_settings_window_public_page_route(qapp, tmp_path):
+    from ui.settings_window import SettingsWindow
+    window = SettingsWindow(Config(tmp_path / "config.json"), ["noir"], "noir", tmp_path)
+    window.open_page("vision")
+    assert window._stack.currentWidget() is window._pages["vision"]
 
 
 def test_independent_settings_pages_build_without_window():
