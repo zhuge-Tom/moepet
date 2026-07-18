@@ -284,3 +284,10 @@ def test_stream_finish_replaces_unprocessed_display(qapp):
     window.append_stream("visible<think>hidden</think>")
     window.finish_stream("visible")
     assert window._text_display.toPlainText() == "visible"
+
+
+def test_tray_observation_state_updates_without_signal(qapp):
+    from ui.tray_icon import TrayIcon
+    tray = TrayIcon("Test", observe_enabled=False)
+    tray.set_observation_enabled(True)
+    assert tray._observe_action.isChecked()

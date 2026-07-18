@@ -183,7 +183,10 @@ class PetManager:
         current = self.config.current_character
         char = self._char_data.get(current)
         name = char.name if char else "Moepet"
-        self._tray = TrayIcon(char_name=name)
+        self._tray = TrayIcon(
+            char_name=name,
+            observe_enabled=self.config.get("screen_capture", "auto_observe", default=False),
+        )
         self._tray.show()
 
     # ─── 启动 ────────────────────────────────
@@ -705,6 +708,27 @@ class PetManager:
     def _on_settings_signal(self, data: dict):
         if data.get("action") == "open_settings":
             self._open_settings()
+        elif data.get("action") == "capture_screen":
+            self._capture_screen()
+        elif data.get("action") == "set_screen_observation":
+            self._set_screen_observation(bool(data.get("enabled", False)))
+
+    def _set_screen_observation(self, enabled: bool):
+        """Toggle the consented watcher from the tray without bypassing policy."""
+        if enabled and not self._vision_is_ready():
+            if self._tray:
+                self._tray.set_observation_enabled(False)
+            if self._dialog is None or not self._dialog.isVisible():
+                self._toggle_dialog()
+            if self._dialog:
+                self._dialog.display_text(
+                    "请先在图像理解页配置可用视觉服务，并确认云端上传授权。", "assistant")
+            return
+        self.config.set("screen_capture", "auto_observe", enabled)
+        self.config.save()
+        self._configure_screen_observer()
+        if self._tray:
+            self._tray.set_observation_enabled(enabled)
 
     def _open_settings(self):
         if self._settings_dlg and self._settings_dlg.isVisible():
@@ -772,6 +796,9 @@ class PetManager:
         self._register_screen_hotkey()
         self._register_asr_hotkey()
         self._configure_screen_observer()
+        if self._tray:
+            self._tray.set_observation_enabled(
+                self.config.get("screen_capture", "auto_observe", default=False))
 
         new_char = settings.get("current_character")
         if new_char and new_char != self.config.current_character:

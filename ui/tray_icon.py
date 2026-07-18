@@ -13,7 +13,7 @@ from core.signals import signals
 class TrayIcon(QSystemTrayIcon):
     """系统托盘"""
 
-    def __init__(self, char_name: str = "Moepet", parent=None):
+    def __init__(self, char_name: str = "Moepet", observe_enabled: bool = False, parent=None):
         super().__init__(parent)
         self.setToolTip(f"Moepet - {char_name}")
 
@@ -46,6 +46,20 @@ class TrayIcon(QSystemTrayIcon):
         dialog_action.triggered.connect(signals.dialog_toggle_requested.emit)
         menu.addAction(dialog_action)
 
+        screen_action = QAction("立即识别屏幕", menu)
+        screen_action.triggered.connect(
+            lambda: signals.settings_changed.emit({"action": "capture_screen"}))
+        menu.addAction(screen_action)
+
+        self._observe_action = QAction("随机观察屏幕", menu)
+        self._observe_action.setCheckable(True)
+        self._observe_action.setChecked(observe_enabled)
+        self._observe_action.toggled.connect(
+            lambda enabled: signals.settings_changed.emit({
+                "action": "set_screen_observation", "enabled": enabled,
+            }))
+        menu.addAction(self._observe_action)
+
         menu.addSeparator()
 
         quit_action = QAction("✕ 退出", menu)
@@ -54,6 +68,12 @@ class TrayIcon(QSystemTrayIcon):
 
         self.setContextMenu(menu)
         self.activated.connect(self._on_activated)
+
+    def set_observation_enabled(self, enabled: bool):
+        """Reflect configuration changes without emitting another toggle action."""
+        self._observe_action.blockSignals(True)
+        self._observe_action.setChecked(enabled)
+        self._observe_action.blockSignals(False)
 
     @staticmethod
     def _make_icon() -> QIcon:
