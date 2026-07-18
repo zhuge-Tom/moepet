@@ -202,3 +202,13 @@ def test_cloud_service_readiness_requires_credentials(tmp_path):
     config.set("tts", "model", "tts-1")
     assert not asr_ready(config)
     assert not tts_ready(config)
+
+
+def test_settings_persistence_preserves_existing_provider_secret(tmp_path, monkeypatch):
+    from ui.settings.persistence import apply_settings
+    config = Config(tmp_path / "config.json")
+    monkeypatch.setattr(config, "get_secret", lambda section: "stored-key" if section == "asr" else "")
+    payload, error = apply_settings(config, {"asr": {"enabled": True, "api_key": ""}})
+    assert error is None
+    assert payload["asr"]["api_key"] == "stored-key"
+    assert config.get("asr", "api_key") == "stored-key"

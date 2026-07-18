@@ -28,6 +28,7 @@ from ui.settings.probes import (
 from ui.settings.service_status import (
     asr_ready, llm_ready, observation_ready, tts_ready, vision_ready,
 )
+from ui.settings.persistence import apply_settings, save_character_prompt
 
 from core.config import Config
 
@@ -1557,39 +1558,11 @@ class SettingsWindow(QDialog):
     def _on_apply(self):
         v = self._collect_settings()
         self._save_character_prompt()
-        for section in ("llm", "vision", "asr", "tts"):
-            key = v.get(section, {}).get("api_key", "")
-            if key and not self.config.is_valid_api_key(key):
-                QMessageBox.warning(
-                    self, "API Key 无效",
-                    "API Key 不能包含空格或换行，且长度不能超过 512 个字符。\n"
-                    "请只粘贴服务商提供的完整密钥，不要粘贴角色资料或说明文本。")
-                return
-        # API keys are written to the platform keyring, never config.json.
-        for section in ("llm", "vision", "asr", "tts"):
-            key = v.get(section, {}).pop("api_key", "")
-            if key:
-                if not self.config.set_secret(section, key):
-                    # Keep the app functional when no system credential backend exists.
-                    v.setdefault(section, {})["api_key"] = key
-            elif section == "llm":
-                # Applying unrelated settings must never erase a saved LLM key.
-                stored_key = self.config.get_secret("llm") or self.config.get(
-                    "llm", "api_key", default="")
-                if stored_key:
-                    v.setdefault("llm", {})["api_key"] = stored_key
-        for section, data in v.items():
-            # PetManager owns role activation so it can save and reset state
-            # before changing the current role.
-            if section == "current_character":
-                continue
-            if isinstance(data, dict):
-                for k, val in data.items():
-                    self.config.set(section, k, val)
-            else:
-                self.config.set(section, data)
-        self.config.save()
-        self.apply_clicked.emit(v)
+        applied, error = apply_settings(self.config, v)
+        if error:
+            QMessageBox.warning(self, "API Key 无效", error)
+            return
+        self.apply_clicked.emit(applied)
 
     def _character_config_path(self) -> Path:
         return self._base_dir / "characters" / self._current_char / "config.json"
@@ -1606,16 +1579,10 @@ class SettingsWindow(QDialog):
         return {}
 
     def _save_character_prompt(self):
-        path = self._character_config_path()
-        try:
-            data = json.loads(path.read_text(encoding="utf-8-sig"))
-        except (OSError, json.JSONDecodeError):
-            return
-        data["character_prompt"] = {
-            "system_prompt": self._system_prompt.toPlainText(),
-            "format_prompt": self._format_prompt.toPlainText(),
-        }
-        path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        save_character_prompt(
+            self._character_config_path(), self._system_prompt.toPlainText(),
+            self._format_prompt.toPlainText(),
+        )
 
     def _on_scale_slider(self, v):
         self._scale_label.setText(f"{v}%")
