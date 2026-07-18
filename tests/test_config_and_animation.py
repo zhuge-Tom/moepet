@@ -247,3 +247,18 @@ def test_startup_command_uses_current_interpreter(monkeypatch, tmp_path):
     command = launch_command(tmp_path / "main.py")
     assert sys.executable in command
     assert "main.py" in command
+
+
+def test_screen_request_cleanup_resets_transient_state(tmp_path):
+    manager = type("Manager", (), {})()
+    manager._screen_mode = "observation"
+    manager._screen_prompt = "prompt"
+    manager._screen_request_active = True
+    manager._ocr_path = tmp_path / "capture.png"
+    manager._ocr_path.write_bytes(b"image")
+    manager.config = Config(tmp_path / "config.json")
+    assert PetManager._finish_screen_request(manager) is True
+    assert not manager._ocr_path.exists()
+    assert manager._screen_mode == "manual"
+    assert manager._screen_prompt == ""
+    assert manager._screen_request_active is False

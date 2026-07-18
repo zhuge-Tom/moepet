@@ -525,56 +525,69 @@ class PetManager:
         if self._dialog and mode == "manual":
             self._dialog.display_text("正在读取当前屏幕...", "assistant")
         if self._vision_is_ready() and (mode == "observation" or self.config.get("screen_capture", "cloud_first", default=True)):
-            self._vision.describe(
+            started = self._vision.describe(
                 path, self.config.get("vision", "base_url"),
                 self.config.get_secret("vision") or self.config.get("vision", "api_key", default=""),
                 self.config.get("vision", "model"), "",
             )
         else:
-            self._ocr.recognize(path)
+            started = self._ocr.recognize(path)
+        if not started:
+            self._finish_screen_request()
+            if mode == "manual" and self._dialog:
+                self._dialog.display_text("屏幕识别服务正在处理中，请稍后再试。", "assistant")
+
+    def _finish_screen_request(self) -> bool:
+        """Release the active screenshot and return whether it was observation."""
+        observation = self._screen_mode == "observation"
+        path = getattr(self, "_ocr_path", None)
+        if path and not self.config.get("screen_capture", "keep_captures", default=False):
+            path.unlink(missing_ok=True)
+        self._screen_request_active = False
+        self._screen_mode = "manual"
+        self._screen_prompt = ""
+        return observation
 
     def _on_ocr_done(self, text: str):
         if not self._screen_request_active:
             return
-        if not self.config.get("screen_capture", "keep_captures", default=False):
-            self._ocr_path.unlink(missing_ok=True)
+        observation = self._finish_screen_request()
         if self._dialog:
             self._dialog.display_text(text or "未在截图中识别到文字。", "assistant")
         signals.ocr_completed.emit(text)
-        self._screen_request_active = False
+        if observation:
+            self._screen_observer.schedule_next()
 
     def _on_ocr_error(self, error: str):
         if not self._screen_request_active:
             return
-        if getattr(self, "_ocr_path", None) and not self.config.get("screen_capture", "keep_captures", default=False):
-            self._ocr_path.unlink(missing_ok=True)
+        observation = self._finish_screen_request()
         if self._dialog:
             self._dialog.display_text(f"本地文字识别不可用：{error}", "assistant")
-        self._screen_request_active = False
+        if observation:
+            self._screen_observer.schedule_next()
 
     def _on_vision_done(self, text: str):
         if not self._screen_request_active:
             return
-        if not self.config.get("screen_capture", "keep_captures", default=False):
-            self._ocr_path.unlink(missing_ok=True)
-        observation = self._screen_mode == "observation"
+        observation = self._finish_screen_request()
         if observation:
             self._last_observation_at = datetime.now()
             self._respond_to_observation(text)
         elif self._dialog:
             self._dialog.display_text(text, "assistant")
-        self._screen_request_active = False
         if observation:
             self._screen_observer.schedule_next()
 
     def _on_vision_error(self, _error: str):
         # Cloud failure never breaks the screenshot feature: fall back to local OCR.
         if self._screen_request_active and self._screen_mode != "observation":
-            self._ocr.recognize(self._ocr_path)
+            if not self._ocr.recognize(self._ocr_path):
+                self._finish_screen_request()
+                if self._dialog:
+                    self._dialog.display_text("本地 OCR 正在处理中，请稍后再试。", "assistant")
         elif self._screen_request_active:
-            if not self.config.get("screen_capture", "keep_captures", default=False):
-                self._ocr_path.unlink(missing_ok=True)
-            self._screen_request_active = False
+            self._finish_screen_request()
             self._screen_observer.schedule_next()
 
     def _respond_to_observation(self, description: str):
