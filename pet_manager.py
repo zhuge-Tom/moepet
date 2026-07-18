@@ -573,7 +573,8 @@ class PetManager:
         api_key = self.config.get_secret("llm") or self.config.get("llm", "api_key", default="")
         if not api_key:
             return
-        self._llm.add_user_message("请根据你刚才注意到的事情，自然地和我说一句话。")
+        self._llm.add_user_message(
+            "请根据你刚才注意到的事情，自然地和我说一句话。", persist=False)
         self._llm.set_turn_context(
             "屏幕观察结果（仅用于本轮）：\n"
             f"{description}\n\n"
@@ -587,6 +588,8 @@ class PetManager:
     def _on_observation_reply(self, text: str):
         self._llm.response_finished.disconnect(self._on_observation_reply)
         self._llm.error_occurred.disconnect(self._on_observation_error)
+        if self._dialog is None or not self._dialog.isVisible():
+            self._toggle_dialog()
         if self._dialog:
             self._dialog.display_text(text, "assistant")
         self._save_chat_history()

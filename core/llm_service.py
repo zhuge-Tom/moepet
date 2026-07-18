@@ -40,8 +40,12 @@ class LLMService(QObject):
         else:
             self._messages.insert(0, {"role": "system", "content": prompt})
 
-    def add_user_message(self, text: str):
-        self._messages.append({"role": "user", "content": text})
+    def add_user_message(self, text: str, persist: bool = True):
+        """Append a user turn, optionally keeping it out of saved chat history."""
+        message = {"role": "user", "content": text}
+        if not persist:
+            message["transient"] = True
+        self._messages.append(message)
 
     def add_assistant_message(self, text: str):
         self._messages.append({"role": "assistant", "content": text})
@@ -61,7 +65,12 @@ class LLMService(QObject):
 
     @property
     def history(self) -> list[dict]:
-        return self._messages
+        # Internal prompts (for example screen observation instructions) must
+        # never appear in the user-visible persisted conversation.
+        return [
+            {"role": item["role"], "content": item["content"]}
+            for item in self._messages if not item.get("transient", False)
+        ]
 
     def is_busy(self) -> bool:
         return self._current_reply is not None
@@ -85,7 +94,10 @@ class LLMService(QObject):
         if "/chat/completions" not in url and "/responses" not in url:
             url = url + "/chat/completions"
 
-        messages = list(self._messages)
+        messages = [
+            {"role": item["role"], "content": item["content"]}
+            for item in self._messages
+        ]
         if self._turn_context:
             insert_at = 1 if messages and messages[0].get("role") == "system" else 0
             messages.insert(insert_at, {"role": "system", "content": self._turn_context})
@@ -94,6 +106,9 @@ class LLMService(QObject):
             "messages": messages,
             "stream": stream,
         }
+        # Transient turns are only request instructions, never conversation
+        # state for subsequent requests or history persistence.
+        self._messages = [item for item in self._messages if not item.get("transient", False)]
 
         request = QNetworkRequest(QUrl(url))
         request.setHeader(QNetworkRequest.ContentTypeHeader, "application/json")

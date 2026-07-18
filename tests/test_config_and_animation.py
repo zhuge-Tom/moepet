@@ -164,3 +164,26 @@ def test_screen_observer_clamps_intervals():
     observer.configure(False, 1, 2)
     assert observer._min_seconds == 60
     assert observer._max_seconds == 60
+
+
+def test_screen_observer_does_not_restart_after_stop():
+    from core.screen_observer import ScreenObserver
+    observer = ScreenObserver()
+    observer.configure(True, 60, 60)
+    assert observer._enabled is True
+    observer.stop()
+    observer.schedule_next()
+    assert observer._enabled is False
+    assert not observer._timer.isActive()
+
+
+def test_llm_excludes_transient_turns_from_saved_history():
+    from core.llm_service import LLMService
+    service = LLMService()
+    service.add_user_message("normal turn")
+    service.add_user_message("internal observation instruction", persist=False)
+    service.add_assistant_message("reply")
+    assert service.history == [
+        {"role": "user", "content": "normal turn"},
+        {"role": "assistant", "content": "reply"},
+    ]
