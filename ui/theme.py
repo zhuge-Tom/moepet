@@ -21,7 +21,7 @@ DIALOG_QSS = f"""
     QLabel#name_label {{
         background: {DIALOG_NAME_BG};
         color: {DIALOG_NAME_TEXT};
-        font-size: 14px;
+        font-size: 16px;
         font-weight: bold;
         padding: 4px 16px;
         border-radius: 0 0 10px 0;
@@ -37,8 +37,9 @@ DIALOG_QSS = f"""
         color: {DIALOG_TEXT};
         border: 1px solid {DIALOG_INPUT_BORDER};
         border-radius: 8px;
-        font-size: 13px;
-        padding: 8px;
+        font-size: 18px;
+        line-height: 1.45;
+        padding: 10px 12px;
         selection-background-color: #e94560;
     }}
     QLineEdit#input_field {{
@@ -46,7 +47,7 @@ DIALOG_QSS = f"""
         color: {DIALOG_TEXT};
         border: 1px solid {DIALOG_INPUT_BORDER};
         border-radius: 8px;
-        font-size: 13px;
+        font-size: 16px;
         padding: 8px 12px;
     }}
     QLineEdit#input_field:focus {{
@@ -57,7 +58,7 @@ DIALOG_QSS = f"""
         color: white;
         border: none;
         border-radius: 8px;
-        font-size: 13px;
+        font-size: 14px;
         font-weight: bold;
         padding: 6px 12px;
     }}
@@ -72,7 +73,7 @@ DIALOG_QSS = f"""
         color: #dbeafe;
         border: 1px solid #365486;
         border-radius: 8px;
-        font-size: 12px;
+        font-size: 14px;
         padding: 6px 10px;
     }}
     QPushButton#voice_btn:hover, QPushButton#screen_btn:hover {{

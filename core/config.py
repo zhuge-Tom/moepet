@@ -43,8 +43,12 @@ DEFAULTS = {
     "tts": {
         "enabled": False, "model_path": "", "auto_play": True,
         "speed": 1.0, "volume": 1.0,
-        "provider": "local", "base_url": "", "api_key": "",
-        "model": "tts-1", "voice": "alloy",
+        "provider": "gpt_sovits_local", "base_url": "", "api_key": "",
+        "local_api_url": "http://127.0.0.1:9880",
+        "local_python": "", "local_config": "GPT_SoVITS/configs/noir_v2proplus.yaml",
+        "remote_reference_audio": "",
+        "translate_to_japanese": True,
+        "model": "", "voice": "",
     },
     "screen_capture": {
         "hotkey": "Ctrl+Alt+O", "ocr_model_path": "", "keep_captures": False,

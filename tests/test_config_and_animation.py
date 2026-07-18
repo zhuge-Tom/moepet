@@ -90,6 +90,34 @@ def test_cloud_asr_endpoint_is_completed(tmp_path):
     assert service.transcribe_cloud(tmp_path / "missing.wav", "", "", "whisper-1") is False
 
 
+def test_background_services_expose_their_busy_state():
+    from core.asr_service import ASRService
+    service = ASRService()
+    assert service.is_busy() is False
+
+
+def test_unconfigured_asr_does_not_start_microphone_or_register_hotkey(tmp_path):
+    manager = type("Manager", (), {})()
+    manager.config = Config(tmp_path / "config.json")
+    manager.config.set("asr", "enabled", True)
+    manager.config.set("asr", "provider", "cloud")
+    manager.config.set("asr", "base_url", "")
+    manager._asr = type("Asr", (), {"is_busy": lambda self: False})()
+    manager._voice_recorder = type("Recorder", (), {
+        "start": lambda self: (_ for _ in ()).throw(AssertionError("microphone started")),
+    })()
+    manager._dialog = None
+    PetManager._start_voice_input(manager)
+
+
+def test_llm_response_cleaning_removes_stage_directions_and_markup():
+    from core.llm_service import LLMService
+    service = LLMService()
+    service.configure("http://localhost:1", "", "test")
+    text = "<think>reasoning</think>你好呀。（偏着头）\n动作：轻轻挥手"
+    assert service._clean_response(text) == "你好呀。"
+
+
 def test_remote_audio_services_require_a_key_without_starting_work(tmp_path):
     from core.asr_service import ASRService
     from core.tts_service import TTSService
@@ -97,6 +125,18 @@ def test_remote_audio_services_require_a_key_without_starting_work(tmp_path):
     tts = TTSService()
     assert asr.transcribe_cloud(tmp_path / "missing.wav", "https://api.example/v1", "", "whisper-1") is False
     assert tts.synthesize_cloud("hello", "https://api.example/v1", "", "tts-1", "alloy", tmp_path / "out.wav") is False
+
+
+def test_gpt_sovits_endpoint_uses_service_root_not_openai_v2_path():
+    from core.tts_service import TTSService
+    assert TTSService._tts_url("https://tts.example:8443/v2") == "https://tts.example:8443/tts"
+    assert TTSService._tts_url("https://tts.example:8443") == "https://tts.example:8443/tts"
+
+
+def test_tts_player_uses_qt_objects_without_a_non_qt_parent():
+    source = Path("pet_manager.py").read_text(encoding="utf-8")
+    assert "QAudioOutput()" in source
+    assert "QMediaPlayer()" in source
 
 
 def test_frame_animation_and_single_png_fallback(tmp_path):
@@ -264,9 +304,9 @@ def test_cloud_service_readiness_requires_credentials(tmp_path):
     config.set("asr", "base_url", "https://example.test")
     config.set("asr", "model", "whisper-1")
     config.set("tts", "enabled", True)
-    config.set("tts", "provider", "cloud")
+    config.set("tts", "provider", "gpt_sovits_remote")
     config.set("tts", "base_url", "https://example.test")
-    config.set("tts", "model", "tts-1")
+    config.set("tts", "remote_reference_audio", "/models/noir/reference.ogg")
     assert not asr_ready(config)
     assert not tts_ready(config)
 
@@ -426,10 +466,9 @@ def test_local_compatible_services_are_ready_without_api_keys(tmp_path):
     config.set("llm", "base_url", "http://localhost:11434/v1")
     config.set("llm", "model", "qwen3")
     config.set("tts", "enabled", True)
-    config.set("tts", "provider", "cloud")
+    config.set("tts", "provider", "gpt_sovits_remote")
     config.set("tts", "base_url", "http://127.0.0.1:8000/v1")
-    config.set("tts", "model", "tts")
-    config.set("tts", "voice", "alloy")
+    config.set("tts", "remote_reference_audio", "/models/noir/reference.ogg")
     config.set("asr", "enabled", True)
     config.set("asr", "provider", "cloud")
     config.set("asr", "base_url", "http://localhost:8001/v1")
@@ -480,7 +519,7 @@ def test_voice_page_factories_switch_provider_rows(qapp, tmp_path):
     assert {"tts_model", "tts_api_url"}.issubset(tts_rows)
     assert {"asr_model", "asr_api_url"}.issubset(asr_rows)
     window = SettingsWindow(config, ["noir"], "noir", tmp_path)
-    window._tts_provider.setCurrentIndex(window._tts_provider.findData("cloud"))
+    window._tts_provider.setCurrentIndex(window._tts_provider.findData("gpt_sovits_remote"))
     window._asr_provider.setCurrentIndex(window._asr_provider.findData("cloud"))
     assert window._tts_rows["tts_model"].isHidden()
     assert not window._tts_rows["tts_api_url"].isHidden()

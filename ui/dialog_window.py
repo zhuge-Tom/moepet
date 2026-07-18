@@ -256,7 +256,10 @@ class DialogWindow(QDialog):
             font = QFont(widget.font())
             size = font.pointSizeF()
             if size > 0:
-                font.setPointSizeF(max(7.0, size * ratio))
+                # Keep conversation text comfortably readable even when the
+                # user chooses a compact dialog scale.
+                minimum = 15.0 if widget is self._text_display else 11.0
+                font.setPointSizeF(max(minimum, size * ratio))
                 widget.setFont(font)
         control_height = max(32, round(32 * percent / 100))
         self._send_btn.setFixedHeight(control_height)

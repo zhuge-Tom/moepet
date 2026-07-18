@@ -12,6 +12,10 @@ class BackgroundService(QObject):
         super().__init__(parent)
         self._busy = False
 
+    def is_busy(self) -> bool:
+        """Expose the shared worker state to callers without reaching into internals."""
+        return self._busy
+
     def run(self, fn):
         if self._busy:
             return False

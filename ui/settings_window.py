@@ -673,13 +673,10 @@ class SettingsWindow(QDialog):
         provider = self._tts_provider.currentData()
         url = self._tts_api_url.text().strip()
         key = self._tts_api_key.text().strip()
-        model = self._tts_api_model.text().strip() or "tts-1"
-        voice = self._tts_api_voice.text().strip() or "alloy"
-        if provider == "cloud":
-            if url and not url.rstrip("/").endswith("/audio/speech"):
-                url = url.rstrip("/") + "/audio/speech"
-            return lambda: probe_http_endpoint(
-                url, key, {"model": model, "input": "连接测试", "voice": voice, "response_format": "wav"})
+        if provider == "gpt_sovits_remote":
+            if url and not url.rstrip("/").endswith("/tts"):
+                url = url.rstrip("/") + "/tts"
+            return lambda: probe_http_endpoint(url, key, {})
         return lambda: probe_cosyvoice(model_path)
 
     def _prepare_ocr_probe(self):
@@ -750,20 +747,15 @@ class SettingsWindow(QDialog):
         for name, widget in fields.items():
             setattr(self, f"_{name}", widget)
         self._tts_rows = rows
-        self._tts_local_fields = (self._tts_model,)
-        self._tts_cloud_fields = (
-            self._tts_api_url, self._tts_api_key, self._tts_api_model, self._tts_api_voice,
-        )
+        self._tts_local_fields = (self._tts_model, self._tts_local_url, self._tts_local_config)
+        self._tts_cloud_fields = (self._tts_api_url, self._tts_api_key, self._tts_remote_reference)
         self._tts_provider.currentIndexChanged.connect(self._sync_tts_provider_fields)
-        self._tts_discover_button.clicked.connect(
-            lambda: self._discover_models(
-                "tts", self._tts_api_url, self._tts_api_key,
-                self._tts_model_picker, self._tts_discover_status))
-        self._tts_model_picker.activated.connect(
-            lambda _index: self._tts_api_model.setText(self._tts_model_picker.currentText()))
+        self._tts_discover_button.setVisible(False)
+        self._tts_model_picker.setVisible(False)
+        self._tts_discover_status.setVisible(False)
         self._tts_enabled.stateChanged.connect(self._refresh_service_status_cards)
-        for field in (self._tts_model, self._tts_api_url, self._tts_api_key,
-                      self._tts_api_model, self._tts_api_voice):
+        for field in (self._tts_model, self._tts_local_url, self._tts_local_config,
+                      self._tts_api_url, self._tts_api_key, self._tts_remote_reference):
             field.textChanged.connect(self._refresh_service_status_cards)
         self._sync_tts_provider_fields()
         return page
@@ -1244,13 +1236,11 @@ class SettingsWindow(QDialog):
 
     def _sync_tts_provider_fields(self, *_args):
         """Switch TTS forms without clearing local or cloud settings."""
-        is_cloud = self._tts_provider.currentData() == "cloud"
-        self._tts_rows["tts_model"].setVisible(not is_cloud)
-        for name in ("tts_api_url", "tts_api_key", "tts_api_model", "tts_api_voice"):
+        is_cloud = self._tts_provider.currentData() == "gpt_sovits_remote"
+        for name in ("tts_model", "tts_local_url", "tts_local_config"):
+            self._tts_rows[name].setVisible(not is_cloud)
+        for name in ("tts_api_url", "tts_api_key", "tts_remote_reference"):
             self._tts_rows[name].setVisible(is_cloud)
-        self._tts_discover_button.setVisible(is_cloud)
-        self._tts_discover_status.setVisible(is_cloud)
-        self._tts_model_picker.setVisible(is_cloud and self._tts_model_picker.count() > 0)
         self._refresh_service_status_cards()
 
     def _sync_asr_provider_fields(self, *_args):
@@ -1278,15 +1268,11 @@ class SettingsWindow(QDialog):
                 and self._ai_model.text().strip()
             ))
         if hasattr(self, "_tts_status_card"):
-            cloud = self._tts_provider.currentData() == "cloud"
+            cloud = self._tts_provider.currentData() == "gpt_sovits_remote"
             ready = self._tts_enabled.isChecked() and (
                 bool(self._tts_model.text().strip()) if not cloud else bool(
                     self._tts_api_url.text().strip()
-                    and (is_local_endpoint(self._tts_api_url.text().strip())
-                         or self._tts_api_key.text().strip() or self.config.get_secret("tts")
-                         or self.config.get("tts", "api_key", default=""))
-                    and self._tts_api_model.text().strip()
-                    and self._tts_api_voice.text().strip()
+                    and self._tts_remote_reference.text().strip()
                 )
             )
             self._tts_status_card.set_state(ready)
@@ -1501,13 +1487,16 @@ class SettingsWindow(QDialog):
 
         s["tts"] = {"enabled": safe(getattr(self, "_tts_enabled", None)).isChecked() if safe(getattr(self, "_tts_enabled", None)) else False,
                     "model_path": safe(getattr(self, "_tts_model", None)).text().strip() if safe(getattr(self, "_tts_model", None)) else "",
+                    "local_api_url": safe(getattr(self, "_tts_local_url", None)).text().strip() if safe(getattr(self, "_tts_local_url", None)) else "http://127.0.0.1:9880",
+                    "local_config": safe(getattr(self, "_tts_local_config", None)).text().strip() if safe(getattr(self, "_tts_local_config", None)) else "GPT_SoVITS/configs/noir_v2proplus.yaml",
+                    "remote_reference_audio": safe(getattr(self, "_tts_remote_reference", None)).text().strip() if safe(getattr(self, "_tts_remote_reference", None)) else "",
+                    "translate_to_japanese": safe(getattr(self, "_tts_translate", None)).isChecked() if safe(getattr(self, "_tts_translate", None)) else True,
                     "speed": safe(getattr(self, "_tts_speed", None)).value() / 100.0 if safe(getattr(self, "_tts_speed", None)) else 1.0,
                     "auto_play": safe(getattr(self, "_tts_auto_play", None)).isChecked() if safe(getattr(self, "_tts_auto_play", None)) else True,
-                    "provider": safe(getattr(self, "_tts_provider", None)).currentData() if safe(getattr(self, "_tts_provider", None)) else "local",
+                    "provider": safe(getattr(self, "_tts_provider", None)).currentData() if safe(getattr(self, "_tts_provider", None)) else "gpt_sovits_local",
                     "base_url": safe(getattr(self, "_tts_api_url", None)).text().strip() if safe(getattr(self, "_tts_api_url", None)) else "",
                     "api_key": safe(getattr(self, "_tts_api_key", None)).text().strip() if safe(getattr(self, "_tts_api_key", None)) else "",
-                    "model": safe(getattr(self, "_tts_api_model", None)).text().strip() if safe(getattr(self, "_tts_api_model", None)) else "tts-1",
-                    "voice": safe(getattr(self, "_tts_api_voice", None)).text().strip() if safe(getattr(self, "_tts_api_voice", None)) else "alloy"}
+                    "model": "", "voice": ""}
         s["asr"] = {"enabled": safe(getattr(self, "_asr_enabled", None)).isChecked() if safe(getattr(self, "_asr_enabled", None)) else False,
                     "model_path": safe(getattr(self, "_asr_model", None)).text().strip() if safe(getattr(self, "_asr_model", None)) else "",
                     "hotkey": safe(getattr(self, "_asr_hotkey", None)).text().strip() if safe(getattr(self, "_asr_hotkey", None)) else "Ctrl+Alt+Space",

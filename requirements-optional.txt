@@ -1,5 +1,7 @@
 # Install only the integrations you configure locally.
 keyring>=25
+# QMediaPlayer/QAudioOutput used for generated GPT-SoVITS WAV playback.
+PySide6-Addons>=6.11,<6.12
 faster-whisper>=1.1
 sounddevice>=0.5
 keyboard>=0.13

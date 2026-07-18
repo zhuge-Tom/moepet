@@ -20,14 +20,12 @@ def llm_ready(config) -> bool:
 def tts_ready(config) -> bool:
     if not config.get("tts", "enabled", default=False):
         return False
-    if config.get("tts", "provider", default="local") == "local":
+    if config.get("tts", "provider", default="gpt_sovits_local") == "gpt_sovits_local":
         return bool(config.get("tts", "model_path", default=""))
     base_url = config.get("tts", "base_url", default="")
     return bool(
         base_url
-        and (is_local_endpoint(base_url) or has_secret(config, "tts"))
-        and config.get("tts", "model", default="")
-        and config.get("tts", "voice", default="")
+        and config.get("tts", "remote_reference_audio", default="")
     )
 
 

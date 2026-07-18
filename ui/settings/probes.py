@@ -105,10 +105,12 @@ def probe_http_endpoint(url: str, api_key: str, payload: dict | None = None) -> 
 
 def probe_cosyvoice(model_path: str) -> tuple[bool, str]:
     if not model_path or not Path(model_path).is_dir():
-        return False, "请先填写可访问的 CosyVoice 模型目录"
-    __import__("cosyvoice.cli.cosyvoice")
-    __import__("torchaudio")
-    return True, "CosyVoice 依赖和模型目录可用"
+        return False, "请先填写可访问的 GPT-SoVITS 项目目录"
+    project = Path(model_path)
+    required = (project / "api_v2.py", project / ".venv" / "Scripts" / "python.exe")
+    if not all(path.exists() for path in required):
+        return False, "GPT-SoVITS API 或独立 Python 环境不存在"
+    return True, "GPT-SoVITS 本地项目和 Python 环境可用"
 
 
 def probe_ocr() -> tuple[bool, str]:

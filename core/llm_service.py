@@ -38,8 +38,20 @@ class LLMService(QObject):
         self._ignore_format_error = bool(ignore_format_error)
 
     def _clean_response(self, text: str) -> str:
-        """Remove model markup and an optional user-configured pattern."""
+        """Keep the displayed reply as concise dialogue rather than role-play markup."""
         text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
+        # Stage directions such as "(tilts her head)" do not belong in the
+        # chat bubble or the speech sent to TTS. Repeat to cover nested pairs.
+        previous = None
+        while text != previous:
+            previous = text
+            text = re.sub(r"[（(【\[].*?[）)】\]]", "", text, flags=re.DOTALL)
+        text = re.sub(r"(?:^|\n)\s*(?:动作|神态|旁白|内心|表情)\s*[：:].*$", "", text,
+                      flags=re.MULTILINE)
+        text = re.sub(r"[~～]{2,}", "～", text)
+        # Preserve terminal punctuation: it makes the short reply readable
+        # and gives the Japanese TTS translator natural sentence boundaries.
+        text = re.sub(r"\s+", " ", text).strip()
         if not self._post_processing:
             return text
         try:

@@ -107,21 +107,27 @@ def _provider_preset(layout: QVBoxLayout, base_url: str, presets) -> QComboBox:
 
 def make_tts_page(config, add_probe) -> tuple[QWidget, dict[str, QWidget], dict[str, QWidget]]:
     page, layout = _page_layout()
-    card = ServiceStatusCard("语音输出", "回复可由本地 CosyVoice 或兼容云端 TTS 朗读。")
+    card = ServiceStatusCard("语音输出", "中文回复会在后台翻译为日文，再由 Noir 的 GPT-SoVITS 朗读。")
     layout.addWidget(card)
     enabled = QCheckBox("LLM 回复后自动朗读")
     enabled.setChecked(config.get("tts", "enabled", default=False))
     layout.addWidget(enabled)
     provider = QComboBox()
-    provider.addItem("本地 CosyVoice（使用角色授权参考音频）", "local")
-    provider.addItem("云端 OpenAI 兼容 TTS API", "cloud")
-    provider.setCurrentIndex(max(provider.findData(config.get("tts", "provider", default="local")), 0))
+    provider.addItem("本地 GPT-SoVITS v2ProPlus", "gpt_sovits_local")
+    provider.addItem("远端 GPT-SoVITS API（推荐 GPU）", "gpt_sovits_remote")
+    provider.setCurrentIndex(max(provider.findData(config.get("tts", "provider", default="gpt_sovits_local")), 0))
     _row(layout, "语音后端", provider)
 
-    _section(layout, "本地语音")
-    model_path = _line_edit("用户下载的 CosyVoice 模型目录")
+    _section(layout, "本地 GPT-SoVITS")
+    model_path = _line_edit(r"G:\GPT-SoVITS")
     model_path.setText(config.get("tts", "model_path", default=""))
-    local_row = _field_row(layout, "模型目录", model_path)
+    local_row = _field_row(layout, "项目目录", model_path)
+    local_url = _line_edit("http://127.0.0.1:9880")
+    local_url.setText(config.get("tts", "local_api_url", default="http://127.0.0.1:9880"))
+    local_url_row = _field_row(layout, "本地 API", local_url)
+    local_config = _line_edit("GPT_SoVITS/configs/noir_v2proplus.yaml")
+    local_config.setText(config.get("tts", "local_config", default="GPT_SoVITS/configs/noir_v2proplus.yaml"))
+    local_config_row = _field_row(layout, "推理配置", local_config)
     speed = QSpinBox()
     speed.setRange(50, 200)
     speed.setSuffix(" %")
@@ -130,31 +136,34 @@ def make_tts_page(config, add_probe) -> tuple[QWidget, dict[str, QWidget], dict[
     auto_play = QCheckBox("生成后自动播放语音")
     auto_play.setChecked(config.get("tts", "auto_play", default=True))
     layout.addWidget(auto_play)
+    translate = QCheckBox("将中文回复翻译为日文后朗读（聊天框仍只显示中文）")
+    translate.setChecked(config.get("tts", "translate_to_japanese", default=True))
+    layout.addWidget(translate)
 
-    _section(layout, "云端 TTS API")
-    api_url = _line_edit("https://api.example.com/v1/audio/speech")
+    _section(layout, "远端 GPT-SoVITS API")
+    api_url = _line_edit("https://tts.example.com")
     api_url.setText(config.get("tts", "base_url", default=""))
     api_key = _line_edit("sk-xxxx", password=True)
     api_key.setText(config.get_secret("tts") or config.get("tts", "api_key", default=""))
-    api_model = _line_edit("tts-1 / 供应商模型名")
-    api_model.setText(config.get("tts", "model", default="tts-1"))
-    api_voice = _line_edit("alloy / 供应商音色名")
-    api_voice.setText(config.get("tts", "voice", default="alloy"))
+    remote_reference = _line_edit("服务器上的参考音频绝对路径")
+    remote_reference.setText(config.get("tts", "remote_reference_audio", default=""))
     cloud_rows = {
-        "tts_api_url": _field_row(layout, "合成地址", api_url),
+        "tts_api_url": _field_row(layout, "服务地址", api_url),
         "tts_api_key": _field_row(layout, "API Key", api_key),
-        "tts_api_model": _field_row(layout, "模型", api_model),
-        "tts_api_voice": _field_row(layout, "音色", api_voice),
+        "tts_remote_reference": _field_row(layout, "参考音频", remote_reference),
     }
     discover_button, discover_picker, discover_status = _model_discovery_controls(layout)
     add_probe(layout, "tts", "测试语音引擎")
     layout.addStretch()
     fields = {"tts_status_card": card, "tts_enabled": enabled, "tts_provider": provider,
-              "tts_model": model_path, "tts_speed": speed, "tts_auto_play": auto_play,
-              "tts_api_url": api_url, "tts_api_key": api_key, "tts_api_model": api_model,
-              "tts_api_voice": api_voice, "tts_discover_button": discover_button,
+              "tts_model": model_path, "tts_local_url": local_url,
+              "tts_local_config": local_config, "tts_speed": speed,
+              "tts_auto_play": auto_play, "tts_translate": translate,
+              "tts_api_url": api_url, "tts_api_key": api_key,
+              "tts_remote_reference": remote_reference, "tts_discover_button": discover_button,
               "tts_model_picker": discover_picker, "tts_discover_status": discover_status}
-    rows = {"tts_model": local_row, **cloud_rows}
+    rows = {"tts_model": local_row, "tts_local_url": local_url_row,
+            "tts_local_config": local_config_row, **cloud_rows}
     return page, fields, rows
 
 

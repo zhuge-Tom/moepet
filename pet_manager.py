@@ -16,7 +16,7 @@ from core.character import CharacterLoader, CharacterData
 from core.signals import signals
 from core.llm_service import LLMService
 from core.ocr_service import OcrService
-from core.tts_service import TTSService
+from core.tts_service import JapaneseTranslationService, TTSService
 from core.vision_service import VisionService
 from core.openai_compat import is_local_endpoint
 from core.screen_observer import ScreenObserver
@@ -28,6 +28,7 @@ from core.knowledge_base import KnowledgeBase
 from ui.pet_window import PetWindow
 from ui.dialog_window import DialogWindow
 from ui.settings_window import SettingsWindow
+from ui.settings.service_status import asr_ready
 from ui.tray_icon import TrayIcon
 
 
@@ -52,6 +53,9 @@ class PetManager:
         self._tts = TTSService()
         self._tts.completed.connect(self._on_tts_done)
         self._tts.failed.connect(self._on_tts_error)
+        self._tts_translator = JapaneseTranslationService()
+        self._tts_translator.completed.connect(self._on_tts_translation_done)
+        self._tts_translator.failed.connect(self._on_tts_error)
         self._vision = VisionService()
         self._vision.completed.connect(self._on_vision_done)
         self._vision.failed.connect(self._on_vision_error)
@@ -453,14 +457,16 @@ class PetManager:
 
     def _register_asr_hotkey(self):
         self._asr_hotkey.unregister_push_to_talk()
-        if self.config.get("asr", "enabled", default=False):
+        # A globally registered shortcut must never open the microphone when
+        # the transcription service has not been configured to receive it.
+        if asr_ready(self.config):
             self._asr_hotkey.register_push_to_talk(
                 self.config.get("asr", "hotkey", default="Ctrl+Alt+Space"),
                 self._start_voice_input, self._stop_voice_input,
             )
 
     def _start_voice_input(self):
-        if self.config.get("asr", "enabled", default=False) and not self._asr.is_busy():
+        if asr_ready(self.config) and not self._asr.is_busy():
             if self._voice_recorder.start() and self._dialog:
                 self._dialog.set_voice_recording(True)
 
@@ -524,13 +530,15 @@ class PetManager:
     def _on_voice_error(self, error: str):
         if self._dialog:
             self._dialog.set_voice_recording(False)
-            self._dialog.display_text(error, "assistant")
+            # Low-level driver/module errors are not useful dialogue and can
+            # collide visually with the next model reply.
+            self._dialog.display_text("麦克风暂时不可用，请检查设备或权限后再试。", "assistant")
 
     def _refresh_dialog_capabilities(self):
         """Reflect configured integrations in the persistent chat controls."""
         if self._dialog is None:
             return
-        self._dialog.set_voice_available(self.config.get("asr", "enabled", default=False))
+        self._dialog.set_voice_available(asr_ready(self.config))
         # OCR has its own local fallback, so manual capture is always reachable.
         self._dialog.set_screen_available(True)
 
@@ -790,41 +798,55 @@ class PetManager:
             pass
 
     def _speak(self, text: str):
-        """Generate speech through the selected local or cloud TTS provider."""
+        """Translate and synthesize one complete reply as one utterance."""
         if not self.config.get("tts", "enabled", default=False):
             return
         if not self.config.get("tts", "auto_play", default=True):
             return
-        output = Path(tempfile.gettempdir()) / "moepet-tts.wav"
         self._tts_epoch = self._role_epoch
-        if self.config.get("tts", "provider", default="local") == "cloud":
-            started = self._tts.synthesize_cloud(
-                text,
-                self.config.get("tts", "base_url", default=""),
-                self.config.get_secret("tts") or self.config.get("tts", "api_key", default=""),
-                self.config.get("tts", "model", default="tts-1"),
-                self.config.get("tts", "voice", default="alloy"),
-                output,
-                self.config.get("tts", "speed", default=1.0),
-            )
-            if started:
-                self._set_pet_state("speak")
-                signals.tts_state_changed.emit(True)
+        if not self.config.get("tts", "translate_to_japanese", default=True):
+            self._on_tts_translation_done(text)
+            return
+        started = self._tts_translator.translate(
+            text,
+            self.config.get("llm", "base_url", default=""),
+            self.config.get_secret("llm") or self.config.get("llm", "api_key", default=""),
+            self.config.get("llm", "model", default=""),
+        )
+        if started:
+            self._set_pet_state("think")
+            signals.tts_state_changed.emit(True)
+
+    def _on_tts_translation_done(self, japanese_text: str):
+        if getattr(self, "_tts_epoch", None) != self._role_epoch:
             return
         char = self._char_data.get(self.config.current_character)
         if not char:
             self._tts_epoch = None
             self._on_tts_error("未找到当前角色")
             return
-        reference = char.voice.get("reference_audio", "")
+        provider = self.config.get("tts", "provider", default="gpt_sovits_local")
+        is_local = provider == "gpt_sovits_local"
+        reference = char.voice.get("reference_audio", "") if is_local else (
+            self.config.get("tts", "remote_reference_audio", default="")
+            or char.voice.get("remote_reference_audio", ""))
         if not reference:
             self._tts_epoch = None
-            self._on_tts_error("本地 CosyVoice 需要角色的授权参考音频")
+            self._on_tts_error("GPT-SoVITS 需要角色的授权参考音频")
             return
-        reference_path = char.base_dir / "voice" / reference
-        started = self._tts.synthesize(
-            text, self.config.get("tts", "model_path", default=""), reference_path,
-            output, self.config.get("tts", "speed", default=1.0))
+        reference_path = char.base_dir / "voice" / reference if is_local else reference
+        output = Path(tempfile.gettempdir()) / "moepet-tts.wav"
+        base_url = (self.config.get("tts", "local_api_url", default="http://127.0.0.1:9880")
+                    if is_local else self.config.get("tts", "base_url", default=""))
+        started = self._tts.synthesize_gpt_sovits(
+            japanese_text, base_url,
+            "" if is_local else (self.config.get_secret("tts") or self.config.get("tts", "api_key", default="")),
+            reference_path, char.voice.get("reference_text", ""), output,
+            self.config.get("tts", "speed", default=1.0),
+            local_project=self.config.get("tts", "model_path", default="") if is_local else "",
+            local_python=self.config.get("tts", "local_python", default=""),
+            local_config=self.config.get("tts", "local_config", default=""),
+        )
         if started:
             self._set_pet_state("speak")
             signals.tts_state_changed.emit(True)
@@ -836,9 +858,11 @@ class PetManager:
         # Qt Multimedia avoids an additional playback dependency.
         from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput
         from PySide6.QtCore import QUrl
-        self._audio_output = QAudioOutput(self)
+        # PetManager is a coordinator, not a QObject. Keep these objects as
+        # attributes for their lifetime instead of passing an invalid Qt parent.
+        self._audio_output = QAudioOutput()
         self._audio_output.setVolume(float(self.config.get("tts", "volume", default=1.0)))
-        self._player = QMediaPlayer(self)
+        self._player = QMediaPlayer()
         self._player.setAudioOutput(self._audio_output)
         self._player.setSource(QUrl.fromLocalFile(audio_path))
         self._player.mediaStatusChanged.connect(self._on_audio_status)
