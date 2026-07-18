@@ -399,6 +399,20 @@ def test_dialog_exposes_voice_and_screen_actions(qapp):
     assert not window._voice_btn.isEnabled()
 
 
+def test_dialog_actions_show_recording_and_screen_busy_state(qapp):
+    from ui.dialog_window import DialogWindow
+    window = DialogWindow("Test")
+    window.set_voice_recording(True)
+    assert window._voice_btn.text() == "松开结束"
+    window.set_voice_recording(False)
+    assert window._voice_btn.text() == "按住说话"
+    window.set_screen_busy(True)
+    assert not window._screen_btn.isEnabled()
+    assert window._screen_btn.text() == "识图中..."
+    window.set_screen_busy(False)
+    assert window._screen_btn.isEnabled()
+
+
 def test_voice_recorder_cancel_discards_active_stream():
     from core.voice_input import PushToTalkRecorder
     class Stream:

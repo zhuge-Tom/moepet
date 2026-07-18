@@ -443,12 +443,15 @@ class PetManager:
 
     def _start_voice_input(self):
         if self.config.get("asr", "enabled", default=False) and not self._asr.is_busy():
-            self._voice_recorder.start()
+            if self._voice_recorder.start() and self._dialog:
+                self._dialog.set_voice_recording(True)
 
     def _stop_voice_input(self):
         if self._voice_recorder.recording:
             path = Path(tempfile.gettempdir()) / f"moepet-voice-{datetime.now():%Y%m%d-%H%M%S}.wav"
             self._voice_recorder.stop(path)
+        if self._dialog:
+            self._dialog.set_voice_recording(False)
 
     def _on_voice_recorded(self, audio_path: str):
         path = Path(audio_path)
@@ -502,6 +505,7 @@ class PetManager:
 
     def _on_voice_error(self, error: str):
         if self._dialog:
+            self._dialog.set_voice_recording(False)
             self._dialog.display_text(error, "assistant")
 
     def _refresh_dialog_capabilities(self):
@@ -565,6 +569,8 @@ class PetManager:
         self._screen_prompt = prompt
         self._screen_mode = mode
         self._screen_request_active = True
+        if self._dialog:
+            self._dialog.set_screen_busy(True)
         if self._dialog and mode == "manual":
             self._dialog.display_text("正在读取当前屏幕...", "assistant")
         if self._vision_is_ready() and (mode == "observation" or self.config.get("screen_capture", "cloud_first", default=True)):
@@ -588,6 +594,9 @@ class PetManager:
         if path and not self.config.get("screen_capture", "keep_captures", default=False):
             path.unlink(missing_ok=True)
         self._screen_request_active = False
+        dialog = getattr(self, "_dialog", None)
+        if dialog:
+            dialog.set_screen_busy(False)
         self._screen_mode = "manual"
         self._screen_prompt = ""
         return observation

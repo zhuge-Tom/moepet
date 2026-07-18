@@ -80,6 +80,11 @@ DIALOG_QSS = f"""
         border-color: #e94560;
         color: white;
     }}
+    QPushButton#voice_btn[recording="true"] {{
+        background: #e94560;
+        color: white;
+        border-color: #ff8fa3;
+    }}
     QPushButton#voice_btn:disabled, QPushButton#screen_btn:disabled {{
         color: #64748b;
         background: #1e293b;

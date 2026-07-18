@@ -37,6 +37,9 @@ class DialogWindow(QDialog):
         self._is_streaming = False
         self._stream_buffer = ""
         self._scale_percent = 100
+        self._voice_available = True
+        self._voice_recording = False
+        self._screen_busy = False
 
         self.setWindowFlags(
             Qt.FramelessWindowHint
@@ -206,15 +209,39 @@ class DialogWindow(QDialog):
 
     def set_voice_available(self, available: bool) -> None:
         """Keep the microphone action discoverable without exposing a broken control."""
+        self._voice_available = bool(available)
+        if not self._voice_available:
+            self._voice_recording = False
         self._voice_btn.setEnabled(available)
+        self._sync_voice_button()
+
+    def set_voice_recording(self, recording: bool) -> None:
+        """Show the press-and-hold state while the recorder owns the microphone."""
+        self._voice_recording = bool(recording) and self._voice_available
+        self._sync_voice_button()
+
+    def _sync_voice_button(self) -> None:
+        self._voice_btn.setText("松开结束" if self._voice_recording else "按住说话")
+        self._voice_btn.setProperty("recording", self._voice_recording)
+        self._voice_btn.style().unpolish(self._voice_btn)
+        self._voice_btn.style().polish(self._voice_btn)
         self._voice_btn.setToolTip(
-            "按住录音，松开后转写" if available else "请先在设置中启用并配置语音输入")
+            "松开后将开始转写" if self._voice_recording else (
+                "按住录音，松开后转写" if self._voice_available
+                else "请先在设置中启用并配置语音输入"))
 
     def set_screen_available(self, available: bool) -> None:
         """Manual screen capture remains useful with either vision or local OCR."""
         self._screen_btn.setEnabled(available)
         self._screen_btn.setToolTip(
             "识别当前屏幕" if available else "请先配置本地 OCR 或图像理解服务")
+
+    def set_screen_busy(self, busy: bool) -> None:
+        """Prevent duplicate captures while an image request is still active."""
+        self._screen_busy = bool(busy)
+        self._screen_btn.setEnabled(not self._screen_busy)
+        self._screen_btn.setText("识图中..." if self._screen_busy else "识图")
+        self._screen_btn.setToolTip("正在识别当前屏幕" if self._screen_busy else "识别当前屏幕")
 
     def set_dialog_scale(self, percent: int):
         """Scale the dialog and its readable controls around the current top-left."""
