@@ -5,6 +5,7 @@ Galgame 风格对话框、立绘动画演出。
 """
 
 import sys
+import logging
 from pathlib import Path
 
 from PySide6.QtWidgets import QApplication
@@ -15,6 +16,11 @@ from core.signals import signals
 from pet_manager import PetManager
 
 BASE_DIR = Path(__file__).parent
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+)
 
 
 def main():

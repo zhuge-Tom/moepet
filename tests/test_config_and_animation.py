@@ -118,6 +118,18 @@ def test_llm_response_cleaning_removes_stage_directions_and_markup():
     assert service._clean_response(text) == "你好呀。"
 
 
+def test_tts_error_is_logged_without_writing_to_chat(caplog):
+    manager = type("Manager", (), {})()
+    manager._tts_epoch = 0
+    manager._role_epoch = 0
+    manager._dialog = type("Dialog", (), {
+        "display_text": lambda *_args: (_ for _ in ()).throw(AssertionError("chat was changed")),
+    })()
+    manager._set_pet_state = lambda _state: None
+    PetManager._on_tts_error(manager, "HTTP Error 404")
+    assert "TTS synthesis failed: HTTP Error 404" in caplog.text
+
+
 def test_remote_audio_services_require_a_key_without_starting_work(tmp_path):
     from core.asr_service import ASRService
     from core.tts_service import TTSService

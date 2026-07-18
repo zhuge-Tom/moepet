@@ -4,6 +4,7 @@
 """
 
 import json
+import logging
 import tempfile
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -30,6 +31,9 @@ from ui.dialog_window import DialogWindow
 from ui.settings_window import SettingsWindow
 from ui.settings.service_status import asr_ready
 from ui.tray_icon import TrayIcon
+
+
+LOGGER = logging.getLogger(__name__)
 
 
 class PetManager:
@@ -881,8 +885,9 @@ class PetManager:
         self._tts_epoch = None
         self._set_pet_state("idle")
         signals.tts_state_changed.emit(False)
-        if self._dialog:
-            self._dialog.display_text(f"语音合成失败：{error}", "assistant")
+        # TTS is optional output. Keep transport failures out of the role's
+        # conversation and leave details available in the process log.
+        LOGGER.error("TTS synthesis failed: %s", error)
 
     # ─── 立绘请求 ─────────────────────────────
 
