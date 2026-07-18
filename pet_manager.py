@@ -69,6 +69,7 @@ class PetManager:
         self._screen_mode = "manual"
         self._last_observation_at: datetime | None = None
         self._observation_epoch: int | None = None
+        self._screen_response_epoch: int | None = None
         self._screen_observer = ScreenObserver()
         self._screen_observer.observation_requested.connect(self._observe_screen)
         self._configure_llm()
@@ -281,6 +282,8 @@ class PetManager:
         self._tts_epoch = None
         self._observation_epoch = None
         self._disconnect_observation_signals()
+        self._screen_response_epoch = None
+        self._disconnect_screen_response_signals()
 
     # ─── 对话框 ───────────────────────────────
 
@@ -619,12 +622,13 @@ class PetManager:
     def _on_ocr_done(self, text: str):
         if not self._screen_request_active:
             return
+        mode, prompt = self._screen_mode, self._screen_prompt
         observation = self._finish_screen_request()
-        if self._dialog:
-            self._dialog.display_text(text or "未在截图中识别到文字。", "assistant")
         signals.ocr_completed.emit(text)
         if observation:
             self._screen_observer.schedule_next()
+            return
+        self._respond_to_screen_content(text, prompt, source="OCR")
 
     def _on_ocr_error(self, error: str):
         if not self._screen_request_active:
@@ -638,14 +642,63 @@ class PetManager:
     def _on_vision_done(self, text: str):
         if not self._screen_request_active:
             return
+        mode, prompt = self._screen_mode, self._screen_prompt
         observation = self._finish_screen_request()
         if observation:
             self._last_observation_at = datetime.now()
             self._respond_to_observation(text)
-        elif self._dialog:
-            self._dialog.display_text(text, "assistant")
+        else:
+            self._respond_to_screen_content(text, prompt, source="视觉理解")
         if observation:
             self._screen_observer.schedule_next()
+
+    def _respond_to_screen_content(self, content: str, prompt: str, source: str) -> None:
+        """Turn raw OCR or vision output into an in-character reply for manual capture."""
+        content = (content or "").strip()
+        if not content:
+            if self._dialog:
+                self._dialog.display_text("我没有看清画面里的内容，能再试一次吗？", "assistant")
+            return
+        if self._llm.is_busy() or self._needs_initial_setup():
+            if self._dialog:
+                self._dialog.display_text("识别到了画面，但聊天服务暂时不可用，稍后再试吧。", "assistant")
+            return
+        self._configure_llm()
+        request = prompt.strip() or "请看看我当前的屏幕，并自然地告诉我画面里有什么值得注意的内容。"
+        self._llm.add_user_message(request, persist=False)
+        self._llm.set_turn_context(
+            f"{source}结果（仅供本轮理解画面）：\n{content}\n\n"
+            "请以当前角色的口吻回答用户刚才的问题。不要提及 OCR、视觉模型、截图、"
+            "系统提示或内部识别过程；只给出自然、有帮助的回答。"
+        )
+        self._screen_response_epoch = self._role_epoch
+        self._llm.response_finished.connect(self._on_screen_response)
+        self._llm.error_occurred.connect(self._on_screen_response_error)
+        self._set_pet_state("think")
+        if self._dialog:
+            self._dialog.display_text("我看到了，让我想想怎么说……", "assistant")
+        self._llm.send(stream=False)
+
+    def _on_screen_response(self, text: str):
+        active = self._screen_response_epoch == self._role_epoch
+        self._screen_response_epoch = None
+        self._disconnect_screen_response_signals()
+        if not active:
+            return
+        if self._dialog:
+            self._dialog.display_text(text, "assistant")
+        self._save_chat_history()
+        self._set_pet_state("happy")
+        self._speak(text)
+
+    def _on_screen_response_error(self, _error: str):
+        active = self._screen_response_epoch == self._role_epoch
+        self._screen_response_epoch = None
+        self._disconnect_screen_response_signals()
+        if active and self._dialog:
+            self._dialog.display_text("我看到了画面，不过这次没能组织好回答。", "assistant")
+        if active:
+            self._set_pet_state("idle")
 
     def _on_vision_error(self, _error: str):
         # Cloud failure never breaks the screenshot feature: fall back to local OCR.
@@ -706,6 +759,17 @@ class PetManager:
         """Remove transient observation handlers before a role can change."""
         try:
             self._llm.response_finished.disconnect(self._on_observation_reply)
+        except RuntimeError:
+            pass
+
+    def _disconnect_screen_response_signals(self):
+        """Detach the one-turn manual screen-response handlers."""
+        try:
+            self._llm.response_finished.disconnect(self._on_screen_response)
+        except RuntimeError:
+            pass
+        try:
+            self._llm.error_occurred.disconnect(self._on_screen_response_error)
         except RuntimeError:
             pass
         try:

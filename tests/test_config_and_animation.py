@@ -352,6 +352,43 @@ def test_stale_observation_reply_is_ignored_after_role_change():
     assert manager._observation_epoch is None
 
 
+def test_manual_screen_content_is_routed_through_character_llm(tmp_path):
+    class Signal:
+        def __init__(self): self.connected = []
+        def connect(self, callback): self.connected.append(callback)
+        def disconnect(self, callback): self.connected.remove(callback)
+    class Llm:
+        def __init__(self):
+            self.response_finished = Signal()
+            self.error_occurred = Signal()
+            self.user_messages = []
+            self.context = ""
+            self.sent = False
+        def is_busy(self): return False
+        def add_user_message(self, text, persist=True): self.user_messages.append((text, persist))
+        def set_turn_context(self, context): self.context = context
+        def send(self, stream): self.sent = not stream
+    class Dialog:
+        def __init__(self): self.messages = []
+        def display_text(self, text, role): self.messages.append((text, role))
+    manager = type("Manager", (), {})()
+    manager.config = Config(tmp_path / "config.json")
+    manager._llm = Llm()
+    manager._dialog = Dialog()
+    manager._role_epoch = 3
+    manager._needs_initial_setup = lambda: False
+    manager._configure_llm = lambda: None
+    manager._set_pet_state = lambda _state: None
+    manager._on_screen_response = lambda _text: None
+    manager._on_screen_response_error = lambda _error: None
+    PetManager._respond_to_screen_content(manager, "A document editor is open.", "", "视觉理解")
+    assert manager._llm.user_messages[0][1] is False
+    assert "A document editor is open." in manager._llm.context
+    assert manager._llm.sent
+    assert manager._dialog.messages[-1][1] == "assistant"
+    assert "A document editor is open." not in manager._dialog.messages[-1][0]
+
+
 def test_cloud_vision_readiness_requires_upload_consent(tmp_path):
     from ui.settings.service_status import vision_connection_ready
     assert not vision_connection_ready("https://vision.example/v1", "vision-model", False)
