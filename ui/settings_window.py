@@ -82,6 +82,7 @@ class SettingsWindow(QDialog):
         self._probe_widgets = {}
         self._probe_runner = ProbeRunner(self)
         self._model_runner = ModelDiscoveryRunner(self)
+        self._settings_baseline = ""
 
         self.setWindowTitle("Moepet 设置")
         self.setMinimumSize(580, 520)
@@ -106,6 +107,9 @@ class SettingsWindow(QDialog):
         self._probe_runner.finished.connect(self._on_probe_finished)
         self._model_runner.finished.connect(self._on_models_discovered)
         self._tree.setCurrentItem(self._tree.topLevelItem(0))
+        self._settings_baseline = self._settings_snapshot()
+        self._watch_settings_changes()
+        self._refresh_dirty_state()
 
     def _build_ui(self):
         root = QHBoxLayout(self)
@@ -421,6 +425,9 @@ class SettingsWindow(QDialog):
         footer_layout.setContentsMargins(0, 12, 0, 14)
         btn_row = QHBoxLayout()
         btn_row.setSpacing(8)
+        self._dirty_label = QLabel()
+        self._dirty_label.setStyleSheet("color: #b45309; font-size: 12px; font-weight: 600;")
+        footer_layout.addWidget(self._dirty_label)
         btn_row.addStretch()
         for text, slot, pri in [
             ("应用", self._on_apply, False),
@@ -445,6 +452,46 @@ class SettingsWindow(QDialog):
         footer_layout.addLayout(btn_row)
         layout.addWidget(footer)
         return right
+
+    def _watch_settings_changes(self) -> None:
+        """Track edits centrally so closing a long configuration form is safe."""
+        for field in self._stack.findChildren(QLineEdit):
+            field.textChanged.connect(self._refresh_dirty_state)
+        for field in self._stack.findChildren(QTextEdit):
+            field.textChanged.connect(self._refresh_dirty_state)
+        for field in self._stack.findChildren(QCheckBox):
+            field.stateChanged.connect(self._refresh_dirty_state)
+        for field in self._stack.findChildren(QComboBox):
+            field.currentIndexChanged.connect(self._refresh_dirty_state)
+        for field in self._stack.findChildren(QSpinBox):
+            field.valueChanged.connect(self._refresh_dirty_state)
+        for field in self._stack.findChildren(QSlider):
+            field.valueChanged.connect(self._refresh_dirty_state)
+
+    def _settings_snapshot(self) -> str:
+        prompts = {
+            "system": self._system_prompt.toPlainText() if hasattr(self, "_system_prompt") else "",
+            "format": self._format_prompt.toPlainText() if hasattr(self, "_format_prompt") else "",
+        }
+        return json.dumps({"settings": self._collect_settings(), "prompts": prompts},
+                          ensure_ascii=False, sort_keys=True)
+
+    def _has_unsaved_changes(self) -> bool:
+        return bool(self._settings_baseline and self._settings_snapshot() != self._settings_baseline)
+
+    def _refresh_dirty_state(self, *_args) -> None:
+        if hasattr(self, "_dirty_label"):
+            self._dirty_label.setText("有未保存的更改" if self._has_unsaved_changes() else "")
+
+    def reject(self) -> None:
+        if self._has_unsaved_changes():
+            answer = QMessageBox.question(
+                self, "放弃未保存的更改？", "当前页面有未保存的设置，确定放弃吗？",
+                QMessageBox.Discard | QMessageBox.Cancel, QMessageBox.Cancel,
+            )
+            if answer != QMessageBox.Discard:
+                return
+        super().reject()
 
     def _switch_page(self, key):
         """QStackedWidget 切换页面 — 旧页面自动隐藏，新页面自动显示"""
@@ -1499,12 +1546,15 @@ class SettingsWindow(QDialog):
 
     def _on_apply(self):
         v = self._collect_settings()
-        self._save_character_prompt()
         applied, error = apply_settings(self.config, v)
         if error:
             QMessageBox.warning(self, "API Key 无效", error)
-            return
+            return False
+        self._save_character_prompt()
         self.apply_clicked.emit(applied)
+        self._settings_baseline = self._settings_snapshot()
+        self._refresh_dirty_state()
+        return True
 
     def _character_config_path(self) -> Path:
         return self._base_dir / "characters" / self._current_char / "config.json"
@@ -1531,5 +1581,5 @@ class SettingsWindow(QDialog):
         self.scale_changed.emit(v / 100.0)
 
     def _on_ok(self):
-        self._on_apply()
-        self.accept()
+        if self._on_apply():
+            self.accept()

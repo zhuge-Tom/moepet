@@ -374,6 +374,23 @@ def test_settings_window_marks_local_chat_service_ready(qapp, tmp_path):
     assert window._ai_status_card.badge.text() == "已就绪"
 
 
+def test_settings_window_tracks_unsaved_form_changes(qapp, tmp_path):
+    from ui.settings_window import SettingsWindow
+    window = SettingsWindow(Config(tmp_path / "config.json"), ["noir"], "noir", tmp_path)
+    assert not window._has_unsaved_changes()
+    window._ai_model.setText("changed-model")
+    assert window._has_unsaved_changes()
+    assert window._dirty_label.text() == "有未保存的更改"
+
+
+def test_settings_window_only_accepts_after_successful_apply(qapp, tmp_path, monkeypatch):
+    from ui.settings_window import SettingsWindow
+    window = SettingsWindow(Config(tmp_path / "config.json"), ["noir"], "noir", tmp_path)
+    monkeypatch.setattr(window, "_on_apply", lambda: False)
+    window._on_ok()
+    assert window.result() == 0
+
+
 def test_stream_finish_replaces_unprocessed_display(qapp):
     from ui.dialog_window import DialogWindow
     window = DialogWindow("Test")
