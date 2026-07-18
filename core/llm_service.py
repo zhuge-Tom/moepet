@@ -27,11 +27,26 @@ class LLMService(QObject):
         self._streaming = False
         self._turn_context = ""
 
-    def configure(self, base_url: str, api_key: str, model: str):
+    def configure(self, base_url: str, api_key: str, model: str,
+                  post_processing: str = "", ignore_format_error: bool = True):
         """设置 API 参数"""
         self._base_url = base_url.rstrip("/")
         self._api_key = api_key
         self._model = model
+        self._post_processing = post_processing.strip()
+        self._ignore_format_error = bool(ignore_format_error)
+
+    def _clean_response(self, text: str) -> str:
+        """Remove model markup and an optional user-configured pattern."""
+        text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
+        if not self._post_processing:
+            return text
+        try:
+            return re.sub(self._post_processing, "", text, flags=re.DOTALL).strip()
+        except re.error as exc:
+            if self._ignore_format_error:
+                return text
+            raise ValueError(f"回复后处理正则无效：{exc}") from exc
 
     def set_system_prompt(self, prompt: str):
         """设置系统提示词（保留在消息列表最前面）"""
@@ -170,7 +185,12 @@ class LLMService(QObject):
 
         full_text = getattr(self, "_buffer_out", "")
         # 清理 think 标签等模型杂项
-        full_text = re.sub(r"<think>.*?</think>", "", full_text, flags=re.DOTALL).strip()
+        try:
+            full_text = self._clean_response(full_text)
+        except ValueError as exc:
+            self.error_occurred.emit(str(exc))
+            reply.deleteLater()
+            return
         self._buffer_out = ""
 
         if full_text:
@@ -196,7 +216,12 @@ class LLMService(QObject):
             choices = data.get("choices", [])
             if choices:
                 content = choices[0].get("message", {}).get("content", "")
-                content = re.sub(r"<think>.*?</think>", "", content, flags=re.DOTALL).strip()
+                try:
+                    content = self._clean_response(content)
+                except ValueError as exc:
+                    self.error_occurred.emit(str(exc))
+                    reply.deleteLater()
+                    return
                 if content:
                     self.add_assistant_message(content)
                     self.response_finished.emit(content)

@@ -85,6 +85,8 @@ class PetManager:
             base_url=self.config.get("llm", "base_url", default=""),
             api_key=self.config.get_secret("llm") or self.config.get("llm", "api_key", default=""),
             model=self.config.get("llm", "model", default=""),
+            post_processing=self.config.get("llm", "post_processing", default=""),
+            ignore_format_error=self.config.get("llm", "ignore_format_error", default=True),
         )
         char = self._char_data.get(self.config.current_character)
         prompt_config = char.character_prompt if char else {}
@@ -516,7 +518,11 @@ class PetManager:
         if self._dialog and mode == "manual":
             self._dialog.display_text("正在读取当前屏幕...", "assistant")
         if self._vision_is_ready() and (mode == "observation" or self.config.get("screen_capture", "cloud_first", default=True)):
-            self._vision.describe(path, self.config.get("vision", "base_url"), self.config.get_secret("vision"), self.config.get("vision", "model"), "")
+            self._vision.describe(
+                path, self.config.get("vision", "base_url"),
+                self.config.get_secret("vision") or self.config.get("vision", "api_key", default=""),
+                self.config.get("vision", "model"), "",
+            )
         else:
             self._ocr.recognize(path)
 

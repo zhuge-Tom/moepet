@@ -212,3 +212,16 @@ def test_settings_persistence_preserves_existing_provider_secret(tmp_path, monke
     assert error is None
     assert payload["asr"]["api_key"] == "stored-key"
     assert config.get("asr", "api_key") == "stored-key"
+
+
+def test_llm_post_processing_can_be_strict_or_tolerant():
+    from core.llm_service import LLMService
+    service = LLMService()
+    service.configure("https://example.test", "key", "model", r"<meta>.*?</meta>")
+    assert service._clean_response("ok<meta>hidden</meta>") == "ok"
+    service.configure("https://example.test", "key", "model", "[", ignore_format_error=True)
+    assert service._clean_response("keep this") == "keep this"
+    service.configure("https://example.test", "key", "model", "[", ignore_format_error=False)
+    import pytest
+    with pytest.raises(ValueError):
+        service._clean_response("must fail")
