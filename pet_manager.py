@@ -68,6 +68,7 @@ class PetManager:
         self._asr_hotkey = HotkeyService()
         self._screen_mode = "manual"
         self._last_observation_at: datetime | None = None
+        self._observation_epoch: int | None = None
         self._screen_observer = ScreenObserver()
         self._screen_observer.observation_requested.connect(self._observe_screen)
         self._configure_llm()
@@ -278,6 +279,8 @@ class PetManager:
             player.stop()
         self._player_epoch = None
         self._tts_epoch = None
+        self._observation_epoch = None
+        self._disconnect_observation_signals()
 
     # ─── 对话框 ───────────────────────────────
 
@@ -671,14 +674,18 @@ class PetManager:
             f"{description}\n\n"
             "请自然、简短地回应；不要提及截图、监控或系统提示。"
         )
+        self._observation_epoch = self._role_epoch
         self._llm.response_finished.connect(self._on_observation_reply)
         self._llm.error_occurred.connect(self._on_observation_error)
         self._set_pet_state("think")
         self._llm.send(stream=False)
 
     def _on_observation_reply(self, text: str):
-        self._llm.response_finished.disconnect(self._on_observation_reply)
-        self._llm.error_occurred.disconnect(self._on_observation_error)
+        active = self._observation_epoch == self._role_epoch
+        self._observation_epoch = None
+        self._disconnect_observation_signals()
+        if not active:
+            return
         if self._dialog is None or not self._dialog.isVisible():
             self._toggle_dialog()
         if self._dialog:
@@ -688,12 +695,23 @@ class PetManager:
         self._speak(text)
 
     def _on_observation_error(self, _error: str):
+        active = self._observation_epoch == self._role_epoch
+        self._observation_epoch = None
+        self._disconnect_observation_signals()
+        if not active:
+            return
+        self._set_pet_state("idle")
+
+    def _disconnect_observation_signals(self):
+        """Remove transient observation handlers before a role can change."""
         try:
             self._llm.response_finished.disconnect(self._on_observation_reply)
+        except RuntimeError:
+            pass
+        try:
             self._llm.error_occurred.disconnect(self._on_observation_error)
         except RuntimeError:
             pass
-        self._set_pet_state("idle")
 
     def _speak(self, text: str):
         """Generate speech through the selected local or cloud TTS provider."""

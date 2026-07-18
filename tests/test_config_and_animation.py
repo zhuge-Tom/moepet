@@ -294,6 +294,19 @@ def test_screen_request_cleanup_resets_transient_state(tmp_path):
     assert manager._screen_request_active is False
 
 
+def test_stale_observation_reply_is_ignored_after_role_change():
+    manager = type("Manager", (), {})()
+    manager._observation_epoch = 1
+    manager._role_epoch = 2
+    manager._dialog = type("Dialog", (), {"isVisible": lambda self: True})()
+    manager._disconnect_observation_signals = lambda: None
+    manager._save_chat_history = lambda: (_ for _ in ()).throw(AssertionError("stale reply saved"))
+    manager._set_pet_state = lambda _state: (_ for _ in ()).throw(AssertionError("stale state changed"))
+    manager._speak = lambda _text: (_ for _ in ()).throw(AssertionError("stale reply spoken"))
+    PetManager._on_observation_reply(manager, "old role reply")
+    assert manager._observation_epoch is None
+
+
 def test_cloud_vision_readiness_requires_upload_consent(tmp_path):
     from ui.settings.service_status import vision_connection_ready
     assert not vision_connection_ready("https://vision.example/v1", "vision-model", False)
