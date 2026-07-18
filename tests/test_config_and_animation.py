@@ -269,3 +269,18 @@ def test_cloud_vision_readiness_requires_upload_consent(tmp_path):
     assert not vision_connection_ready("https://vision.example/v1", "vision-model", False)
     assert vision_connection_ready("https://vision.example/v1", "vision-model", True)
     assert vision_connection_ready("http://localhost:11434/v1", "llava", False)
+
+
+def test_independent_settings_pages_build_without_window():
+    from ui.settings.pages import make_about_page, make_character_parent_page
+    assert make_about_page().layout() is not None
+    assert make_character_parent_page().layout() is not None
+
+
+def test_stream_finish_replaces_unprocessed_display(qapp):
+    from ui.dialog_window import DialogWindow
+    window = DialogWindow("Test")
+    window.start_stream()
+    window.append_stream("visible<think>hidden</think>")
+    window.finish_stream("visible")
+    assert window._text_display.toPlainText() == "visible"

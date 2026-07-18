@@ -148,6 +148,10 @@ class DialogWindow(QDialog):
         self._is_streaming = False
         text = full_text or self._stream_buffer
         if text:
+            # The service may remove model markup after the last stream chunk.
+            # Replace the provisional display so UI, history, and TTS agree.
+            if full_text and full_text != self._stream_buffer:
+                self._text_display.setPlainText(full_text)
             self._history.append({"role": "assistant", "text": text})
 
     def _type_next_char(self):

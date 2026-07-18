@@ -30,6 +30,7 @@ from ui.settings.service_status import (
     vision_ready,
 )
 from ui.settings.persistence import apply_settings, save_character_prompt
+from ui.settings.pages import make_about_page, make_character_parent_page
 
 from core.config import Config
 
@@ -363,7 +364,7 @@ class SettingsWindow(QDialog):
         self._pages = {}
         page_builders = [
             ("general", self._page_general),
-            ("character", self._page_character_parent),
+            ("character", make_character_parent_page),
             ("character_api", self._page_character_api),
             ("character_sprites", self._page_character_sprites),
             ("character_knowledge", self._page_character_knowledge),
@@ -372,7 +373,7 @@ class SettingsWindow(QDialog):
             ("asr", self._page_asr),
             ("screen", self._page_screen),
             ("vision", self._page_vision),
-            ("about", self._page_about),
+            ("about", make_about_page),
         ]
         for key, builder in page_builders:
             page_widget = builder()
