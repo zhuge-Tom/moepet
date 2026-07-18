@@ -301,6 +301,19 @@ def test_cloud_vision_readiness_requires_upload_consent(tmp_path):
     assert vision_connection_ready("http://localhost:11434/v1", "llava", False)
 
 
+def test_observation_requires_both_chat_and_vision_services(tmp_path):
+    from ui.settings.service_status import observation_ready
+    config = Config(tmp_path / "config.json")
+    config.set("screen_capture", "auto_observe", True)
+    config.set("vision", "enabled", True)
+    config.set("vision", "base_url", "http://localhost:11434/v1")
+    config.set("vision", "model", "llava")
+    assert not observation_ready(config)
+    config.set("llm", "base_url", "http://localhost:11434/v1")
+    config.set("llm", "model", "qwen3")
+    assert observation_ready(config)
+
+
 def test_local_compatible_services_are_ready_without_api_keys(tmp_path):
     from ui.settings.service_status import asr_ready, llm_ready, tts_ready
     config = Config(tmp_path / "config.json")

@@ -62,4 +62,8 @@ def vision_connection_ready(base_url: str, model: str, allow_cloud: bool,
 
 
 def observation_ready(config) -> bool:
-    return bool(config.get("screen_capture", "auto_observe", default=False) and vision_ready(config))
+    return bool(
+        config.get("screen_capture", "auto_observe", default=False)
+        and vision_ready(config)
+        and llm_ready(config)
+    )

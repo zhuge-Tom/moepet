@@ -548,7 +548,7 @@ class PetManager:
 
     def _configure_screen_observer(self):
         screen = self.config.get("screen_capture", default={})
-        enabled = bool(screen.get("auto_observe", False)) and self._vision_is_ready()
+        enabled = bool(screen.get("auto_observe", False)) and self._vision_is_ready() and not self._needs_initial_setup()
         self._screen_observer.configure(
             enabled,
             screen.get("observe_min_interval", 300),
@@ -562,7 +562,7 @@ class PetManager:
         if self._last_observation_at and datetime.now() - self._last_observation_at < timedelta(seconds=cooldown):
             self._screen_observer.schedule_next()
             return
-        if not self._llm.is_busy() and self._vision_is_ready():
+        if not self._llm.is_busy() and self._vision_is_ready() and not self._needs_initial_setup():
             self._capture_screen(mode="observation")
         else:
             self._screen_observer.schedule_next()
@@ -792,14 +792,14 @@ class PetManager:
 
     def _set_screen_observation(self, enabled: bool):
         """Toggle the consented watcher from the tray without bypassing policy."""
-        if enabled and not self._vision_is_ready():
+        if enabled and (not self._vision_is_ready() or self._needs_initial_setup()):
             if self._tray:
                 self._tray.set_observation_enabled(False)
             if self._dialog is None or not self._dialog.isVisible():
                 self._toggle_dialog()
             if self._dialog:
                 self._dialog.display_text(
-                    "请先在图像理解页配置可用视觉服务，并确认云端上传授权。", "assistant")
+                    "请先配置可用的聊天模型和图像理解服务，并确认云端上传授权。", "assistant")
             return
         self.config.set("screen_capture", "auto_observe", enabled)
         self.config.save()
