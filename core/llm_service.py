@@ -8,6 +8,7 @@ import json
 import re
 from PySide6.QtCore import QObject, Signal, QByteArray, QUrl
 from PySide6.QtNetwork import QNetworkAccessManager, QNetworkRequest, QNetworkReply
+from core.openai_compat import chat_completions_url
 
 
 class LLMService(QObject):
@@ -105,9 +106,7 @@ class LLMService(QObject):
             self.error_occurred.emit("请先在设置中配置 API 地址和密钥")
             return
 
-        url = self._base_url
-        if "/chat/completions" not in url and "/responses" not in url:
-            url = url + "/chat/completions"
+        url = chat_completions_url(self._base_url)
 
         messages = [
             {"role": item["role"], "content": item["content"]}

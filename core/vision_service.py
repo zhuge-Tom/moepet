@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 from urllib.request import Request, urlopen
 from core.workers import BackgroundService
+from core.openai_compat import bearer_headers, chat_completions_url
 
 
 class VisionService(BackgroundService):
@@ -17,7 +18,9 @@ class VisionService(BackgroundService):
                 {"type": "text", "text": f"描述这张截图。OCR 文本：{ocr_text}"},
                 {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{encoded}"}},
             ]}]}
-            request = Request(base_url.rstrip("/") + "/chat/completions", data=json.dumps(body).encode(), headers={"Content-Type": "application/json", "Authorization": f"Bearer {api_key}"})
+            headers = {"Content-Type": "application/json", **bearer_headers(api_key)}
+            request = Request(
+                chat_completions_url(base_url), data=json.dumps(body).encode(), headers=headers)
             with urlopen(request, timeout=90) as response:
                 return json.loads(response.read())["choices"][0]["message"]["content"]
         return self.run(work)
