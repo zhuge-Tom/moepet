@@ -305,6 +305,12 @@ def test_voice_page_factories_switch_provider_rows(qapp, tmp_path):
     assert not window._asr_rows["asr_api_url"].isHidden()
 
 
+def test_ai_page_factory_exposes_connection_and_format_controls(qapp, tmp_path):
+    from ui.settings.pages import make_ai_page
+    _, fields = make_ai_page(Config(tmp_path / "config.json"))
+    assert {"ai_url", "ai_key", "ai_model", "ai_post", "ai_test_button"}.issubset(fields)
+
+
 def test_stream_finish_replaces_unprocessed_display(qapp):
     from ui.dialog_window import DialogWindow
     window = DialogWindow("Test")

@@ -33,7 +33,7 @@ from ui.settings.service_status import (
 from ui.settings.persistence import apply_settings, save_character_prompt
 from ui.settings.pages import (
     make_about_page, make_asr_page, make_character_parent_page, make_screen_page,
-    make_tts_page, make_vision_page,
+    make_tts_page, make_vision_page, make_ai_page,
 )
 
 from core.config import Config
@@ -372,7 +372,7 @@ class SettingsWindow(QDialog):
             ("character_api", self._page_character_api),
             ("character_sprites", self._page_character_sprites),
             ("character_knowledge", self._page_character_knowledge),
-            ("ai", self._page_ai),
+            ("ai", self._build_ai_page),
             ("tts", self._build_tts_page),
             ("asr", self._build_asr_page),
             ("screen", self._build_screen_page),
@@ -682,6 +682,16 @@ class SettingsWindow(QDialog):
                       self._asr_api_model):
             field.textChanged.connect(self._refresh_service_status_cards)
         self._sync_asr_provider_fields()
+        return page
+
+    def _build_ai_page(self):
+        page, fields = make_ai_page(self.config)
+        for name, widget in fields.items():
+            setattr(self, f"_{name}", widget)
+        self._ai_test_button.clicked.connect(self._test_connection)
+        for field in (self._ai_url, self._ai_key, self._ai_model):
+            field.textChanged.connect(self._refresh_service_status_cards)
+        self._refresh_service_status_cards()
         return page
 
     def _ph(self, layout, text):

@@ -187,6 +187,50 @@ def make_asr_page(config, add_probe) -> tuple[QWidget, dict[str, QWidget], dict[
     return page, fields, {**local_rows, **cloud_rows}
 
 
+def make_ai_page(config) -> tuple[QWidget, dict[str, QWidget]]:
+    page, layout = _page_layout()
+    card = ServiceStatusCard("对话模型", "用于角色对话与主动观察后的自然回应。")
+    layout.addWidget(card)
+    _section(layout, "OpenAI 兼容 API")
+    url = _line_edit("https://api.deepseek.com/v1")
+    url.setText(config.get("llm", "base_url", default=""))
+    _row(layout, "Base URL", url)
+    key = _line_edit("sk-xxxx", password=True)
+    key.setText(config.get_secret("llm") or config.get("llm", "api_key", default=""))
+    _row(layout, "API Key", key)
+    model = _line_edit("deepseek-chat / gpt-4o-mini / ...")
+    model.setText(config.get("llm", "model", default=""))
+    _row(layout, "模型", model)
+    _hint(layout, "支持 DeepSeek、OpenAI、Ollama 等兼容 Chat Completions 的服务。")
+
+    _section(layout, "高级设置")
+    stream = QCheckBox("启用流式输出（逐字显示）")
+    stream.setChecked(config.get("llm", "stream", default=True))
+    layout.addWidget(stream)
+    post_processing = _line_edit("例如 <think>.*?</think>")
+    post_processing.setText(config.get("llm", "post_processing", default=""))
+    _row(layout, "回复后处理（正则）", post_processing)
+    ignore_format_error = QCheckBox("忽略格式错误")
+    ignore_format_error.setChecked(config.get("llm", "ignore_format_error", default=True))
+    layout.addWidget(ignore_format_error)
+
+    test_button = QPushButton("测试连接")
+    test_button.setFixedHeight(32)
+    test_button.setStyleSheet(
+        "QPushButton { background: #3498db; color: #fff; border: none; border-radius: 7px; padding: 7px 22px; }"
+        "QPushButton:hover { background: #2980b9; }")
+    layout.addWidget(test_button)
+    status = QLabel("")
+    status.setWordWrap(True)
+    status.setStyleSheet("font-size: 12px; padding: 4px;")
+    layout.addWidget(status)
+    layout.addStretch()
+    return page, {"ai_status_card": card, "ai_url": url, "ai_key": key, "ai_model": model,
+                  "ai_stream_cb": stream, "ai_post": post_processing,
+                  "ai_ignore_err_cb": ignore_format_error, "ai_test_button": test_button,
+                  "test_status": status}
+
+
 def make_screen_page(config, add_probe) -> tuple[QWidget, dict[str, QWidget]]:
     page, layout = _page_layout()
     _hint(layout, "手动识别仅在快捷键或聊天明确请求时截图；主动观察需要单独授权。")
