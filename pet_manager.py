@@ -572,6 +572,7 @@ class PetManager:
                 path, self.config.get("vision", "base_url"),
                 self.config.get_secret("vision") or self.config.get("vision", "api_key", default=""),
                 self.config.get("vision", "model"), "",
+                self.config.get("screen_capture", "vision_max_dimension", default=1280),
             )
         else:
             started = self._ocr.recognize(path)

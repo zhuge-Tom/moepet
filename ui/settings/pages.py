@@ -11,6 +11,9 @@ from PySide6.QtWidgets import (
 )
 
 from ui.settings_components import ServiceStatusCard
+from ui.settings.provider_presets import (
+    CHAT_PRESETS, VISION_PRESETS, preset_key_for_url,
+)
 from ui.settings.service_status import vision_ready
 
 
@@ -91,6 +94,15 @@ def _model_discovery_controls(layout: QVBoxLayout) -> tuple[QPushButton, QComboB
     picker.setVisible(False)
     layout.addWidget(picker)
     return button, picker, status
+
+
+def _provider_preset(layout: QVBoxLayout, base_url: str, presets) -> QComboBox:
+    preset = QComboBox()
+    for item in presets:
+        preset.addItem(item.label, item.key)
+    preset.setCurrentIndex(max(preset.findData(preset_key_for_url(base_url, presets)), 0))
+    _row(layout, "服务预设", preset)
+    return preset
 
 
 def make_tts_page(config, add_probe) -> tuple[QWidget, dict[str, QWidget], dict[str, QWidget]]:
@@ -220,6 +232,7 @@ def make_ai_page(config) -> tuple[QWidget, dict[str, QWidget]]:
     _section(layout, "OpenAI 兼容 API")
     url = _line_edit("https://api.deepseek.com/v1")
     url.setText(config.get("llm", "base_url", default=""))
+    preset = _provider_preset(layout, url.text(), CHAT_PRESETS)
     _row(layout, "Base URL", url)
     key = _line_edit("sk-xxxx", password=True)
     key.setText(config.get_secret("llm") or config.get("llm", "api_key", default=""))
@@ -256,7 +269,8 @@ def make_ai_page(config) -> tuple[QWidget, dict[str, QWidget]]:
                   "ai_stream_cb": stream, "ai_post": post_processing,
                   "ai_ignore_err_cb": ignore_format_error, "ai_test_button": test_button,
                   "test_status": status, "ai_discover_button": discover_button,
-                  "ai_model_picker": discover_picker, "ai_discover_status": discover_status}
+                  "ai_model_picker": discover_picker, "ai_discover_status": discover_status,
+                  "ai_provider_preset": preset}
 
 
 def make_screen_page(config, add_probe) -> tuple[QWidget, dict[str, QWidget]]:
@@ -292,6 +306,14 @@ def make_screen_page(config, add_probe) -> tuple[QWidget, dict[str, QWidget]]:
         spin.setValue(max(1, int(config.get("screen_capture", setting, default=default)) // 60))
         _row(layout, title, spin)
         fields[name] = spin
+    vision_size = QSpinBox()
+    vision_size.setRange(480, 3840)
+    vision_size.setSingleStep(160)
+    vision_size.setSuffix(" px")
+    vision_size.setValue(int(config.get("screen_capture", "vision_max_dimension", default=1280)))
+    _row(layout, "发送给视觉模型的最大边长", vision_size)
+    fields["screen_vision_max_dimension"] = vision_size
+    _hint(layout, "只影响发给图像理解服务的副本；原始截图仍用于本地 OCR。较小尺寸可减少延迟与云端图像消耗。")
     _hint(layout, "主动观察默认关闭；需要图像理解可用，云端服务还需确认上传授权。")
     add_probe(layout, "ocr", "测试本地 OCR")
     layout.addStretch()
@@ -309,6 +331,7 @@ def make_vision_page(config, add_probe) -> tuple[QWidget, dict[str, QWidget]]:
     layout.addWidget(enabled)
     url = _line_edit("本地 Ollama 或云端 OpenAI 兼容地址")
     url.setText(config.get("vision", "base_url", default=""))
+    preset = _provider_preset(layout, url.text(), VISION_PRESETS)
     _row(layout, "Base URL", url)
     model = _line_edit("视觉模型名称")
     model.setText(config.get("vision", "model", default=""))
@@ -328,7 +351,8 @@ def make_vision_page(config, add_probe) -> tuple[QWidget, dict[str, QWidget]]:
                   "vision_model": model, "vision_key": key, "vision_allow_cloud": allow_cloud,
                   "vision_discover_button": discover_button,
                   "vision_model_picker": discover_picker,
-                  "vision_discover_status": discover_status}
+                  "vision_discover_status": discover_status,
+                  "vision_provider_preset": preset}
 
 
 def make_about_page() -> QWidget:

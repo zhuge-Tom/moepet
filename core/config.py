@@ -52,6 +52,9 @@ DEFAULTS = {
         # Active observation is deliberately opt-in. Values are seconds.
         "auto_observe": False, "observe_min_interval": 300,
         "observe_max_interval": 900, "observe_cooldown": 600,
+        # Upper bound for images sent to an optional vision provider.
+        # OCR keeps the original capture for best text recognition.
+        "vision_max_dimension": 1280,
     },
     "vision": {
         "enabled": False, "base_url": "", "api_key": "", "model": "",

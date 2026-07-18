@@ -35,6 +35,9 @@ from ui.settings.pages import (
     make_about_page, make_asr_page, make_character_parent_page, make_screen_page,
     make_tts_page, make_vision_page, make_ai_page,
 )
+from ui.settings.provider_presets import (
+    CHAT_PRESETS, VISION_PRESETS, preset_by_key, preset_key_for_url,
+)
 
 from core.config import Config
 
@@ -593,6 +596,21 @@ class SettingsWindow(QDialog):
             provider = getattr(self, f"_{key}_provider")
             picker.setVisible(provider.currentData() == "cloud")
 
+    def _apply_provider_preset(self, preset_key: str, presets, url_field, model_field) -> None:
+        """Fill known endpoints as a shortcut; custom values stay fully editable."""
+        preset = preset_by_key(preset_key, presets)
+        if preset.key == "custom":
+            return
+        url_field.setText(preset.base_url)
+        if not model_field.text().strip() or preset_key != "custom":
+            model_field.setText(preset.default_model)
+
+    def _sync_preset_from_url(self, base_url: str, preset_box, presets) -> None:
+        target = preset_box.findData(preset_key_for_url(base_url, presets))
+        preset_box.blockSignals(True)
+        preset_box.setCurrentIndex(max(target, 0))
+        preset_box.blockSignals(False)
+
     def _prepare_asr_probe(self):
         provider = self._asr_provider.currentData()
         model_path = self._asr_model.text().strip()
@@ -663,6 +681,13 @@ class SettingsWindow(QDialog):
                 self._vision_model_picker, self._vision_discover_status))
         self._vision_model_picker.activated.connect(
             lambda _index: self._vision_model.setText(self._vision_model_picker.currentText()))
+        self._vision_provider_preset.currentIndexChanged.connect(
+            lambda _index: self._apply_provider_preset(
+                self._vision_provider_preset.currentData(), VISION_PRESETS,
+                self._vision_url, self._vision_model))
+        self._vision_url.textEdited.connect(
+            lambda text: self._sync_preset_from_url(
+                text, self._vision_provider_preset, VISION_PRESETS))
         self._vision_enabled.stateChanged.connect(self._refresh_service_status_cards)
         self._vision_allow_cloud.stateChanged.connect(self._refresh_service_status_cards)
         for field in (self._vision_url, self._vision_model, self._vision_key):
@@ -736,6 +761,13 @@ class SettingsWindow(QDialog):
                 self._ai_model_picker, self._ai_discover_status))
         self._ai_model_picker.activated.connect(
             lambda _index: self._ai_model.setText(self._ai_model_picker.currentText()))
+        self._ai_provider_preset.currentIndexChanged.connect(
+            lambda _index: self._apply_provider_preset(
+                self._ai_provider_preset.currentData(), CHAT_PRESETS,
+                self._ai_url, self._ai_model))
+        self._ai_url.textEdited.connect(
+            lambda text: self._sync_preset_from_url(
+                text, self._ai_provider_preset, CHAT_PRESETS))
         for field in (self._ai_url, self._ai_key, self._ai_model):
             field.textChanged.connect(self._refresh_service_status_cards)
         self._refresh_service_status_cards()
@@ -1442,7 +1474,8 @@ class SettingsWindow(QDialog):
                                "auto_observe": safe(getattr(self, "_screen_auto_observe", None)).isChecked() if safe(getattr(self, "_screen_auto_observe", None)) else False,
                                "observe_min_interval": (safe(getattr(self, "_screen_observe_min", None)).value() if safe(getattr(self, "_screen_observe_min", None)) else 5) * 60,
                                "observe_max_interval": (safe(getattr(self, "_screen_observe_max", None)).value() if safe(getattr(self, "_screen_observe_max", None)) else 15) * 60,
-                               "observe_cooldown": (safe(getattr(self, "_screen_observe_cooldown", None)).value() if safe(getattr(self, "_screen_observe_cooldown", None)) else 10) * 60}
+                               "observe_cooldown": (safe(getattr(self, "_screen_observe_cooldown", None)).value() if safe(getattr(self, "_screen_observe_cooldown", None)) else 10) * 60,
+                               "vision_max_dimension": safe(getattr(self, "_screen_vision_max_dimension", None)).value() if safe(getattr(self, "_screen_vision_max_dimension", None)) else 1280}
         s["vision"] = {"enabled": safe(getattr(self, "_vision_enabled", None)).isChecked() if safe(getattr(self, "_vision_enabled", None)) else False,
                        "base_url": safe(getattr(self, "_vision_url", None)).text().strip() if safe(getattr(self, "_vision_url", None)) else "",
                        "model": safe(getattr(self, "_vision_model", None)).text().strip() if safe(getattr(self, "_vision_model", None)) else "",

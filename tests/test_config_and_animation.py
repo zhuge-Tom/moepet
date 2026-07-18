@@ -68,6 +68,7 @@ def test_config_has_multimodal_defaults(tmp_path):
     assert config.get("screen_capture", "keep_captures") is False
     assert config.get("screen_capture", "auto_observe") is False
     assert config.get("screen_capture", "observe_min_interval") == 300
+    assert config.get("screen_capture", "vision_max_dimension") == 1280
 
 
 def test_cloud_asr_endpoint_is_completed(tmp_path):
@@ -319,7 +320,7 @@ def test_screen_and_vision_page_factories_expose_form_fields(qapp, tmp_path):
     config = Config(tmp_path / "config.json")
     _, screen = make_screen_page(config, lambda _layout, _key, _text: None)
     _, vision = make_vision_page(config, lambda _layout, _key, _text: None)
-    assert {"screen_hotkey", "screen_auto_observe"}.issubset(screen)
+    assert {"screen_hotkey", "screen_auto_observe", "screen_vision_max_dimension"}.issubset(screen)
     assert {"vision_url", "vision_allow_cloud"}.issubset(vision)
 
 
@@ -343,7 +344,23 @@ def test_voice_page_factories_switch_provider_rows(qapp, tmp_path):
 def test_ai_page_factory_exposes_connection_and_format_controls(qapp, tmp_path):
     from ui.settings.pages import make_ai_page
     _, fields = make_ai_page(Config(tmp_path / "config.json"))
-    assert {"ai_url", "ai_key", "ai_model", "ai_post", "ai_test_button"}.issubset(fields)
+    assert {"ai_url", "ai_key", "ai_model", "ai_post", "ai_test_button", "ai_provider_preset"}.issubset(fields)
+
+
+def test_provider_presets_recognize_known_and_custom_endpoints():
+    from ui.settings.provider_presets import CHAT_PRESETS, preset_by_key, preset_key_for_url
+    assert preset_key_for_url("http://localhost:11434/v1/", CHAT_PRESETS) == "ollama"
+    assert preset_key_for_url("https://example.test/v1", CHAT_PRESETS) == "custom"
+    assert preset_by_key("deepseek", CHAT_PRESETS).default_model == "deepseek-chat"
+
+
+def test_settings_window_applies_chat_provider_preset(qapp, tmp_path):
+    from ui.settings_window import SettingsWindow
+    config = Config(tmp_path / "config.json")
+    window = SettingsWindow(config, ["noir"], "noir", tmp_path)
+    window._ai_provider_preset.setCurrentIndex(window._ai_provider_preset.findData("ollama"))
+    assert window._ai_url.text() == "http://localhost:11434/v1"
+    assert window._ai_model.text() == "qwen3:8b"
 
 
 def test_settings_window_marks_local_chat_service_ready(qapp, tmp_path):
@@ -401,3 +418,17 @@ def test_tray_observation_state_updates_without_signal(qapp):
     tray = TrayIcon("Test", observe_enabled=False)
     tray.set_observation_enabled(True)
     assert tray._observe_action.isChecked()
+
+
+def test_vision_payload_downsizes_image_when_requested(tmp_path):
+    pytest = __import__("pytest")
+    Image = pytest.importorskip("PIL.Image")
+    from core.vision_service import image_data_url_payload
+    import base64
+    from io import BytesIO
+    path = tmp_path / "large.png"
+    Image.new("RGB", (2400, 1200), "white").save(path)
+    payload, mime = image_data_url_payload(path, 800)
+    result = Image.open(BytesIO(base64.b64decode(payload)))
+    assert mime == "image/jpeg"
+    assert max(result.size) == 800
