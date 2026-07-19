@@ -110,7 +110,7 @@ Moepet 使用 OpenAI Chat Completions 格式。设置页填写 Base URL、模型
 }
 ```
 
-`interactions.head_touch` 中的图片只会在单击人物头部时随机出现，不会被普通对话表情或手动立绘轮播使用。Live2D 渲染器后续可复用相同的表情键名，不与静态立绘方案冲突。
+`interactions.head_touch` 中的图片只会在单击人物头部时随机出现，不会被普通对话表情或手动立绘轮播使用。点击身体不会随机切换表情；摸头反应结束后会自动回到默认待机立绘并继续眨眼。Live2D 渲染器后续可复用相同的表情键名，不与静态立绘方案冲突。
 
 每个角色是 `characters/` 下包含 `config.json` 的目录：
 

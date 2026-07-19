@@ -328,6 +328,8 @@ class PetWindow(QMainWindow):
         if not choices:
             return False
         self.set_sprite_by_name(random.choice(choices))
+        # A touch reaction is transient; return to the normal idle portrait
+        # so its regular blink cycle always resumes.
         self._idle_timer.start(2400)
         return True
 
@@ -452,9 +454,7 @@ class PetWindow(QMainWindow):
     def _handle_click_action(self) -> None:
         if self._is_head_point(self._click_pos) and self._show_head_touch_expression():
             return
-        if self._click_action == "switch_sprite":
-            self.next_sprite()
-        elif self._click_action == "bounce":
+        if self._click_action == "bounce":
             self.play_animation("bounce")
 
     def contextMenuEvent(self, event):

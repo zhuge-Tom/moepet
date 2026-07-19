@@ -374,6 +374,32 @@ def test_head_touch_hitbox_and_manual_cycle_exclude_special_sprites(qapp, tmp_pa
     assert window._current_sprite_name == "messy"
 
 
+def test_body_click_does_not_cycle_to_an_unrelated_expression(qapp, tmp_path):
+    from PySide6.QtGui import QPainter, QPixmap
+    from ui.pet_window import PetWindow
+
+    char_dir = tmp_path / "pet"
+    sprites = char_dir / "sprites"
+    sprites.mkdir(parents=True)
+    for name in ("angry", "neutral", "closed"):
+        pm = QPixmap(100, 200)
+        pm.fill(Qt.transparent)
+        painter = QPainter(pm)
+        painter.fillRect(20, 20, 60, 170, Qt.white)
+        painter.end()
+        pm.save(str(sprites / f"{name}.png"))
+    (char_dir / "config.json").write_text(json.dumps({
+        "name": "Pet",
+        "sprites": {"idle": "neutral.png"},
+        "blinks": {"neutral": "closed.png"},
+    }), encoding="utf-8")
+    window = PetWindow(CharacterLoader(tmp_path).load("pet"), scale_override=1.0)
+    window._click_pos = QPoint(50, 160)
+    window._handle_click_action()
+    assert window._current_sprite_name == "neutral"
+    assert window._blink_timer.isActive()
+
+
 def test_start_places_portrait_bottom_right_and_closes_dialog(tmp_path, monkeypatch):
     class Window:
         def __init__(self): self.moves = []
