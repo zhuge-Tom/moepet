@@ -2,7 +2,7 @@
 # 角色来源：星空列车与白的旅行
 #
 # 请将立绘 PNG 放入此目录：
-#   idle.png      - 待机表情
+#   neutral_gentle.png - 待机表情
 #   happy.png     - 开心表情
 #   blush.png     - 害羞表情
 #   surprised.png - 惊讶表情

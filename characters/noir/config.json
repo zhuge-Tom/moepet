@@ -4,10 +4,36 @@
   "source": "星空列车与白的旅行",
   "scale": 0.5,
   "sprites": {
-    "idle": "idle.png",
-    "happy": "happy.png",
-    "blush": "blush.png",
-    "surprised": "surprised.png"
+    "idle": "neutral_side.png",
+    "happy": "soft_smile.png",
+    "shy": "shy.png",
+    "surprised": "surprised_open.png",
+    "sad": "tearful.png",
+    "angry": "angry_annoyed.png",
+    "thinking": "thoughtful.png",
+    "concern": "worried.png",
+    "puzzled": "puzzled.png",
+    "embarrassed": "embarrassed.png",
+    "content": "content.png"
+  },
+  "blinks": {
+    "neutral_side": "thinking.png",
+    "soft_smile": "happy_smile.png",
+    "shy": "thinking.png",
+    "surprised_open": "thinking.png",
+    "thoughtful": "thinking.png",
+    "puzzled": "thinking.png",
+    "content": "thinking.png"
+  },
+  "interactions": {
+    "head_touch": [
+      "bashful.png",
+      "blush_soft.png",
+      "determined_soft.png",
+      "sleepy_closed.png",
+      "sad_wince.png",
+      "tearful_eyes.png"
+    ]
   },
   "voice": {
     "model": "gpt-sovits-v2proplus",

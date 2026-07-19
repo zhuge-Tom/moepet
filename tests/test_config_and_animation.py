@@ -31,6 +31,73 @@ def test_character_config_keeps_its_own_prompt(tmp_path):
     assert data.character_prompt["system_prompt"] == "pet-only"
 
 
+def test_expression_selector_prefers_the_reply_then_user_context():
+    from core.expression import select_expression
+
+    assert select_expression("太好了，我也很高兴。") == "happy"
+    assert select_expression("我想想看。", "今天好开心") == "thinking"
+    assert select_expression("我会陪着你。", "我今天很难过") == "sad"
+    assert select_expression("别勉强自己，休息一下。") == "concern"
+    assert select_expression("这件事有点奇怪。") == "puzzled"
+    assert select_expression("恭喜，一切都很顺利。") == "happy"
+
+
+def test_character_resolves_configured_expression_sprite(tmp_path):
+    char_dir = tmp_path / "pet"
+    char_dir.mkdir()
+    (char_dir / "config.json").write_text(json.dumps({
+        "name": "Pet", "sprites": {"idle": "idle.png", "happy": "smile.png"},
+    }), encoding="utf-8")
+    data = CharacterLoader(tmp_path).load("pet")
+    assert data.sprite_for_expression("happy") == "smile"
+    assert data.sprite_for_expression("missing") == "idle"
+
+
+def test_character_resolves_configured_blink_sprite(tmp_path):
+    char_dir = tmp_path / "pet"
+    char_dir.mkdir()
+    (char_dir / "config.json").write_text(json.dumps({
+        "name": "Pet", "blinks": {"idle": "idle_closed.png"},
+    }), encoding="utf-8")
+    data = CharacterLoader(tmp_path).load("pet")
+    assert data.blink_for_sprite("idle") == "idle_closed"
+    assert data.blink_for_sprite("happy") == ""
+
+
+def test_character_loads_head_touch_only_sprites(tmp_path):
+    char_dir = tmp_path / "pet"
+    char_dir.mkdir()
+    (char_dir / "config.json").write_text(json.dumps({
+        "name": "Pet",
+        "interactions": {"head_touch": ["messy.png", "flustered.png"]},
+    }), encoding="utf-8")
+    data = CharacterLoader(tmp_path).load("pet")
+    assert data.head_touch_sprite_names() == ["messy", "flustered"]
+
+
+def test_portraits_are_normalized_to_one_character_size_and_anchor(qapp):
+    from PySide6.QtGui import QPainter, QPixmap
+    from core.sprite_normalizer import common_layout, normalize_portrait, opaque_bounds
+
+    def portrait(width, height, rect):
+        pm = QPixmap(width, height)
+        pm.fill(Qt.transparent)
+        painter = QPainter(pm)
+        painter.fillRect(*rect, Qt.white)
+        painter.end()
+        return pm
+
+    regular = portrait(900, 1500, (100, 184, 743, 1271))
+    small_high = portrait(825, 1500, (96, 233, 668, 1144))
+    layout = common_layout([regular, regular, small_high])
+    outputs = [normalize_portrait(pm, layout) for pm in (regular, small_high)]
+    bounds = [opaque_bounds(pm) for pm in outputs]
+
+    assert all(pm.size() == outputs[0].size() for pm in outputs)
+    assert all(rect.height() == bounds[0].height() for rect in bounds)
+    assert all(rect.bottom() == bounds[0].bottom() for rect in bounds)
+
+
 def test_role_switch_saves_old_history_and_loads_new_history(tmp_path):
     class Window:
         def hide(self):
@@ -201,6 +268,56 @@ def test_frame_animation_and_single_png_fallback(tmp_path):
     assert data.animations["idle"].frame_ms == 100
 
 
+def test_single_frame_idle_state_starts_blinking(qapp, tmp_path):
+    from PySide6.QtGui import QPainter, QPixmap
+    from ui.pet_window import PetWindow
+
+    char_dir = tmp_path / "pet"
+    sprites = char_dir / "sprites"
+    sprites.mkdir(parents=True)
+    for name in ("idle", "closed"):
+        pm = QPixmap(100, 200)
+        pm.fill(Qt.transparent)
+        painter = QPainter(pm)
+        painter.fillRect(20, 20, 60, 170, Qt.white)
+        painter.end()
+        pm.save(str(sprites / f"{name}.png"))
+    (char_dir / "config.json").write_text(json.dumps({
+        "name": "Pet", "blinks": {"idle": "closed.png"},
+    }), encoding="utf-8")
+    (char_dir / "animations.json").write_text(json.dumps({
+        "idle": {"frames": ["idle.png"], "frame_ms": 100, "loop": True},
+    }), encoding="utf-8")
+    window = PetWindow(CharacterLoader(tmp_path).load("pet"), scale_override=1.0)
+    window.set_state("idle")
+    assert window._blink_timer.isActive()
+    assert not window._frame_timer.isActive()
+
+
+def test_window_starts_on_the_configured_idle_sprite(qapp, tmp_path):
+    from PySide6.QtGui import QPainter, QPixmap
+    from ui.pet_window import PetWindow
+
+    char_dir = tmp_path / "pet"
+    sprites = char_dir / "sprites"
+    sprites.mkdir(parents=True)
+    for name in ("angry", "neutral", "closed"):
+        pm = QPixmap(100, 200)
+        pm.fill(Qt.transparent)
+        painter = QPainter(pm)
+        painter.fillRect(20, 20, 60, 170, Qt.white)
+        painter.end()
+        pm.save(str(sprites / f"{name}.png"))
+    (char_dir / "config.json").write_text(json.dumps({
+        "name": "Pet",
+        "sprites": {"idle": "neutral.png"},
+        "blinks": {"neutral": "closed.png"},
+    }), encoding="utf-8")
+    window = PetWindow(CharacterLoader(tmp_path).load("pet"), scale_override=1.0)
+    assert window._current_sprite_name == "neutral"
+    assert window._blink_timer.isActive()
+
+
 def test_portrait_double_click_toggles_dialog_without_sprite_action(qapp, tmp_path):
     from ui.pet_window import PetWindow
     char_dir = tmp_path / "pet"
@@ -217,6 +334,44 @@ def test_portrait_double_click_toggles_dialog_without_sprite_action(qapp, tmp_pa
     window.mouseDoubleClickEvent(event)
     assert toggles == [True]
     assert not window._click_timer.isActive()
+
+
+def test_head_touch_hitbox_and_manual_cycle_exclude_special_sprites(qapp, tmp_path):
+    from PySide6.QtGui import QPainter, QPixmap
+    from ui.pet_window import PetWindow
+
+    char_dir = tmp_path / "pet"
+    sprites = char_dir / "sprites"
+    sprites.mkdir(parents=True)
+    for name in ("normal", "happy", "messy"):
+        pm = QPixmap(100, 200)
+        pm.fill(Qt.transparent)
+        painter = QPainter(pm)
+        painter.fillRect(20, 20, 60, 170, Qt.white)
+        painter.end()
+        pm.save(str(sprites / f"{name}.png"))
+    (char_dir / "config.json").write_text(json.dumps({
+        "name": "Pet",
+        "sprites": {"idle": "normal.png", "happy": "happy.png"},
+        "interactions": {"head_touch": ["messy.png"]},
+    }), encoding="utf-8")
+
+    window = PetWindow(CharacterLoader(tmp_path).load("pet"), scale_override=1.0)
+    normal = next(i for i, info in enumerate(window.char_data.sprites) if info.name == "normal")
+    window._current_index = normal
+    window._current_sprite_name = "normal"
+    assert window._is_head_point(QPoint(50, 30))
+    assert not window._is_head_point(QPoint(50, 150))
+
+    seen = set()
+    for _ in range(5):
+        window.next_sprite()
+        seen.add(window._current_sprite_name)
+    assert "messy" not in seen
+
+    window._click_pos = QPoint(50, 30)
+    window._handle_click_action()
+    assert window._current_sprite_name == "messy"
 
 
 def test_start_places_portrait_bottom_right_and_closes_dialog(tmp_path, monkeypatch):

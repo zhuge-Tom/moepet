@@ -4,14 +4,16 @@
 """
 
 from pathlib import Path
+import random
 
 from PySide6.QtWidgets import QMainWindow, QLabel, QMenu, QApplication
 from PySide6.QtCore import Qt, QPoint, QTimer, QEvent
-from PySide6.QtGui import QPixmap, QAction, QMouseEvent, QCursor
+from PySide6.QtGui import QPixmap, QAction, QMouseEvent, QCursor, QRegion
 
 from core.signals import signals
 from core.character import CharacterData
 from core.animation import SpriteAnimator
+from core.sprite_normalizer import common_layout, normalize_portrait
 
 
 class PetWindow(QMainWindow):
@@ -24,6 +26,7 @@ class PetWindow(QMainWindow):
         self._current_index = 0
         self._drag_pos = QPoint()
         self._drag_start = QPoint()
+        self._click_pos = QPoint()
         self._click_timer = QTimer(self)
         self._click_timer.setSingleShot(True)
         self._click_timer.setInterval(220)
@@ -36,6 +39,17 @@ class PetWindow(QMainWindow):
         self._frame_timer.timeout.connect(self._next_frame)
         self._frame_state = ""
         self._frame_index = 0
+        self._blink_timer = QTimer(self)
+        self._blink_timer.setSingleShot(True)
+        self._blink_timer.timeout.connect(self._blink)
+        self._blink_restore_timer = QTimer(self)
+        self._blink_restore_timer.setSingleShot(True)
+        self._blink_restore_timer.timeout.connect(self._restore_blink)
+        self._blink_repeat_timer = QTimer(self)
+        self._blink_repeat_timer.setSingleShot(True)
+        self._blink_repeat_timer.timeout.connect(self._blink)
+        self._blink_repeats_left = 0
+        self._current_sprite_name = ""
         self._idle_timer = QTimer(self)
         self._idle_timer.setSingleShot(True)
         self._idle_timer.timeout.connect(self._return_to_idle)
@@ -45,6 +59,7 @@ class PetWindow(QMainWindow):
         self._setup_menu()
         self._load_sprites()
         self._show_sprite()
+        self.set_sprite_by_name(self.char_data.sprite_for_expression("idle"))
 
     # ─── 初始化 ───────────────────────────────
 
@@ -134,11 +149,14 @@ class PetWindow(QMainWindow):
 
     def _load_sprites(self):
         """从角色目录加载所有立绘"""
+        source_pixmaps = [QPixmap(str(info.path)) for info in self.char_data.sprites]
+        layout = common_layout(source_pixmaps)
         self._pixmaps: list[QPixmap] = []
-        for sprite_info in self.char_data.sprites:
-            pm = QPixmap(str(sprite_info.path))
+        for pm in source_pixmaps:
             if pm.isNull():
                 continue
+            if layout:
+                pm = normalize_portrait(pm, layout)
             if self._scale != 1.0:
                 w = int(pm.width() * self._scale)
                 h = int(pm.height() * self._scale)
@@ -159,6 +177,38 @@ class PetWindow(QMainWindow):
             self._label.setPixmap(pm)
             self._label.resize(pm.size())
             self.resize(pm.size())
+            if self.char_data.sprites:
+                self._current_sprite_name = self.char_data.sprites[self._current_index].name
+
+    def _schedule_blink(self) -> None:
+        """Keep static PNG portraits alive with short, irregular eye blinks."""
+        if self.char_data.blink_for_sprite(self._current_sprite_name):
+            # Most blinks happen within a few seconds, with occasional longer
+            # pauses so the cadence does not look mechanical.
+            delay = random.randint(1100, 3300) if random.random() < 0.82 else random.randint(3600, 6200)
+            self._blink_timer.start(delay)
+
+    def _blink(self) -> None:
+        closed_name = self.char_data.blink_for_sprite(self._current_sprite_name)
+        closed = self._pixmap_for_name(closed_name)
+        if not closed:
+            self._schedule_blink()
+            return
+        self._blink_origin_name = self._current_sprite_name
+        if self._blink_repeats_left == 0 and random.random() < 0.28:
+            self._blink_repeats_left = 1
+        self._label.setPixmap(closed)
+        self._blink_restore_timer.start(random.randint(75, 125))
+
+    def _restore_blink(self) -> None:
+        original = self._pixmap_for_name(getattr(self, "_blink_origin_name", ""))
+        if original:
+            self._label.setPixmap(original)
+        if self._blink_repeats_left:
+            self._blink_repeats_left -= 1
+            self._blink_repeat_timer.start(random.randint(120, 240))
+        else:
+            self._schedule_blink()
 
     def _resize_to_sprite(self, size):
         """Keep the transparent top-level window aligned with size animations."""
@@ -172,12 +222,27 @@ class PetWindow(QMainWindow):
         if not cfg or not cfg.frames:
             self._frame_timer.stop()
             return
+        self._blink_timer.stop()
+        self._blink_restore_timer.stop()
+        self._blink_repeat_timer.stop()
+        self._blink_repeats_left = 0
         if state == self._frame_state and self._frame_timer.isActive():
             return
         self._frame_state, self._frame_index = state, 0
         self._frame_frames = [self._pixmap_for_name(n) for n in cfg.frames]
         self._frame_frames = [p for p in self._frame_frames if p]
         if not self._frame_frames:
+            return
+        if len(self._frame_frames) == 1:
+            # A one-frame state is a static portrait. Do not keep a frame
+            # timer alive: it would overwrite the brief closed-eye blink.
+            self._frame_timer.stop()
+            self._frame_state = ""
+            self._current_sprite_name = Path(cfg.frames[0]).stem
+            self._label.setPixmap(self._frame_frames[0])
+            self._label.resize(self._frame_frames[0].size())
+            self.resize(self._frame_frames[0].size())
+            self._schedule_blink()
             return
         self._frame_loop = cfg.loop
         self._label.setPixmap(self._frame_frames[0])
@@ -223,18 +288,67 @@ class PetWindow(QMainWindow):
 
     def next_sprite(self):
         """切到下一张立绘，带淡入淡出"""
-        if len(self._pixmaps) <= 1:
+        excluded = set(self.char_data.head_touch_sprite_names())
+        available = [
+            index for index, info in enumerate(self.char_data.sprites)
+            if info.name not in excluded
+        ]
+        if len(available) <= 1:
             return
-        self._current_index = (self._current_index + 1) % len(self._pixmaps)
+        try:
+            current = available.index(self._current_index)
+        except ValueError:
+            current = -1
+        self._current_index = available[(current + 1) % len(available)]
         self._animator.fade_transition(self._pixmaps[self._current_index])
+        self._current_sprite_name = self.char_data.sprites[self._current_index].name
+        self._schedule_blink()
+
+    def _is_head_point(self, point: QPoint) -> bool:
+        """Use the visible portrait bounds so the head hitbox follows scaling."""
+        pm = self._pixmaps[self._current_index]
+        bounds = QRegion(pm.mask()).boundingRect()
+        if bounds.isEmpty():
+            return False
+        head_height = max(1, round(bounds.height() * 0.27))
+        head_width = max(1, round(bounds.width() * 0.58))
+        head_rect = bounds.adjusted(
+            (bounds.width() - head_width) // 2,
+            0,
+            -(bounds.width() - head_width + 1) // 2,
+            -(bounds.height() - head_height),
+        )
+        return head_rect.contains(point)
+
+    def _show_head_touch_expression(self) -> bool:
+        choices = [
+            name for name in self.char_data.head_touch_sprite_names()
+            if self._pixmap_for_name(name) is not None
+        ]
+        if not choices:
+            return False
+        self.set_sprite_by_name(random.choice(choices))
+        self._idle_timer.start(2400)
+        return True
 
     def set_sprite_by_name(self, name: str):
         """按名称切换立绘"""
         for i, info in enumerate(self.char_data.sprites):
             if info.name == name:
+                # A selected expression should not be replaced by an old frame timer.
+                self._frame_timer.stop()
+                self._frame_state = ""
+                self._blink_timer.stop()
+                self._blink_restore_timer.stop()
+                self._blink_repeat_timer.stop()
+                self._blink_repeats_left = 0
                 if i != self._current_index:
                     self._current_index = i
                     self._animator.fade_transition(self._pixmaps[i])
+                else:
+                    self._label.setPixmap(self._pixmaps[i])
+                self._current_sprite_name = name
+                self._schedule_blink()
                 return
 
     def play_animation(self, anim_type: str):
@@ -321,6 +435,7 @@ class PetWindow(QMainWindow):
             delta = end_pos - self._drag_start
             if delta.manhattanLength() < 5:
                 # Delay a single click briefly so a double click can cancel it.
+                self._click_pos = event.position().toPoint()
                 self._click_timer.start()
             else:
                 # 拖拽结束 → 记住位置
@@ -335,6 +450,8 @@ class PetWindow(QMainWindow):
             event.accept()
 
     def _handle_click_action(self) -> None:
+        if self._is_head_point(self._click_pos) and self._show_head_touch_expression():
+            return
         if self._click_action == "switch_sprite":
             self.next_sprite()
         elif self._click_action == "bounce":

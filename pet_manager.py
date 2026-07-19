@@ -26,6 +26,7 @@ from core.voice_input import PushToTalkRecorder
 from core.startup import set_enabled as set_startup_enabled
 from core.hotkeys import HotkeyService
 from core.knowledge_base import KnowledgeBase
+from core.expression import select_expression
 from ui.pet_window import PetWindow
 from ui.dialog_window import DialogWindow
 from ui.settings_window import SettingsWindow
@@ -357,6 +358,7 @@ class PetManager:
             self._dialog.display_text("上一条还在处理中，请稍等~", "assistant")
             return
 
+        self._last_user_text = text
         self._llm.add_user_message(text)
         self._llm.set_turn_context(self._knowledge_context(text))
         self._set_pet_state("think")
@@ -417,7 +419,7 @@ class PetManager:
         if self._dialog and not sync_text:
             self._dialog.finish_stream(full_text)
         self._save_chat_history()
-        self._set_pet_state("happy")
+        self._show_reply_expression(full_text)
         if sync_text:
             self._queue_text_for_audio(full_text)
         if not self._speak(full_text) and sync_text:
@@ -432,7 +434,7 @@ class PetManager:
             self._dialog._text_display.clear()
             self._dialog.display_text(full_text, "assistant")
         self._save_chat_history()
-        self._set_pet_state("happy")
+        self._show_reply_expression(full_text)
         if sync_text:
             self._queue_text_for_audio(full_text)
         if not self._speak(full_text) and sync_text:
@@ -464,7 +466,26 @@ class PetManager:
     def _set_pet_state(self, state: str):
         win = self._windows.get(self.config.current_character)
         if win:
-            win.set_state(state)
+            # Static portraits share semantic states with the animation API.
+            expression = {"idle": "idle"}.get(state)
+            char = self._char_data.get(self.config.current_character)
+            if expression and char:
+                win.set_sprite_by_name(char.sprite_for_expression(expression))
+            elif state != "speak":
+                win.set_state(state)
+
+    def _show_reply_expression(self, reply: str) -> None:
+        """Switch the static portrait while keeping animation support optional."""
+        char = self._char_data.get(self.config.current_character)
+        win = self._windows.get(self.config.current_character)
+        if not char or not win:
+            return
+        expression = select_expression(reply, getattr(self, "_last_user_text", ""))
+        if expression == "idle":
+            return
+        sprite_name = char.sprite_for_expression(expression)
+        if sprite_name:
+            win.set_sprite_by_name(sprite_name)
 
     @staticmethod
     def _is_screen_request(text: str) -> bool:
@@ -925,7 +946,9 @@ class PetManager:
             return
         self._tts_epoch = None
         self._tts_available = False
-        self._show_pending_tts_text()
+        # The coordinator can be exercised without the optional audio queue.
+        if hasattr(self, "_show_pending_tts_text"):
+            self._show_pending_tts_text()
         self._set_pet_state("idle")
         signals.tts_state_changed.emit(False)
         # TTS is optional output. Keep transport failures out of the role's

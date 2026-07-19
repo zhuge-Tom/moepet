@@ -38,6 +38,8 @@ class CharacterData:
     sprites: list[SpriteInfo] = field(default_factory=list)
     default_sprite: str = ""
     sprite_map: dict[str, str] = field(default_factory=dict)
+    blink_map: dict[str, str] = field(default_factory=dict)
+    head_touch_sprites: list[str] = field(default_factory=list)
     animations: dict[str, AnimConfig] = field(default_factory=dict)
     voice: dict = field(default_factory=dict)
     character_prompt: dict = field(default_factory=dict)
@@ -46,6 +48,20 @@ class CharacterData:
     @property
     def sprite_dir(self) -> Path:
         return self.base_dir / "sprites"
+
+    def sprite_for_expression(self, expression: str) -> str:
+        """Return the sprite name configured for an expression, if present."""
+        filename = self.sprite_map.get(expression) or self.sprite_map.get("idle", "")
+        return Path(filename).stem if filename else ""
+
+    def blink_for_sprite(self, sprite_name: str) -> str:
+        """Return the closed-eye counterpart configured for a static sprite."""
+        filename = self.blink_map.get(sprite_name, "")
+        return Path(filename).stem if filename else ""
+
+    def head_touch_sprite_names(self) -> list[str]:
+        """Return interaction-only sprite stems that normal chat must not use."""
+        return [Path(filename).stem for filename in self.head_touch_sprites]
 
 
 class CharacterLoader:
@@ -86,6 +102,8 @@ class CharacterLoader:
             scale=raw.get("scale", 0.5),
             default_sprite=raw.get("default_sprite", ""),
             sprite_map=raw.get("sprites", {}),
+            blink_map=raw.get("blinks", {}),
+            head_touch_sprites=raw.get("interactions", {}).get("head_touch", []),
             voice=raw.get("voice", {}),
             character_prompt=raw.get("character_prompt", {}),
             base_dir=char_dir,

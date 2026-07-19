@@ -26,6 +26,7 @@ def tts_ready(config) -> bool:
     return bool(
         base_url
         and config.get("tts", "remote_reference_audio", default="")
+        and (is_local_endpoint(base_url) or has_secret(config, "tts"))
     )
 
 
