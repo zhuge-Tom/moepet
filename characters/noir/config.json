@@ -11,6 +11,7 @@
   },
   "voice": {
     "model": "gpt-sovits-v2proplus",
+    "reference_audio": "noi0287.wav",
     "remote_reference_audio": "/root/autodl-tmp/noi0287.wav",
     "reference_text": "……すみません。ケンカ、って、怖くて。",
     "pitch": 1.0,

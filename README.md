@@ -54,6 +54,24 @@ Moepet 使用 OpenAI Chat Completions 格式。设置页填写 Base URL、模型
 
 远端 API 应兼容 GPT-SoVITS `api_v2.py` 的 `/tts` 接口，并接受 `text`、`text_lang`、`ref_audio_path`、`prompt_text` 与 `prompt_lang` 字段。远端 API Key 可留空，除非你的网关另有鉴权要求。
 
+### 本地 GPT-SoVITS v2Pro（CPU）
+
+本地模式适合已准备好 GPT-SoVITS 项目、权重与角色参考音频的 Windows 环境。CPU 推理可用，但首次加载与合成会比 GPU 明显更慢，建议空闲内存至少 12 GB，并将 Windows 分页文件留出 16 GB 或更多的空间。
+
+1. 准备 GPT-SoVITS 项目，例如 `G:\GPT-SoVITS-v2pro-20250604-nvidia50`。
+2. 将 GPT 权重放入 `GPT_weights_v2Pro\`，将 SoVITS 权重放入 `SoVITS_weights_v2Pro\`。例如 Noir 使用 `noir-e15.ckpt` 与 `noir_e8_s968.pth`。
+3. 将获得授权的参考音频放入 `characters/noir/voice/` 目录，例如 `noi0287.wav`。该目录下的音频已被 Git 忽略，不会被提交。
+4. 在角色 `config.json` 的 `voice.reference_audio` 中填写文件名（不含路径），并保留与录音对应的 `voice.reference_text`。
+5. 在“设置 -> 语音合成”中选择“本地 GPT-SoVITS v2ProPlus”，将“项目目录”设为 GPT-SoVITS 根目录，本地 API 保持 `http://127.0.0.1:9880`。程序会在首次朗读时自行启动 `api_v2.py`。
+
+请使用 CPU 安全推理配置：在 `GPT_SoVITS/configs/tts_infer.yaml` 的 `v2Pro` 段保持 `device: cpu` 和 `is_half: false`。不要启用 CUDA、FP16 或 GPU 量化选项。如果 `9880` 长时未监听、进程退出或 Windows 报分页文件不足，请先关闭占用内存的程序并增大分页文件。
+
+### 语音与显示同步
+
+当语音服务已成功合成过一次 WAV 时，Moepet 会在日文翻译完成后让中文回复按设定逐字速度开始显示，同时在后台合成语音，让文字比声音稍早出现。流式的原始文本不会闪现，括号内的动作/旁白也会在显示前过滤。
+
+如果本地或远端 TTS 未启动、失败或断开，程序会立即回退为纯文本显示，不会等待语音超时。语音服务恢复且再次成功合成后，同步行为会自动恢复。
+
 ## 可选依赖
 
 需要语音输入、本地 OCR 或全局快捷键时安装：
