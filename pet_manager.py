@@ -78,6 +78,11 @@ class PetManager:
         self._last_observation_at: datetime | None = None
         self._observation_epoch: int | None = None
         self._screen_response_epoch: int | None = None
+        self._pending_tts_text: str | None = None
+        self._pending_tts_epoch: int | None = None
+        # Audio sync is opt-in at runtime: a fresh or failed remote service
+        # must never hold the chat reply behind a synthesis timeout.
+        self._tts_available = False
         self._screen_observer = ScreenObserver()
         self._screen_observer.observation_requested.connect(self._observe_screen)
         self._configure_llm()
@@ -398,7 +403,9 @@ class PetManager:
 
     def _on_llm_chunk(self, chunk: str):
         """流式输出片段"""
-        if self._dialog:
+        # In audio-sync mode, retain stream chunks in LLMService only. Showing
+        # them here would flash the reply before the WAV is ready.
+        if self._dialog and not self._should_sync_text_to_audio():
             self._dialog.append_stream(chunk)
 
     def _on_llm_done(self, full_text: str):
@@ -406,22 +413,30 @@ class PetManager:
         self._llm.chunk_received.disconnect(self._on_llm_chunk)
         self._llm.response_finished.disconnect(self._on_llm_done)
         self._llm.error_occurred.disconnect(self._on_llm_error)
-        if self._dialog:
+        sync_text = self._should_sync_text_to_audio()
+        if self._dialog and not sync_text:
             self._dialog.finish_stream(full_text)
         self._save_chat_history()
         self._set_pet_state("happy")
-        self._speak(full_text)
+        if sync_text:
+            self._queue_text_for_audio(full_text)
+        if not self._speak(full_text) and sync_text:
+            self._show_pending_tts_text()
 
     def _on_llm_done_non_stream(self, full_text: str):
         """非流式完成"""
         self._llm.response_finished.disconnect(self._on_llm_done_non_stream)
         self._llm.error_occurred.disconnect(self._on_llm_error)
-        if self._dialog:
+        sync_text = self._should_sync_text_to_audio()
+        if self._dialog and not sync_text:
             self._dialog._text_display.clear()
             self._dialog.display_text(full_text, "assistant")
         self._save_chat_history()
         self._set_pet_state("happy")
-        self._speak(full_text)
+        if sync_text:
+            self._queue_text_for_audio(full_text)
+        if not self._speak(full_text) and sync_text:
+            self._show_pending_tts_text()
 
     def _on_llm_error(self, err: str):
         """LLM 错误"""
@@ -804,13 +819,10 @@ class PetManager:
     def _speak(self, text: str):
         """Translate and synthesize one complete reply as one utterance."""
         if not self.config.get("tts", "enabled", default=False):
-            return
+            return False
         if not self.config.get("tts", "auto_play", default=True):
-            return
+            return False
         self._tts_epoch = self._role_epoch
-        if not self.config.get("tts", "translate_to_japanese", default=True):
-            self._on_tts_translation_done(text)
-            return
         started = self._tts_translator.translate(
             text,
             self.config.get("llm", "base_url", default=""),
@@ -820,6 +832,30 @@ class PetManager:
         if started:
             self._set_pet_state("think")
             signals.tts_state_changed.emit(True)
+        return started
+
+    def _should_sync_text_to_audio(self) -> bool:
+        return bool(self.config.get("tts", "enabled", default=False)
+                    and self.config.get("tts", "auto_play", default=True)
+                    and self._tts_available)
+
+    def _queue_text_for_audio(self, text: str) -> None:
+        self._pending_tts_text = text
+        self._pending_tts_epoch = self._role_epoch
+        if self._dialog:
+            # Remove the provisional stream text until the WAV is ready.
+            self._dialog.start_stream()
+
+    def _show_pending_tts_text(self) -> None:
+        if self._pending_tts_epoch != self._role_epoch:
+            return
+        text = self._pending_tts_text
+        self._pending_tts_text = None
+        self._pending_tts_epoch = None
+        if text and self._dialog:
+            # Use the normal typewriter path so the configured display speed
+            # applies while TTS is synthesizing in the background.
+            self._dialog.display_text(text, "assistant")
 
     def _on_tts_translation_done(self, japanese_text: str):
         if getattr(self, "_tts_epoch", None) != self._role_epoch:
@@ -842,6 +878,10 @@ class PetManager:
         output = Path(tempfile.gettempdir()) / "moepet-tts.wav"
         base_url = (self.config.get("tts", "local_api_url", default="http://127.0.0.1:9880")
                     if is_local else self.config.get("tts", "base_url", default=""))
+        # The translation is ready and synthesis is about to begin. Reveal
+        # the reply now, rather than waiting for the finished WAV, so text
+        # naturally leads speech without the raw-stream flash.
+        self._show_pending_tts_text()
         started = self._tts.synthesize_gpt_sovits(
             japanese_text, base_url,
             "" if is_local else (self.config.get_secret("tts") or self.config.get("tts", "api_key", default="")),
@@ -871,6 +911,7 @@ class PetManager:
         self._player.setSource(QUrl.fromLocalFile(audio_path))
         self._player.mediaStatusChanged.connect(self._on_audio_status)
         self._player_epoch = self._role_epoch
+        self._tts_available = True
         self._player.play()
 
     def _on_audio_status(self, status):
@@ -883,6 +924,8 @@ class PetManager:
         if getattr(self, "_tts_epoch", None) not in (None, self._role_epoch):
             return
         self._tts_epoch = None
+        self._tts_available = False
+        self._show_pending_tts_text()
         self._set_pet_state("idle")
         signals.tts_state_changed.emit(False)
         # TTS is optional output. Keep transport failures out of the role's

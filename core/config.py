@@ -47,7 +47,6 @@ DEFAULTS = {
         "local_api_url": "http://127.0.0.1:9880",
         "local_python": "", "local_config": "GPT_SoVITS/configs/noir_v2proplus.yaml",
         "remote_reference_audio": "",
-        "translate_to_japanese": True,
         "model": "", "voice": "",
     },
     "screen_capture": {

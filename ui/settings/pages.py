@@ -136,9 +136,6 @@ def make_tts_page(config, add_probe) -> tuple[QWidget, dict[str, QWidget], dict[
     auto_play = QCheckBox("生成后自动播放语音")
     auto_play.setChecked(config.get("tts", "auto_play", default=True))
     layout.addWidget(auto_play)
-    translate = QCheckBox("将中文回复翻译为日文后朗读（聊天框仍只显示中文）")
-    translate.setChecked(config.get("tts", "translate_to_japanese", default=True))
-    layout.addWidget(translate)
 
     _section(layout, "远端 GPT-SoVITS API")
     api_url = _line_edit("https://tts.example.com")
@@ -158,7 +155,7 @@ def make_tts_page(config, add_probe) -> tuple[QWidget, dict[str, QWidget], dict[
     fields = {"tts_status_card": card, "tts_enabled": enabled, "tts_provider": provider,
               "tts_model": model_path, "tts_local_url": local_url,
               "tts_local_config": local_config, "tts_speed": speed,
-              "tts_auto_play": auto_play, "tts_translate": translate,
+              "tts_auto_play": auto_play,
               "tts_api_url": api_url, "tts_api_key": api_key,
               "tts_remote_reference": remote_reference, "tts_discover_button": discover_button,
               "tts_model_picker": discover_picker, "tts_discover_status": discover_status}

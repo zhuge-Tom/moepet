@@ -155,14 +155,33 @@ class DialogWindow(QDialog):
         self._is_streaming = True
 
     def append_stream(self, text: str):
-        """追加流式文本片段"""
+        """Append a stream chunk without exposing provisional stage directions."""
         if not self._is_streaming:
             self.start_stream()
         self._stream_buffer += text
-        self._text_display.insertPlainText(text)
+        self._text_display.setPlainText(self._visible_stream_text(self._stream_buffer))
         cursor = self._text_display.textCursor()
         cursor.movePosition(QTextCursor.End)
         self._text_display.setTextCursor(cursor)
+
+    @staticmethod
+    def _visible_stream_text(text: str) -> str:
+        """Hide complete and incomplete bracketed stage directions while streaming."""
+        closing = {"(": ")", "[": "]", "\uFF08": "\uFF09", "\u3010": "\u3011"}
+        hidden_until: list[str] = []
+        visible: list[str] = []
+        for char in text:
+            if hidden_until:
+                if char == hidden_until[-1]:
+                    hidden_until.pop()
+                elif char in closing:
+                    hidden_until.append(closing[char])
+                continue
+            if char in closing:
+                hidden_until.append(closing[char])
+            else:
+                visible.append(char)
+        return "".join(visible)
 
     def finish_stream(self, full_text: str = ""):
         """流式结束，保存历史"""

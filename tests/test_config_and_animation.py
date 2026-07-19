@@ -130,6 +130,43 @@ def test_tts_error_is_logged_without_writing_to_chat(caplog):
     assert "TTS synthesis failed: HTTP Error 404" in caplog.text
 
 
+def test_tts_failure_reveals_a_reply_waiting_for_audio():
+    manager = type("Manager", (), {})()
+    manager._tts_epoch = manager._role_epoch = 0
+    manager._pending_tts_epoch = 0
+    manager._pending_tts_text = "等待语音的回复"
+    displayed = []
+    manager._dialog = type("Dialog", (), {
+        "display_text": lambda _self, text, role: displayed.append((text, role)),
+    })()
+    manager._set_pet_state = lambda _state: None
+    manager._show_pending_tts_text = lambda: PetManager._show_pending_tts_text(manager)
+    PetManager._on_tts_error(manager, "HTTP Error 500")
+    assert displayed == [("等待语音的回复", "assistant")]
+
+
+def test_audio_sync_does_not_display_stream_chunks():
+    manager = type("Manager", (), {})()
+    received = []
+    manager._dialog = type("Dialog", (), {
+        "append_stream": lambda _self, text: received.append(text),
+    })()
+    manager._should_sync_text_to_audio = lambda: True
+    PetManager._on_llm_chunk(manager, "不应提前显示")
+    assert received == []
+
+
+def test_audio_sync_requires_a_successful_tts_request(tmp_path):
+    manager = type("Manager", (), {})()
+    manager.config = Config(tmp_path / "config.json")
+    manager.config.set("tts", "enabled", True)
+    manager.config.set("tts", "auto_play", True)
+    manager._tts_available = False
+    assert not PetManager._should_sync_text_to_audio(manager)
+    manager._tts_available = True
+    assert PetManager._should_sync_text_to_audio(manager)
+
+
 def test_remote_audio_services_require_a_key_without_starting_work(tmp_path):
     from core.asr_service import ASRService
     from core.tts_service import TTSService
@@ -529,6 +566,8 @@ def test_voice_page_factories_switch_provider_rows(qapp, tmp_path):
     _, tts, tts_rows = make_tts_page(config, lambda _layout, _key, _text: None)
     _, asr, asr_rows = make_asr_page(config, lambda _layout, _key, _text: None)
     assert {"tts_model", "tts_api_url"}.issubset(tts_rows)
+    assert "tts_sync_text" not in tts
+    assert "tts_translate" not in tts
     assert {"asr_model", "asr_api_url"}.issubset(asr_rows)
     window = SettingsWindow(config, ["noir"], "noir", tmp_path)
     window._tts_provider.setCurrentIndex(window._tts_provider.findData("gpt_sovits_remote"))
@@ -596,6 +635,16 @@ def test_stream_finish_replaces_unprocessed_display(qapp):
     window.append_stream("visible<think>hidden</think>")
     window.finish_stream("visible")
     assert window._text_display.toPlainText() == "visible"
+
+
+def test_stream_hides_stage_directions_before_the_reply_is_finished(qapp):
+    from ui.dialog_window import DialogWindow
+    window = DialogWindow("Test")
+    window.start_stream()
+    window.append_stream("（轻轻点头）")
+    assert window._text_display.toPlainText() == ""
+    window.append_stream("我明白了。")
+    assert window._text_display.toPlainText() == "我明白了。"
 
 
 def test_dialog_exposes_voice_and_screen_actions(qapp):
