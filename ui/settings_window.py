@@ -84,6 +84,7 @@ class SettingsWindow(QDialog):
         self._settings_baseline = ""
 
         self.setWindowTitle("Moepet 设置")
+        self.setWindowFlag(Qt.WindowStaysOnTopHint, True)
         self.setMinimumSize(760, 620)
         self.resize(980, 720)
         self.setStyleSheet(SETTINGS_QSS)
@@ -343,10 +344,14 @@ class SettingsWindow(QDialog):
 
     def reject(self) -> None:
         if self._has_unsaved_changes():
-            answer = QMessageBox.question(
-                self, "放弃未保存的更改？", "当前页面有未保存的设置，确定放弃吗？",
-                QMessageBox.Discard | QMessageBox.Cancel, QMessageBox.Cancel,
+            box = QMessageBox(
+                QMessageBox.Question, "放弃未保存的更改？",
+                "当前页面有未保存的设置，确定放弃吗？",
+                QMessageBox.Discard | QMessageBox.Cancel, self,
             )
+            box.setDefaultButton(QMessageBox.Cancel)
+            box.setWindowFlag(Qt.WindowStaysOnTopHint, True)
+            answer = box.exec()
             if answer != QMessageBox.Discard:
                 return
         super().reject()

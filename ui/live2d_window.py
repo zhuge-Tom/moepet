@@ -5,58 +5,43 @@ import math
 import random
 import time
 
-from PySide6.QtCore import QRectF, Qt, Signal, QTimer
-from PySide6.QtGui import QColor, QCursor, QPainter, QSurfaceFormat
+from PySide6.QtCore import QPoint, Qt, Signal, QTimer
+from PySide6.QtGui import QCursor, QSurfaceFormat
 from PySide6.QtOpenGLWidgets import QOpenGLWidget
-from PySide6.QtWidgets import QWidget
 
 from ui.pet_window import PetWindow
 
 _runtime_initialized = False
+_PURSED_MOUTH_FORM = 1.0
+_SMILE_MOUTH_LAYER = 1.0
+_PURSED_MOUTH_LAYER = 1.0
+_WM_NCHITTEST = 0x0084
+_HTTRANSPARENT = -1
 
 
-class MouthOverlay(QWidget):
-    """A reliable mouth layer above the OpenGL model at small pet scales."""
+def _native_hit_test_position(message):
+    """Return the global cursor position for a Windows WM_NCHITTEST message."""
+    try:
+        from ctypes import POINTER, Structure, c_void_p, cast
+        from ctypes.wintypes import HWND, UINT, WPARAM, LPARAM, DWORD, POINT
 
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self._openness = 0.0
-        self._drag_target = (0.0, 0.0)
-        self.setAttribute(Qt.WA_TransparentForMouseEvents)
-        self.setAttribute(Qt.WA_TranslucentBackground)
-        self.setStyleSheet("background: transparent;")
+        class MSG(Structure):
+            _fields_ = [
+                ("hwnd", HWND), ("message", UINT), ("wParam", WPARAM),
+                ("lParam", LPARAM), ("time", DWORD), ("pt", POINT),
+            ]
 
-    def set_pose(self, openness: float, x: float, y: float) -> None:
-        self._openness = max(0.0, min(1.0, openness))
-        self._drag_target = (x, y)
-        self.update()
-
-    def paintEvent(self, event) -> None:
-        if self._openness <= 0.01:
-            return
-        x, y = self._drag_target
-        center_x = self.width() * 0.515 + x * self.width() * 0.012
-        # Noir's face sits lower than the artboard center at pet scale.
-        center_y = self.height() * 0.645 - y * self.height() * 0.008
-        mouth_width = max(9.0, self.width() * 0.034)
-        mouth_height = 2.2 + self._openness * max(6.5, self.height() * 0.014)
-        rect = QRectF(
-            center_x - mouth_width / 2, center_y - mouth_height / 2,
-            mouth_width, mouth_height,
-        )
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.Antialiasing)
-        painter.setPen(Qt.NoPen)
-        painter.setBrush(QColor(82, 45, 63, 226))
-        painter.drawRoundedRect(rect, rect.height() / 2, rect.height() / 2)
-        painter.end()
-
+        msg = cast(c_void_p(message), POINTER(MSG)).contents
+        if msg.message == _WM_NCHITTEST:
+            return QPoint(msg.pt.x, msg.pt.y)
+    except (OSError, TypeError, ValueError):
+        pass
+    return None
 
 class Live2DCanvas(QOpenGLWidget):
     """Transparent OpenGL surface that owns one Cubism 3 model instance."""
 
     initialization_failed = Signal(str)
-    mouth_pose_changed = Signal(float, float, float)
 
     def __init__(self, model_path: Path, parent=None):
         super().__init__(parent)
@@ -64,6 +49,7 @@ class Live2DCanvas(QOpenGLWidget):
         self._model = None
         self._canvas = None
         self._scale = 1.0
+        self._offset_y = 0.0
         self._drag_target = (0.0, 0.0)
         self._speaking = False
         self._expression = ""
@@ -94,6 +80,7 @@ class Live2DCanvas(QOpenGLWidget):
             live2d.glInit()
             self._model = live2d.LAppModel()
             self._model.LoadModelJson(str(self._model_path))
+            self._model.SetOffsetY(self._offset_y)
             self._model.SetAutoBlinkEnable(True)
             self._model.SetAutoBreathEnable(True)
             self._load_model_expressions()
@@ -108,6 +95,7 @@ class Live2DCanvas(QOpenGLWidget):
         if self._model is not None:
             self._model.Resize(width, height)
             self._model.SetScale(self._scale)
+            self._model.SetOffsetY(self._offset_y)
         if self._canvas is not None:
             self._canvas.SetSize(width, height)
 
@@ -117,32 +105,21 @@ class Live2DCanvas(QOpenGLWidget):
         import live2d.v3 as live2d
 
         self._canvas.Draw(lambda: (live2d.clearBuffer(), self._model.Draw()))
-        self._paint_speech_mouth()
 
-    def _paint_speech_mouth(self) -> None:
-        """Draw the fallback mouth in the OpenGL widget's own paint pass.
+    def nativeEvent(self, event_type, message):
+        """Let desktop clicks pass through transparent model padding.
 
-        A child QWidget can be composited behind a transparent QOpenGLWidget
-        on Windows. Drawing here keeps the visual mouth above the model in
-        the same surface as the native ParamMouthOpenY animation.
+        On Windows the native OpenGL child receives hit tests before the
+        top-level pet window, so handling only Live2DWindow is insufficient.
         """
-        if not self._speaking or self._mouth_open <= 0.02:
-            return
-        x, y = self._drag_target
-        center_x = self.width() * (0.515 + x * 0.012)
-        center_y = self.height() * (0.645 - y * 0.008)
-        mouth_width = max(14.0, self.width() * 0.052)
-        mouth_height = 2.8 + self._mouth_open * max(11.0, self.height() * 0.026)
-        rect = QRectF(
-            center_x - mouth_width / 2, center_y - mouth_height / 2,
-            mouth_width, mouth_height,
-        )
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.Antialiasing)
-        painter.setPen(QColor(232, 173, 191, 180))
-        painter.setBrush(QColor(78, 31, 47, 238))
-        painter.drawRoundedRect(rect, mouth_height / 2, mouth_height / 2)
-        painter.end()
+        if bytes(event_type) in {b"windows_generic_MSG", b"windows_dispatcher_MSG"}:
+            global_pos = _native_hit_test_position(message)
+            owner = self.window()
+            if (global_pos is not None and
+                    hasattr(owner, "_should_pass_pointer_through") and
+                    owner._should_pass_pointer_through(global_pos)):
+                return True, _HTTRANSPARENT
+        return super().nativeEvent(event_type, message)
 
     def timerEvent(self, event) -> None:
         if event.timerId() != self._render_timer_id:
@@ -170,6 +147,12 @@ class Live2DCanvas(QOpenGLWidget):
             self._model.SetScale(self._scale)
         self.update()
 
+    def set_model_offset_y(self, offset_y: float) -> None:
+        self._offset_y = float(offset_y)
+        if self._model is not None:
+            self._model.SetOffsetY(self._offset_y)
+        self.update()
+
     def set_drag_target(self, x: float, y: float) -> None:
         """Set Cubism's normalized eye/head target in the -1..1 range."""
         self._drag_target = (max(-1.0, min(1.0, x)), max(-1.0, min(1.0, y)))
@@ -183,6 +166,7 @@ class Live2DCanvas(QOpenGLWidget):
             self._mouth_open = 0.0
             if self._model is not None:
                 self._model._model.SetParameterValueById("ParamMouthOpenY", 0.0)
+                self._model._model.SetParameterValueById("ParamMouthForm", 0.0)
 
     def set_visual_mouth_open(self, openness: float) -> None:
         """Refresh the visible mouth even when the native render tick lags."""
@@ -240,8 +224,10 @@ class Live2DCanvas(QOpenGLWidget):
         self._update_lipsync()
         model.UpdatePhysics(elapsed)
         model.UpdatePose(elapsed)
-        model.Update(elapsed)
+        # Parameter-driven ArtMesh opacity/vertices are resolved by Update.
+        # Apply the authored mouth layer first so Param19 reaches this frame.
         self._apply_visible_parameters()
+        model.Update(elapsed)
 
     def _apply_visible_parameters(self) -> None:
         """Apply interaction inputs after physics so they reach the draw call.
@@ -258,18 +244,29 @@ class Live2DCanvas(QOpenGLWidget):
         self._model.SetParameterValue("ParamAngleY", y * 18.0)
         self._model.SetParameterValue("ParamEyeBallX", -x)
         self._model.SetParameterValue("ParamEyeBallY", y)
-        # Noir maps ParamMouthOpenY from 0 (closed) to 2.1 (fully open).
-        # Set the native current-frame value after Cubism's updates so its
-        # own parameter restore cannot erase lip sync before the draw call.
+        # Keep the authored mouth values in both Cubism parameter stores.
+        # `SetParameterValue` persists through LoadParameters; the direct
+        # call still affects the draw about to happen this frame.
+        mouth_open = self._mouth_open * 2.1
+        self._model.SetParameterValue("ParamMouthOpenY", mouth_open)
+        self._model.SetParameterValue("ParamMouthForm", _PURSED_MOUTH_FORM)
+        self._model.SetParameterValue("Param18", _SMILE_MOUTH_LAYER)
+        self._model.SetParameterValue("Param19", _PURSED_MOUTH_LAYER)
+        self._model._model.SetParameterValueById("ParamMouthOpenY", mouth_open)
         self._model._model.SetParameterValueById(
-            "ParamMouthOpenY", self._mouth_open * 2.1)
+            "ParamMouthForm", _PURSED_MOUTH_FORM)
+        # Noir maps one MouthSmile control to its form and two authored mouth
+        # layers. Applying the full mapping restores the PSD smile-mouth pose.
+        self._model._model.SetParameterValueById(
+            "Param18", _SMILE_MOUTH_LAYER)
+        self._model._model.SetParameterValueById(
+            "Param19", _PURSED_MOUTH_LAYER)
         if self._line_eye_active:
             # `eyeclose.exp3.json` is an additive Param40=-1 expression. It
             # must be written into the current native frame after
             # Blink/Physics. LAppModel.SetParameterValue saves the base value,
             # whereas this direct API affects the draw about to happen.
             self._model._model.SetParameterValueById("Param40", -1.0)
-        self.mouth_pose_changed.emit(self._mouth_open, x, y)
 
     def _update_lipsync(self) -> None:
         if not self._speaking:
@@ -282,9 +279,9 @@ class Live2DCanvas(QOpenGLWidget):
             value = 0.0
         else:
             elapsed = time.monotonic() - self._speech_started_at
-            # A pronounced but still natural visible range for text-only
-            # dialogue and WAV-read failures.
-            value = 0.12 + 0.88 * abs(math.sin(elapsed * 8.2))
+            # Text-only dialogue still needs an authored closed-mouth frame.
+            # One continuous cycle is 0 -> fully open -> 0.
+            value = 0.5 - 0.5 * math.cos(elapsed * 16.4)
         self._mouth_open = min(value, 1.0)
 
 
@@ -292,7 +289,10 @@ class Live2DWindow(PetWindow):
     """PetWindow-compatible Live2D renderer with static-window interactions."""
 
     live2d_failed = Signal(str)
-    _base_size = (720, 1040)
+    # Noir's source artboard has unused space above the ears. Keep the width
+    # and model scale unchanged, but do not let that padding enlarge the
+    # desktop window and intercept clicks.
+    _base_size = (720, 880)
 
     def __init__(self, char_data, model_path: Path, scale_override: float = None, parent=None):
         self._live2d_model_path = Path(model_path)
@@ -306,7 +306,7 @@ class Live2DWindow(PetWindow):
         # QOpenGLWidget render timer while the desktop pet is unobstructed.
         self._mouth_timer = QTimer(self)
         self._mouth_timer.setInterval(80)
-        self._mouth_timer.timeout.connect(self._advance_mouth_overlay)
+        self._mouth_timer.timeout.connect(self._advance_native_mouth)
         self._mouth_started_at = 0.0
         self._idle_expression_timer = QTimer(self)
         self._idle_expression_timer.setSingleShot(True)
@@ -317,10 +317,6 @@ class Live2DWindow(PetWindow):
         self._label = Live2DCanvas(self._live2d_model_path, self)
         self._label.installEventFilter(self)
         self.setCentralWidget(self._label)
-        self._overlay = MouthOverlay(self._label)
-        self._overlay.setGeometry(self._label.rect())
-        self._overlay.raise_()
-        self._label.mouth_pose_changed.connect(self._overlay.set_pose)
 
     def _setup_animator(self) -> None:
         # Live2D supplies its own frame updates, breathing, and blinking.
@@ -366,10 +362,9 @@ class Live2DWindow(PetWindow):
         if state == "speak":
             self._mouth_started_at = time.monotonic()
             self._mouth_timer.start()
-            self._advance_mouth_overlay()
+            self._advance_native_mouth()
         else:
             self._mouth_timer.stop()
-            self._overlay.set_pose(0.0, *self._label._drag_target)
         idle_expression_timer = getattr(self, "_idle_expression_timer", None)
         if state == "idle" and idle_expression_timer is not None:
             self._schedule_idle_line_eye_reaction()
@@ -434,9 +429,44 @@ class Live2DWindow(PetWindow):
                 return False
         return False
 
+    def _is_interactive_point(self, point) -> bool:
+        """Use a scale-aware silhouette to avoid claiming the artboard padding."""
+        width, height = self.width(), self.height()
+        if width <= 0 or height <= 0:
+            return False
+        x, y = point.x() / width, point.y() / height
+        # A conservative outline around Noir's visible ears, hair, body, and
+        # tail. It scales with the window but does not clip model rendering.
+        boundary = (
+            (0.32, 0.08), (0.20, 0.15), (0.23, 0.36), (0.12, 0.78),
+            (0.20, 1.00), (0.82, 1.00), (0.88, 0.78), (0.77, 0.36),
+            (0.80, 0.15), (0.66, 0.08),
+        )
+        inside = False
+        previous_x, previous_y = boundary[-1]
+        for current_x, current_y in boundary:
+            if ((current_y > y) != (previous_y > y) and
+                    x < (previous_x - current_x) * (y - current_y) /
+                    (previous_y - current_y) + current_x):
+                inside = not inside
+            previous_x, previous_y = current_x, current_y
+        return inside and self._is_model_point(point)
+
+    def _should_pass_pointer_through(self, global_pos) -> bool:
+        return not self._is_interactive_point(self.mapFromGlobal(global_pos))
+
+    def nativeEvent(self, event_type, message):
+        """Pass pointer input through the transparent Live2D artboard on Windows."""
+        if bytes(event_type) in {b"windows_generic_MSG", b"windows_dispatcher_MSG"}:
+            global_pos = _native_hit_test_position(message)
+            if (global_pos is not None and
+                    self._should_pass_pointer_through(global_pos)):
+                return True, _HTTRANSPARENT
+        return super().nativeEvent(event_type, message)
+
     def mouseDoubleClickEvent(self, event) -> None:
         """Only the rendered Live2D body, not its transparent window, opens chat."""
-        if event.button() == Qt.LeftButton and not self._is_model_point(event.position()):
+        if event.button() == Qt.LeftButton and not self._is_interactive_point(event.position()):
             self._click_timer.stop()
             event.accept()
             return
@@ -444,7 +474,7 @@ class Live2DWindow(PetWindow):
 
     def contextMenuEvent(self, event) -> None:
         """Keep desktop clicks through the transparent Live2D artboard unblocked."""
-        if not self._is_model_point(event.pos()):
+        if not self._is_interactive_point(event.pos()):
             event.accept()
             return
         self._menu.exec(event.globalPos())
@@ -469,14 +499,10 @@ class Live2DWindow(PetWindow):
         self.resize(width, height)
         # This model's artboard has generous transparent padding.
         self._label.set_model_scale(1.65)
-        self._overlay.setGeometry(self._label.rect())
-        self._overlay.raise_()
+        self._label.set_model_offset_y(0.0)
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
-        if hasattr(self, "_overlay"):
-            self._overlay.setGeometry(self._label.rect())
-            self._overlay.raise_()
 
     def _follow_cursor(self) -> None:
         """Map the desktop pointer to the Live2D drag space at 20 FPS."""
@@ -487,17 +513,15 @@ class Live2DWindow(PetWindow):
         x = (cursor.x() - center.x()) / max(1.0, self.width() * 0.8)
         y = (center.y() - cursor.y()) / max(1.0, self.height() * 0.8)
         self._label.set_drag_target(x, y)
-        if not self._mouth_timer.isActive():
-            self._overlay.set_pose(0.0, x, y)
 
-    def _advance_mouth_overlay(self) -> None:
-        """Animate the visible speech mouth independently from OpenGL ticks."""
+    def _advance_native_mouth(self) -> None:
+        """Refresh the model's native mouth parameter between render ticks."""
         if not self._mouth_timer.isActive():
             return
         elapsed = time.monotonic() - self._mouth_started_at
         # A full open-close cycle takes ~0.36 seconds, which remains readable
-        # at the configured 50% desktop-pet scale.
-        openness = 0.16 + 0.84 * abs(math.sin(elapsed * 8.7))
+        # at the configured desktop-pet scale and includes a true closed pose.
+        openness = 0.5 - 0.5 * math.cos(elapsed * 17.4)
         self._label.set_visual_mouth_open(openness)
 
     def showEvent(self, event) -> None:

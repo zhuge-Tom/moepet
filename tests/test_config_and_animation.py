@@ -1,5 +1,6 @@
 from pathlib import Path
 import json
+import math
 import os
 
 import pytest
@@ -372,8 +373,8 @@ def test_live2d_advance_passes_the_frame_delta_to_the_native_model():
     canvas._model = Model()
     canvas._update_lipsync = lambda: calls.append("lipsync")
     canvas._advance_model(0.033)
-    assert calls[-2] == ("update", 0.033)
-    assert calls[-1] == "mouth"
+    assert calls[-4:-1] == ["mouth", "mouth", "mouth"]
+    assert calls[-1] == ("update", 0.033)
 
 
 def test_live2d_applies_mouse_and_closed_mouth_parameters_after_physics():
@@ -400,6 +401,13 @@ def test_live2d_applies_mouse_and_closed_mouth_parameters_after_physics():
         ("ParamEyeBallX", -0.5),
         ("ParamEyeBallY", -0.25),
         ("ParamMouthOpenY", 0.0),
+        ("ParamMouthForm", 1.0),
+        ("Param18", 1.0),
+        ("Param19", 1.0),
+        ("ParamMouthOpenY", 0.0),
+        ("ParamMouthForm", 1.0),
+        ("Param18", 1.0),
+        ("Param19", 1.0),
     ]
 
 
@@ -432,28 +440,16 @@ def test_dialog_position_is_persisted_relative_to_the_active_pet(tmp_path):
     assert manager.config.get("dialog", "offset_y") == -245
 
 
-def test_visible_dialog_moves_with_the_pet_using_saved_offset(tmp_path):
-    class Pet:
-        def x(self): return 600
-        def y(self): return 300
-        def width(self): return 360
+def test_dragging_pet_does_not_move_an_open_dialog(tmp_path):
     class Dialog:
-        def __init__(self): self.moves = []
         def isVisible(self): return True
-        def move(self, x, y): self.moves.append((x, y))
-        def width(self): return 480
-        def height(self): return 240
-
     manager = type("Manager", (), {})()
     manager.config = Config(tmp_path / "config.json")
     manager.config.set("current_character", "noir")
-    manager.config.set("dialog", "offset_x", 8)
-    manager.config.set("dialog", "offset_y", -220)
-    manager._windows = {"noir": Pet()}
+    manager._windows = {}
     manager._dialog = Dialog()
-    manager._dialog_offset_for = lambda _win: PetManager._dialog_offset_for(manager, _win)
-    PetManager._move_dialog_with_pet(manager)
-    assert manager._dialog.moves == [(608, 80)]
+    PetManager._on_position_changed(manager, 608, 80)
+    assert manager.config.get_position("pet") == (608, 80)
 
 
 def test_start_keeps_settings_closed_even_when_chat_is_unconfigured(tmp_path):
@@ -483,9 +479,8 @@ def test_live2d_uses_the_model_dazed_expression_for_thinking_states():
         def set_speaking(self, speaking): self.speaking = speaking
 
     timer = type("Timer", (), {"stop": lambda self: None})()
-    overlay = type("Overlay", (), {"set_pose": lambda self, *_args: None})()
     window = type("Window", (), {
-        "_label": Canvas(), "_mouth_timer": timer, "_overlay": overlay,
+        "_label": Canvas(), "_mouth_timer": timer,
     })()
     Live2DWindow.set_state(window, "think")
     assert window._label.expression == "quanquan"
@@ -503,10 +498,9 @@ def test_live2d_speaking_keeps_the_line_eye_reply_reaction_visible():
         def set_speaking(self, _speaking): pass
 
     timer = type("Timer", (), {"start": lambda self: None, "stop": lambda self: None})()
-    overlay = type("Overlay", (), {"set_pose": lambda self, *_args: None})()
     window = type("Window", (), {
-        "_label": Canvas(), "_mouth_timer": timer, "_overlay": overlay,
-        "_mouth_started_at": 0.0, "_advance_mouth_overlay": lambda self: None,
+        "_label": Canvas(), "_mouth_timer": timer,
+        "_mouth_started_at": 0.0, "_advance_native_mouth": lambda self: None,
     })()
     Live2DWindow.set_state(window, "content")
     Live2DWindow.set_state(window, "speak")
@@ -557,6 +551,29 @@ def test_live2d_model_hit_uses_cubism_drawable_meshes_not_part_bounds():
     assert not Live2DWindow._is_model_point(window, QPointF(8, 8))
 
 
+def test_live2d_transparent_hit_test_passes_non_model_points_to_desktop():
+    from PySide6.QtCore import QPoint
+    from ui.live2d_window import Live2DWindow
+
+    window = type("Window", (), {
+        "mapFromGlobal": lambda _self, point: point,
+        "_is_interactive_point": lambda _self, point: False,
+    })()
+    assert Live2DWindow._should_pass_pointer_through(window, QPoint(8, 8))
+
+
+def test_live2d_interactive_outline_scales_with_window_size():
+    from PySide6.QtCore import QPoint
+    from ui.live2d_window import Live2DWindow
+
+    window = type("Window", (), {
+        "width": lambda self: 360, "height": lambda self: 520,
+        "_is_model_point": lambda _self, point: True,
+    })()
+    assert Live2DWindow._is_interactive_point(window, QPoint(180, 260))
+    assert not Live2DWindow._is_interactive_point(window, QPoint(8, 8))
+
+
 def test_live2d_context_menu_ignores_transparent_artboard_padding(qapp):
     from PySide6.QtCore import QPoint
     from PySide6.QtGui import QContextMenuEvent
@@ -564,7 +581,7 @@ def test_live2d_context_menu_ignores_transparent_artboard_padding(qapp):
 
     opened = []
     window = type("Window", (), {
-        "_is_model_point": lambda _self, point: point.x() > 20,
+        "_is_interactive_point": lambda _self, point: point.x() > 20,
         "_menu": type("Menu", (), {"exec": lambda _self, point: opened.append(point)})(),
     })()
     empty_event = QContextMenuEvent(QContextMenuEvent.Mouse, QPoint(8, 8), QPoint(8, 8))
@@ -574,18 +591,7 @@ def test_live2d_context_menu_ignores_transparent_artboard_padding(qapp):
     assert opened == [QPoint(80, 80)]
 
 
-def test_live2d_draws_a_visible_mouth_overlay_at_pet_scale(qapp, tmp_path):
-    from ui.live2d_window import MouthOverlay
-
-    overlay = MouthOverlay()
-    overlay.resize(360, 520)
-    overlay.set_pose(1.0, 0.0, 0.0)
-    # The fallback mouth is centered near the model face and must remain
-    # visible even when the authored texture mouth is only a few pixels wide.
-    assert overlay._openness == 1.0
-
-
-def test_live2d_mouth_overlay_uses_its_own_timer(qapp, tmp_path):
+def test_live2d_mouth_timer_drives_the_native_model_parameter(qapp, tmp_path):
     from ui.live2d_window import Live2DWindow
 
     class Canvas:
@@ -598,8 +604,56 @@ def test_live2d_mouth_overlay_uses_its_own_timer(qapp, tmp_path):
         "_label": Canvas(), "_mouth_started_at": 0.0,
         "_mouth_timer": type("Timer", (), {"isActive": lambda self: True})(),
     })()
-    Live2DWindow._advance_mouth_overlay(window)
-    assert window._label.openness > 0.1
+    Live2DWindow._advance_native_mouth(window)
+    assert 0.0 <= window._label.openness <= 1.0
+
+
+def test_live2d_keeps_the_pursed_mouth_pose_in_every_render_state():
+    from ui.live2d_window import Live2DCanvas
+
+    applied = []
+
+    class NativeModel:
+        def SetParameterValueById(self, parameter, value):
+            applied.append((parameter, value))
+
+    class Model:
+        _model = NativeModel()
+        def SetParameterValue(self, *_args): pass
+
+    canvas = Live2DCanvas(Path("model3.json"))
+    canvas._model = Model()
+    canvas._mouth_open = 1.0
+    canvas._apply_visible_parameters()
+
+    assert ("ParamMouthOpenY", 2.1) in applied
+    assert ("ParamMouthForm", 1.0) in applied
+    assert ("Param18", 1.0) in applied
+    assert ("Param19", 1.0) in applied
+
+    applied.clear()
+    canvas._mouth_open = 0.0
+    canvas._apply_visible_parameters()
+
+    assert ("ParamMouthOpenY", 0.0) in applied
+    assert ("ParamMouthForm", 1.0) in applied
+    assert ("Param18", 1.0) in applied
+    assert ("Param19", 1.0) in applied
+
+
+def test_live2d_text_lipsync_reaches_closed_and_open_mouth_poses(monkeypatch):
+    from ui.live2d_window import Live2DCanvas
+
+    canvas = Live2DCanvas(Path("model3.json"))
+    canvas._speaking = True
+    canvas._speech_started_at = 10.0
+    monkeypatch.setattr("ui.live2d_window.time.monotonic", lambda: 10.0)
+    canvas._update_lipsync()
+    assert canvas._mouth_open == 0.0
+
+    monkeypatch.setattr("ui.live2d_window.time.monotonic", lambda: 10.0 + math.pi / 16.4)
+    canvas._update_lipsync()
+    assert canvas._mouth_open == pytest.approx(1.0)
 
 
 def test_frame_animation_and_single_png_fallback(tmp_path):

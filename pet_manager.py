@@ -1237,17 +1237,6 @@ class PetManager:
                 self.config.save_position("pet", win.x(), win.y())
         else:
             self.config.save_position("pet", x, y)
-            self._move_dialog_with_pet()
-
-    def _move_dialog_with_pet(self) -> None:
-        """Preserve the user's saved chat-to-pet offset after a pet drag."""
-        if not self._dialog or not self._dialog.isVisible():
-            return
-        win = self._windows.get(self.config.current_character)
-        if not win:
-            return
-        offset_x, offset_y = self._dialog_offset_for(win)
-        self._dialog.move(win.x() + offset_x, win.y() + offset_y)
 
     # ─── 退出 ────────────────────────────────
 
