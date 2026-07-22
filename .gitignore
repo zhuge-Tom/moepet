@@ -13,7 +13,6 @@ tools/.cubism_external_token.json
 
 # 角色资源（自己下载）
 # characters/*/sprites/*.png
-characters/*/sprites/live2d/
 
 # 音色模型
 voice/models/
