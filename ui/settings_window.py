@@ -13,15 +13,20 @@ from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QWidget,
     QLabel, QSlider, QCheckBox, QComboBox, QPushButton,
     QScrollArea, QFrame, QLineEdit, QTreeWidget, QTreeWidgetItem,
-    QSizePolicy, QMenu, QTextEdit, QSpinBox, QStackedWidget,
+    QSizePolicy, QTextEdit, QSpinBox, QStackedWidget,
 )
-from PySide6.QtCore import Qt, QPropertyAnimation, QEasingCurve, Signal, QEvent
-from PySide6.QtGui import QPainter, QFont, QIcon, QPixmap, QAction, QDesktopServices
+from PySide6.QtCore import Qt, Signal
+from PySide6.QtGui import QDesktopServices
 from PySide6.QtCore import QUrl
 from PySide6.QtWidgets import QFileDialog, QMessageBox
 from core.knowledge_base import KnowledgeBase
 from core.openai_compat import chat_completions_url, is_local_endpoint
-from ui.settings_components import IntegrationOverview
+from ui.settings_components import IntegrationOverview, StarfieldBackground
+from ui.theme import (
+    SETTINGS_QSS, STAR_ACCENT, STAR_BORDER, STAR_BORDER_SOFT,
+    STAR_FOCUS, STAR_INPUT, STAR_SURFACE_ELEVATED, STAR_TEXT,
+    STAR_TEXT_MUTED, STAR_TEXT_SUBTLE, STAR_WARNING,
+)
 from ui.settings.probes import (
     ModelDiscoveryRunner, ProbeRunner, probe_cosyvoice, probe_http_endpoint, probe_local_module,
     probe_ocr,
@@ -42,27 +47,24 @@ from ui.settings.provider_presets import (
 from core.config import Config
 
 NAV_TREE = [
-    ("⚙", "通用设置", "general", True, []),
-    ("🎭", "角色设置", "character", True, [
-        ("🔌", "接口设置", "character_api"),
-        ("🖼️", "立绘设置", "character_sprites"),
-        ("📚", "角色资料库", "character_knowledge"),
+    ("通用设置", "general", True, []),
+    ("角色设置", "character", True, [
+        ("接口设置", "character_api"),
+        ("立绘设置", "character_sprites"),
+        ("角色资料库", "character_knowledge"),
     ]),
-    ("🤖", "AI 模型", "ai", True, []),
-    ("🔊", "语音合成", "tts", True, []),
-    ("🎤", "语音输入", "asr", True, []),
-    ("📷", "屏幕识别", "screen", True, []),
-    ("👁", "图像理解", "vision", True, []),
-    ("ℹ", "关于", "about", True, []),
+    ("AI 模型", "ai", True, []),
+    ("语音合成", "tts", True, []),
+    ("语音输入", "asr", True, []),
+    ("屏幕识别", "screen", True, []),
+    ("图像理解", "vision", True, []),
+    ("关于", "about", True, []),
 ]
-NAV_WIDE = 160
-NAV_NARROW = 48
-ANIM_MS = 220
-ROW_H = 36
+NAV_WIDTH = 208
 
 # 纯色替代 rgba 半透明，避免 hover 重绘闪烁
-_NAV_BG = "#2c3e50"
-_NAV_HOVER = "#3d5166"
+_NAV_BG = "#101735"
+_NAV_HOVER = "#293765"
 
 
 class SettingsWindow(QDialog):
@@ -76,32 +78,15 @@ class SettingsWindow(QDialog):
         self._characters = characters
         self._current_char = current_char
         self._base_dir = base_dir or Path(__file__).parent.parent
-        self._collapsed = False
-        self._last_page_key = "general"
-        self._anims = []
         self._probe_widgets = {}
         self._probe_runner = ProbeRunner(self)
         self._model_runner = ModelDiscoveryRunner(self)
         self._settings_baseline = ""
 
         self.setWindowTitle("Moepet 设置")
-        self.setMinimumSize(580, 520)
-        self.resize(760, 600)
-        self.setStyleSheet("""
-            QDialog { background: #f4f6f9; }
-            QCheckBox { color: #334155; spacing: 8px; font-size: 13px; }
-            QCheckBox::indicator { width: 16px; height: 16px; border: 2px solid #cbd5e1; border-radius: 4px; background: #fff; }
-            QCheckBox::indicator:checked { background: #e94560; border-color: #e94560; }
-            QComboBox { background: #fff; color: #1e293b; }
-            QComboBox::drop-down { border: none; width: 24px; }
-            QComboBox QAbstractItemView {
-                background: #ffffff; color: #1e293b;
-                border: 1px solid #cbd5e1; outline: none;
-                selection-background-color: #fce7ec; selection-color: #9f1239;
-            }
-            QComboBox QAbstractItemView::item { min-height: 28px; padding: 4px 8px; }
-            QComboBox QAbstractItemView::item:hover { background: #f8fafc; color: #1e293b; }
-        """)
+        self.setMinimumSize(760, 620)
+        self.resize(980, 720)
+        self.setStyleSheet(SETTINGS_QSS)
 
         self._build_ui()
         self._probe_runner.finished.connect(self._on_probe_finished)
@@ -112,12 +97,18 @@ class SettingsWindow(QDialog):
         self._refresh_dirty_state()
 
     def _build_ui(self):
-        root = QHBoxLayout(self)
+        root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
+        self._starfield = StarfieldBackground()
+        self._starfield.setObjectName("settings_starfield")
+        shell = QHBoxLayout(self._starfield)
+        shell.setContentsMargins(0, 0, 0, 0)
+        shell.setSpacing(0)
         self._nav_frame = self._build_nav()
-        root.addWidget(self._nav_frame)
-        root.addWidget(self._build_right(), 1)
+        shell.addWidget(self._nav_frame)
+        shell.addWidget(self._build_right(), 1)
+        root.addWidget(self._starfield)
 
     # ═══════════════════════════════════
     # 导航栏
@@ -125,81 +116,32 @@ class SettingsWindow(QDialog):
 
     def _build_nav(self):
         frame = QFrame()
-        frame.setMinimumWidth(NAV_WIDE)
-        frame.setMaximumWidth(NAV_WIDE)
+        frame.setMinimumWidth(NAV_WIDTH)
+        frame.setMaximumWidth(NAV_WIDTH)
         frame.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Preferred)
+        frame.setObjectName("settings_navigation")
         frame.setStyleSheet(
-            f"QFrame {{ background: {_NAV_BG}; border-right: 1px solid #1a252f; }}")
+            f"QFrame#settings_navigation {{ background: rgba(10, 16, 39, 238); border-right: 1px solid {STAR_BORDER}; }}")
 
         layout = QVBoxLayout(frame)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(0)
+        layout.setContentsMargins(12, 16, 12, 16)
+        layout.setSpacing(12)
 
-        # 描述行
-        self._desc_row = QHBoxLayout()
-        self._desc_row.setContentsMargins(6, 6, 6, 2)
-        self._desc_row.setSpacing(4)
+        # A text-only identity keeps the navigation quiet and spacious.
         self._desc_label = QLabel("Moepet")
         self._desc_label.setStyleSheet(
-            "font-size: 14px; font-weight: bold; color: #ecf0f1;"
-            f" background: transparent;")
-        self._desc_row.addWidget(self._desc_label, 1)
+            f"font-size: 18px; font-weight: 700; color: {STAR_TEXT}; background: transparent;")
+        layout.addWidget(self._desc_label)
 
-        self._collapse_top = QPushButton("▶")
-        self._collapse_top.setFixedSize(NAV_NARROW - 8, 24)
-        self._collapse_top.setToolTip("展开导航")
-        self._collapse_top.setStyleSheet(
-            "QPushButton { background: transparent; border: none;"
-            f" font-size: 14px; color: #bdc3c7; border-radius: 4px; }}"
-            f"QPushButton:hover {{ background: {_NAV_HOVER}; }}")
-        self._collapse_top.clicked.connect(self._expand_nav)
-        self._collapse_top.hide()
-        self._desc_row.addWidget(self._collapse_top)
-        layout.addLayout(self._desc_row)
+        section_label = QLabel("设置导航")
+        section_label.setStyleSheet(
+            f"font-size: 10px; font-weight: 700; letter-spacing: 1px; color: {STAR_TEXT_SUBTLE};")
+        layout.addWidget(section_label)
 
-        # 折叠 + 搜索行
-        self._tool_row = QHBoxLayout()
-        self._tool_row.setContentsMargins(4, 2, 6, 4)
-        self._tool_row.setSpacing(4)
-
-        self._collapse_side = QPushButton("☰")
-        self._collapse_side.setFixedSize(30, 28)
-        self._collapse_side.setToolTip("收起导航")
-        self._collapse_side.setStyleSheet(
-            "QPushButton { background: transparent; border: none;"
-            f" font-size: 16px; color: #bdc3c7; border-radius: 4px; }}"
-            f"QPushButton:hover {{ background: {_NAV_HOVER}; }}")
-        self._collapse_side.clicked.connect(self._toggle_nav)
-        self._tool_row.addWidget(self._collapse_side)
-
-        self.search_box = QLineEdit()
-        self.search_box.setPlaceholderText("查找设置...")
-        self.search_box.setClearButtonEnabled(True)
-        self.search_box.setFixedHeight(28)
-        self.search_box.setStyleSheet(
-            "QLineEdit { border: 1px solid #34495e; border-radius: 6px;"
-            " padding: 2px 6px; font-size: 11px;"
-            " background: #34495e; color: #ecf0f1; }"
-            "QLineEdit:focus { border-color: #e94560; }")
-        self.search_box.textChanged.connect(self._on_search)
-        self._tool_row.addWidget(self.search_box, 1)
-
-        self._search_icon = QPushButton("🔍")
-        self._search_icon.setFixedSize(30, 28)
-        self._search_icon.setToolTip("搜索")
-        self._search_icon.setStyleSheet(
-            "QPushButton { background: transparent; border: none;"
-            f" font-size: 13px; border-radius: 4px; }}"
-            f"QPushButton:hover {{ background: {_NAV_HOVER}; }}")
-        self._search_icon.clicked.connect(self._expand_nav)
-        self._search_icon.hide()
-        self._tool_row.addWidget(self._search_icon)
-        layout.addLayout(self._tool_row)
-
-        # 树形导航 — hover 用纯色，不用 rgba 半透明
+        # Text-only navigation keeps every destination visible at all times.
         self._tree = QTreeWidget()
         self._tree.setHeaderHidden(True)
-        self._tree.setIndentation(16)
+        self._tree.setIndentation(12)
         self._tree.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self._tree.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self._tree.verticalScrollBar().setEnabled(False)
@@ -207,123 +149,37 @@ class SettingsWindow(QDialog):
         self._tree.setAutoFillBackground(True)
         self._tree.setStyleSheet(f"""
             QTreeWidget {{
-                background: {_NAV_BG}; border: none;
-                outline: none; font-size: 13px;
+                background: transparent; border: none; outline: none; font-size: 14px;
             }}
             QTreeWidget::item {{
-                padding: 7px 6px; border-radius: 6px; color: #bdc3c7;
+                padding: 9px 10px; border-radius: 7px; color: {STAR_TEXT_MUTED};
             }}
             QTreeWidget::item:selected {{
-                background: #e94560; color: #fff; font-weight: bold;
+                background: {STAR_ACCENT}; color: #fff; font-weight: bold;
             }}
             QTreeWidget::item:hover:!selected {{
                 background: {_NAV_HOVER};
             }}""")
 
-        for emoji, text, key, enabled, children in NAV_TREE:
-            p = QTreeWidgetItem([f" {text}"])
+        for text, key, enabled, children in NAV_TREE:
+            p = QTreeWidgetItem([text])
             p.setData(0, Qt.UserRole, key)
-            p.setIcon(0, self._icon(emoji))
             if not enabled:
                 p.setFlags(p.flags() & ~Qt.ItemIsEnabled)
                 p.setForeground(0, Qt.gray)
             self._tree.addTopLevelItem(p)
-            for ct_emoji, ct, ck in children:
-                c = QTreeWidgetItem([f"{ct}"])
+            for ct, ck in children:
+                c = QTreeWidgetItem([ct])
                 c.setData(0, Qt.UserRole, ck)
-                c.setIcon(0, self._icon(ct_emoji))
                 p.addChild(c)
             if children:
                 p.setData(0, Qt.UserRole + 1, children)
 
         self._tree.itemClicked.connect(self._on_item_clicked)
         self._tree.currentItemChanged.connect(self._on_tree_changed)
-        total_rows = sum(1 + len(ch) for _, _, _, _, ch in NAV_TREE)
-        self._tree.setFixedHeight(ROW_H * total_rows + 8)
         layout.addWidget(self._tree)
         layout.addStretch()
         return frame
-
-    @staticmethod
-    def _icon(emoji):
-        pm = QPixmap(20, 20)
-        pm.fill(Qt.transparent)
-        p = QPainter(pm)
-        f = QFont()
-        f.setPixelSize(16)
-        p.setFont(f)
-        p.drawText(pm.rect(), Qt.AlignCenter, emoji)
-        p.end()
-        return QIcon(pm)
-
-    # ═══════════════════════════════════
-    # 折叠 / 展开
-    # ═══════════════════════════════════
-
-    def _toggle_nav(self):
-        self._collapsed = not self._collapsed
-        self._do_collapse() if self._collapsed else self._do_expand()
-
-    def _expand_nav(self):
-        if self._collapsed:
-            self._collapsed = False
-            self._do_expand()
-
-    def _do_collapse(self):
-        self._anim_nav_width(NAV_NARROW)
-        self._desc_label.hide()
-        self._collapse_top.show()
-        self._desc_row.setContentsMargins(0, 2, 0, 0)
-        self._collapse_side.hide()
-        self.search_box.hide()
-        self._search_icon.show()
-        self._tool_row.setContentsMargins(0, 0, 0, 2)
-        for i in range(self._tree.topLevelItemCount()):
-            p = self._tree.topLevelItem(i)
-            while p.childCount() > 0:
-                p.removeChild(p.child(0))
-
-    def _do_expand(self):
-        self._anim_nav_width(NAV_WIDE)
-        self._desc_label.show()
-        self._collapse_top.hide()
-        self._desc_row.setContentsMargins(6, 6, 6, 2)
-        self._collapse_side.show()
-        self._search_icon.hide()
-        self.search_box.show()
-        self._tool_row.setContentsMargins(4, 2, 6, 4)
-        for i, (_, _, _, _, children) in enumerate(NAV_TREE):
-            p = self._tree.topLevelItem(i)
-            for ct_emoji, ct, ck in children:
-                c = QTreeWidgetItem([f"{ct}"])
-                c.setData(0, Qt.UserRole, ck)
-                c.setIcon(0, self._icon(ct_emoji))
-                p.addChild(c)
-
-    def _anim_nav_width(self, target):
-        cur = self._nav_frame.width()
-        self._anims = []
-        for prop in (b"minimumWidth", b"maximumWidth"):
-            a = QPropertyAnimation(self._nav_frame, prop)
-            a.setDuration(ANIM_MS)
-            a.setStartValue(cur)
-            a.setEndValue(target)
-            a.setEasingCurve(QEasingCurve.InOutCubic)
-            a.start()
-            self._anims.append(a)
-
-    def _on_search(self, text):
-        for i in range(self._tree.topLevelItemCount()):
-            p = self._tree.topLevelItem(i)
-            any_vis = False
-            for j in range(p.childCount()):
-                c = p.child(j)
-                v = not text.strip() or text.strip().lower() in c.text(0).lower()
-                c.setHidden(not v)
-                if v:
-                    any_vis = True
-            p.setHidden(not any_vis and not (
-                not text.strip() or text.strip().lower() in p.text(0).lower()))
 
     # ═══════════════════════════════════
     # 右侧 + QStackedWidget 页面管理
@@ -331,19 +187,26 @@ class SettingsWindow(QDialog):
 
     def _build_right(self):
         right = QWidget()
+        right.setObjectName("settings_main_area")
         layout = QVBoxLayout(right)
         layout.setContentsMargins(28, 20, 28, 0)
         layout.setSpacing(10)
 
+        eyebrow = QLabel("MOEPET · SETTINGS CENTER")
+        eyebrow.setObjectName("settings_page_eyebrow")
+        eyebrow.setStyleSheet(
+            f"font-size: 10px; font-weight: 700; letter-spacing: 1px; color: {STAR_ACCENT};")
+        layout.addWidget(eyebrow, alignment=Qt.AlignLeft)
+
         self._page_title = QLabel("通用设置")
         self._page_title.setStyleSheet(
-            "font-size: 21px; font-weight: bold; color: #172033;")
+            f"font-size: 21px; font-weight: bold; color: {STAR_TEXT};")
         layout.addWidget(self._page_title, alignment=Qt.AlignLeft)
 
         self._page_description = QLabel()
         self._page_description.setWordWrap(True)
         self._page_description.setStyleSheet(
-            "font-size: 12px; color: #64748b; margin-bottom: 4px;")
+            f"font-size: 12px; color: {STAR_TEXT_MUTED}; margin-bottom: 4px;")
         layout.addWidget(self._page_description)
 
         scroll = QScrollArea()
@@ -353,19 +216,19 @@ class SettingsWindow(QDialog):
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         scroll.setStyleSheet(
             "QScrollArea { background: transparent; border: none; }"
-            "QScrollBar:vertical { width: 6px; background: transparent;"
-            " border-radius: 3px; }"
-            "QScrollBar::handle:vertical { background: #c8ccd4;"
-            " border-radius: 3px; min-height: 30px; }"
-            "QScrollBar::add-line:vertical,"
-            " QScrollBar::sub-line:vertical { height: 0; }")
+            "QScrollBar:vertical { width: 7px; background: transparent; margin: 4px 0; }"
+            "QScrollBar::handle:vertical { background: #38477a; border-radius: 3px; min-height: 30px; }"
+            "QScrollBar::handle:vertical:hover { background: #b78cff; }"
+            "QScrollBar::sub-page:vertical { background: #aeb8cc; border-radius: 3px; }"
+            "QScrollBar::add-page:vertical { background: #aeb8cc; border-radius: 3px; }"
+            "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }")
 
         # QStackedWidget: 每个页面是独立的 QWidget，切换时仅改 index
         content_card = QFrame()
         content_card.setObjectName("settings_content_card")
         content_card.setStyleSheet(
-            "QFrame#settings_content_card { background: #ffffff;"
-            " border: 1px solid #e2e8f0; border-radius: 12px; }")
+            f"QFrame#settings_content_card {{ background: rgba(20, 27, 61, 238);"
+            f" border: 1px solid {STAR_BORDER}; border-radius: 12px; }}")
         card_layout = QVBoxLayout(content_card)
         card_layout.setContentsMargins(0, 0, 0, 0)
 
@@ -398,11 +261,11 @@ class SettingsWindow(QDialog):
         for combo in self._stack.findChildren(QComboBox):
             combo.view().setStyleSheet("""
                 QAbstractItemView {
-                    background: #ffffff;
-                    color: #1e293b;
-                    border: 1px solid #cbd5e1;
-                    selection-background-color: #fce7ec;
-                    selection-color: #9f1239;
+                    background: #1b2450;
+                    color: #f4f5ff;
+                    border: 1px solid #38477a;
+                    selection-background-color: #f05c91;
+                    selection-color: #ffffff;
                     outline: none;
                 }
                 QAbstractItemView::item {
@@ -410,8 +273,8 @@ class SettingsWindow(QDialog):
                     padding: 4px 8px;
                 }
                 QAbstractItemView::item:hover {
-                    background: #f8fafc;
-                    color: #1e293b;
+                    background: #293765;
+                    color: #ffffff;
                 }
             """)
 
@@ -420,13 +283,16 @@ class SettingsWindow(QDialog):
         layout.addWidget(content_card, 1)
 
         footer = QFrame()
-        footer.setStyleSheet("QFrame { border-top: 1px solid #e2e8f0; background: #ffffff; }")
+        footer.setObjectName("settings_footer")
+        footer.setStyleSheet(
+            f"QFrame#settings_footer {{ border-top: 1px solid {STAR_BORDER_SOFT}; background: transparent; }}")
         footer_layout = QHBoxLayout(footer)
         footer_layout.setContentsMargins(0, 12, 0, 14)
         btn_row = QHBoxLayout()
         btn_row.setSpacing(8)
         self._dirty_label = QLabel()
-        self._dirty_label.setStyleSheet("color: #b45309; font-size: 12px; font-weight: 600;")
+        self._dirty_label.setStyleSheet(
+            f"color: {STAR_WARNING}; font-size: 12px; font-weight: 600;")
         footer_layout.addWidget(self._dirty_label)
         btn_row.addStretch()
         for text, slot, pri in [
@@ -436,17 +302,9 @@ class SettingsWindow(QDialog):
         ]:
             b = QPushButton(text)
             if pri:
-                b.setStyleSheet(
-                    "QPushButton { background: #e94560; color: #fff;"
-                    " border: none; border-radius: 7px;"
-                    " padding: 7px 22px; font-size: 13px; }"
-                    "QPushButton:hover { background: #ff6b6b; }")
+                b.setObjectName("settings_confirm_button")
             else:
-                b.setStyleSheet(
-                    "QPushButton { background: #fff; color: #444;"
-                    " border: 1px solid #d3d7de; border-radius: 7px;"
-                    " padding: 7px 22px; font-size: 13px; }"
-                    "QPushButton:hover { background: #f5f6fa; }")
+                b.setObjectName("settings_secondary_button")
             b.clicked.connect(slot)
             btn_row.addWidget(b)
         footer_layout.addLayout(btn_row)
@@ -536,7 +394,7 @@ class SettingsWindow(QDialog):
         label = QLabel(title)
         label.setStyleSheet(
             "font-weight: bold; font-size: 14px;"
-            " color: #475569; margin-top: 2px;")
+            f" color: {STAR_TEXT}; margin-top: 2px;")
         layout.addWidget(label)
         return label
 
@@ -545,7 +403,7 @@ class SettingsWindow(QDialog):
         row = QHBoxLayout()
         row.setSpacing(16)
         lbl = QLabel(label_text)
-        lbl.setStyleSheet("font-size: 13px; color: #2c3e50;")
+        lbl.setStyleSheet(f"font-size: 13px; color: {STAR_TEXT_MUTED};")
         lbl.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Fixed)
         row.addWidget(lbl)
         row.addWidget(widget, 1)
@@ -555,7 +413,7 @@ class SettingsWindow(QDialog):
     def _hint(self, layout, text):
         """灰色提示文字"""
         h = QLabel(text)
-        h.setStyleSheet("color: #94a3b8; font-size: 11px; margin-left: 2px;")
+        h.setStyleSheet(f"color: {STAR_TEXT_SUBTLE}; font-size: 11px; margin-left: 2px;")
         h.setWordWrap(True)
         h.setMinimumHeight(32)
         h.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum)
@@ -568,9 +426,9 @@ class SettingsWindow(QDialog):
         le.setEchoMode(echo_mode)
         le.setFixedHeight(30)
         le.setStyleSheet(
-            "QLineEdit { border: 1px solid #d3d7de; border-radius: 6px;"
+            f"QLineEdit {{ background: {STAR_INPUT}; color: {STAR_TEXT}; border: 1px solid {STAR_BORDER}; border-radius: 6px;"
             " padding: 4px 10px; font-size: 13px; }"
-            "QLineEdit:focus { border-color: #e94560; }")
+            f"QLineEdit:focus {{ border-color: {STAR_FOCUS}; }}")
         return le
 
     def _add_probe_row(self, layout, key, text, prepare_probe):
@@ -578,12 +436,12 @@ class SettingsWindow(QDialog):
         button = QPushButton(text)
         button.setFixedHeight(30)
         button.setStyleSheet(
-            "QPushButton { background: #eef2ff; color: #3730a3;"
-            " border: 1px solid #c7d2fe; border-radius: 6px; padding: 4px 14px; }"
-            "QPushButton:hover { background: #e0e7ff; }")
+            f"QPushButton {{ background: {STAR_SURFACE_ELEVATED}; color: {STAR_TEXT};"
+            f" border: 1px solid {STAR_BORDER}; border-radius: 6px; padding: 4px 14px; }}"
+            f"QPushButton:hover {{ background: #293765; border-color: {STAR_FOCUS}; }}")
         status = QLabel("尚未测试")
         status.setWordWrap(True)
-        status.setStyleSheet("color: #64748b; font-size: 12px;")
+        status.setStyleSheet(f"color: {STAR_TEXT_MUTED}; font-size: 12px;")
         row.addWidget(button)
         row.addWidget(status, 1)
         layout.addLayout(row)
@@ -594,7 +452,7 @@ class SettingsWindow(QDialog):
         button, status = self._probe_widgets[key]
         button.setEnabled(False)
         status.setText("正在后台测试...")
-        status.setStyleSheet("color: #2563eb; font-size: 12px;")
+        status.setStyleSheet(f"color: {STAR_FOCUS}; font-size: 12px;")
         try:
             probe = prepare_probe()
         except Exception as exc:
@@ -611,14 +469,14 @@ class SettingsWindow(QDialog):
         button.setEnabled(True)
         status.setText(message)
         status.setStyleSheet(
-            f"color: {'#15803d' if ok else '#dc2626'}; font-size: 12px;")
+            f"color: {'#71d6bb' if ok else '#ff789d'}; font-size: 12px;")
 
     def _discover_models(self, key: str, url_field, key_field, picker, status) -> None:
         """Request provider models in the background and keep the manual model editable."""
         button = getattr(self, f"_{key}_discover_button")
         button.setEnabled(False)
         status.setText("正在后台获取模型列表...")
-        status.setStyleSheet("color: #2563eb; font-size: 12px;")
+        status.setStyleSheet(f"color: {STAR_FOCUS}; font-size: 12px;")
         self._model_requests = getattr(self, "_model_requests", {})
         self._model_requests[key] = (button, picker, status)
         self._model_runner.run(key, url_field.text().strip(), key_field.text().strip())
@@ -631,7 +489,7 @@ class SettingsWindow(QDialog):
         button.setEnabled(True)
         status.setText(message)
         status.setStyleSheet(
-            f"color: {'#15803d' if ok else '#dc2626'}; font-size: 12px;")
+            f"color: {'#71d6bb' if ok else '#ff789d'}; font-size: 12px;")
         if not ok:
             return
         picker.blockSignals(True)
@@ -816,7 +674,7 @@ class SettingsWindow(QDialog):
         """占位提示"""
         label = QLabel(text)
         label.setStyleSheet(
-            "color: #94a3b8; font-size: 13px; padding: 20px;")
+            f"color: {STAR_TEXT_MUTED}; font-size: 13px; padding: 20px;")
         label.setAlignment(Qt.AlignCenter)
         layout.addWidget(label)
 
@@ -843,14 +701,11 @@ class SettingsWindow(QDialog):
         self._sec(lay, "软件设置")
 
         char_lbl = QLabel("角色选择")
-        char_lbl.setStyleSheet("font-size: 13px; color: #2c3e50;")
+        char_lbl.setStyleSheet(f"font-size: 13px; color: {STAR_TEXT_MUTED};")
         lay.addWidget(char_lbl)
 
         self._char_combo = QComboBox()
         self._char_combo.setFixedHeight(30)
-        self._char_combo.setStyleSheet(
-            "QComboBox { border: 1px solid #d3d7de; border-radius: 6px;"
-            " padding: 4px 10px; font-size: 13px; }")
         for n in self._characters:
             self._char_combo.addItem(n)
         idx = self._char_combo.findText(self._current_char)
@@ -860,11 +715,6 @@ class SettingsWindow(QDialog):
 
         open_folder_btn = QPushButton("📂 打开角色文件夹")
         open_folder_btn.setFixedHeight(28)
-        open_folder_btn.setStyleSheet(
-            "QPushButton { background: #f5f7fa; color: #444;"
-            " border: 1px solid #d3d7de; border-radius: 6px;"
-            " padding: 4px 12px; font-size: 12px; }"
-            "QPushButton:hover { background: #e8ecf1; }")
         open_folder_btn.clicked.connect(self._open_characters_folder)
         lay.addWidget(open_folder_btn)
 
@@ -880,8 +730,13 @@ class SettingsWindow(QDialog):
             self.config.get("window", "always_on_top", default=True))
         lay.addWidget(self._always_top_cb)
 
+        self._sec(lay, "显示模式")
+        self._general_renderer_combo = self._make_renderer_combo()
+        self._row("立绘类型", self._general_renderer_combo, lay)
+        self._hint(lay, "切换静态 PNG 立绘或当前角色可用的 Live2D 动态模型。")
+
         scale_lbl = QLabel("立绘缩放")
-        scale_lbl.setStyleSheet("font-size: 13px; color: #2c3e50;")
+        scale_lbl.setStyleSheet(f"font-size: 13px; color: {STAR_TEXT_MUTED};")
         lay.addWidget(scale_lbl)
 
         scale_row = QHBoxLayout()
@@ -892,16 +747,10 @@ class SettingsWindow(QDialog):
             int(self.config.get("window", "scale", default=0.5) * 100))
         self._scale_slider.valueChanged.connect(self._on_scale_slider)
         self._scale_slider.setFixedHeight(20)
-        self._scale_slider.setStyleSheet(
-            "QSlider::groove:horizontal { height: 4px;"
-            " background: #e2e6ed; border-radius: 2px; }"
-            "QSlider::handle:horizontal { width: 14px; height: 14px;"
-            " margin: -5px 0; background: #e94560; border-radius: 7px; }"
-            "QSlider::handle:horizontal:hover { background: #ff6b6b; }")
         self._scale_label = QLabel(f"{self._scale_slider.value()}%")
         self._scale_label.setFixedWidth(42)
         self._scale_label.setStyleSheet(
-            "color: #e94560; font-weight: bold; font-size: 13px;")
+            f"color: {STAR_ACCENT}; font-weight: bold; font-size: 13px;")
         scale_row.addWidget(self._scale_slider, 1)
         scale_row.addWidget(self._scale_label)
         lay.addLayout(scale_row)
@@ -915,26 +764,26 @@ class SettingsWindow(QDialog):
         self._row("桌宠透明度", self._opacity, lay)
 
         _spin_qss = (
-            "QSpinBox { border: 1px solid #d3d7de; border-radius: 6px;"
+            f"QSpinBox {{ background: {STAR_INPUT}; color: {STAR_TEXT}; border: 1px solid {STAR_BORDER}; border-radius: 6px;"
             " padding: 4px 8px; font-size: 13px; padding-right: 24px; }"
             "QSpinBox::up-button, QSpinBox::down-button {"
-            " width: 18px; border: none; background: transparent; }"
+            f" width: 18px; border: none; background: {STAR_SURFACE_ELEVATED}; }}"
             "QSpinBox::up-button { subcontrol-origin: border;"
             " subcontrol-position: top right; }"
             "QSpinBox::down-button { subcontrol-origin: border;"
             " subcontrol-position: bottom right; }"
             "QSpinBox::up-button:hover, QSpinBox::down-button:hover {"
-            " background: #e8ecf1; }"
+            " background: #293765; }"
             "QSpinBox::up-button:pressed, QSpinBox::down-button:pressed {"
-            " background: #d3d7de; }"
+            " background: #38477a; }"
             "QSpinBox::up-arrow { image: none;"
             " border-left: 4px solid transparent;"
             " border-right: 4px solid transparent;"
-            " border-bottom: 5px solid #666; width: 0; height: 0; }"
+            f" border-bottom: 5px solid {STAR_TEXT_MUTED}; width: 0; height: 0; }}"
             "QSpinBox::down-arrow { image: none;"
             " border-left: 4px solid transparent;"
             " border-right: 4px solid transparent;"
-            " border-top: 5px solid #666; width: 0; height: 0; }"
+            f" border-top: 5px solid {STAR_TEXT_MUTED}; width: 0; height: 0; }}"
         )
 
         self._typing_speed = QSpinBox()
@@ -966,9 +815,6 @@ class SettingsWindow(QDialog):
         self._click_combo.addItem("弹跳动画", "bounce")
         self._click_combo.addItem("无反应", "none")
         self._click_combo.setFixedHeight(30)
-        self._click_combo.setStyleSheet(
-            "QComboBox { border: 1px solid #d3d7de; border-radius: 6px;"
-            " padding: 6px 10px; font-size: 13px; }")
         current = self.config.get("behavior", "click_action",
                                   default="switch_sprite")
         idx = self._click_combo.findData(current)
@@ -1009,7 +855,7 @@ class SettingsWindow(QDialog):
 
         prompt_lbl = QLabel("角色提示词（system prompt）")
         prompt_lbl.setStyleSheet(
-            "font-size: 13px; color: #2c3e50; font-weight: bold;")
+            f"font-size: 13px; color: {STAR_TEXT}; font-weight: bold;")
         lay.addWidget(prompt_lbl)
 
         self._system_prompt = QTextEdit()
@@ -1018,10 +864,6 @@ class SettingsWindow(QDialog):
         self._system_prompt.setFixedHeight(120)
         prompt = self._character_prompt()
         self._system_prompt.setPlainText(prompt.get("system_prompt", ""))
-        self._system_prompt.setStyleSheet(
-            "QTextEdit { border: 1px solid #d3d7de; border-radius: 8px;"
-            " padding: 8px; font-size: 13px; }"
-            "QTextEdit:focus { border-color: #e94560; }")
         lay.addWidget(self._system_prompt)
 
         self._hint(lay, "提示词决定了角色的性格和回复风格")
@@ -1034,10 +876,6 @@ class SettingsWindow(QDialog):
             "例如：每句话前加上心情标签，格式为 {心情}|{回复}")
         self._format_prompt.setFixedHeight(80)
         self._format_prompt.setPlainText(prompt.get("format_prompt", ""))
-        self._format_prompt.setStyleSheet(
-            "QTextEdit { border: 1px solid #d3d7de; border-radius: 8px;"
-            " padding: 8px; font-size: 13px; }"
-            "QTextEdit:focus { border-color: #e94560; }")
         lay.addWidget(self._format_prompt)
 
         lay.addStretch()
@@ -1050,16 +888,27 @@ class SettingsWindow(QDialog):
     def _page_character_sprites(self):
         page, lay = self._make_page()
 
-        self._sec(lay, "当前角色立绘")
+        self._sec(lay, "显示模式")
+        self._renderer_combo = self._make_renderer_combo()
+        self._renderer_combo.currentIndexChanged.connect(self._sync_renderer_combos)
+        self._general_renderer_combo.currentIndexChanged.connect(self._sync_renderer_combos)
+        self._row("使用", self._renderer_combo, lay)
+        self._hint(
+            lay,
+            "选择后点击「应用」或「确定」即可立即切换。Live2D 会使用呼吸、眨眼和物理效果；"
+            "若显卡 OpenGL 无法初始化，会自动恢复静态立绘。",
+        )
+
+        self._sec(lay, "静态立绘文件")
 
         self._sprite_list = QTreeWidget()
         self._sprite_list.setHeaderHidden(True)
         self._sprite_list.setStyleSheet(
-            "QTreeWidget { border: 1px solid #e2e6ed; border-radius: 8px;"
+            f"QTreeWidget {{ background: {STAR_INPUT}; color: {STAR_TEXT}; border: 1px solid {STAR_BORDER}; border-radius: 8px;"
             " padding: 4px; font-size: 13px; }"
             "QTreeWidget::item { padding: 6px 10px; border-radius: 4px; }"
             "QTreeWidget::item:selected {"
-            " background: #fce4ec; color: #e94560; }")
+            f" background: {STAR_ACCENT}; color: #ffffff; }}")
         self._sprite_list.setFixedHeight(140)
         lay.addWidget(self._sprite_list)
 
@@ -1069,19 +918,42 @@ class SettingsWindow(QDialog):
         row = QHBoxLayout()
         row.addStretch()
         open_sprite_btn = QPushButton("📂 打开立绘文件夹")
-        open_sprite_btn.setStyleSheet(
-            "QPushButton { background: #f5f7fa; color: #444;"
-            " border: 1px solid #d3d7de; border-radius: 6px;"
-            " padding: 4px 12px; font-size: 12px; }"
-            "QPushButton:hover { background: #e8ecf1; }")
         open_sprite_btn.clicked.connect(self._open_sprites_folder)
         row.addWidget(open_sprite_btn)
         lay.addLayout(row)
 
-        self._hint(lay, "将 .png 立绘文件放入 sprites 文件夹即可自动加载")
+        self._hint(lay, "将 .png 立绘文件放入 sprites 文件夹即可自动加载。")
 
         lay.addStretch()
         return page
+
+    def _make_renderer_combo(self) -> QComboBox:
+        combo = QComboBox()
+        combo.addItem("静态立绘（PNG）", "static")
+        live2d_model = (
+            self._base_dir / "characters" / self._current_char / "sprites"
+            / "live2d" / "NOIR" / "noir.model3.json"
+        )
+        if live2d_model.exists():
+            combo.addItem("Live2D 动态模型（Noir）", "live2d")
+        renderer_index = combo.findData(
+            self.config.get("window", "renderer", default="static"))
+        combo.setCurrentIndex(max(renderer_index, 0))
+        return combo
+
+    def _sync_renderer_combos(self, *_args) -> None:
+        source = self.sender()
+        if not isinstance(source, QComboBox):
+            return
+        for combo in (getattr(self, "_general_renderer_combo", None),
+                      getattr(self, "_renderer_combo", None)):
+            if combo is None or combo is source:
+                continue
+            index = combo.findData(source.currentData())
+            if index >= 0 and combo.currentIndex() != index:
+                combo.blockSignals(True)
+                combo.setCurrentIndex(index)
+                combo.blockSignals(False)
 
     def _refresh_sprite_list(self):
         """刷新立绘列表（切换角色时调用）"""
@@ -1107,24 +979,24 @@ class SettingsWindow(QDialog):
         lay.addWidget(self._knowledge_enabled)
         self._knowledge_status = QLabel()
         self._knowledge_status.setWordWrap(True)
-        self._knowledge_status.setStyleSheet("color: #64748b; font-size: 12px;")
+        self._knowledge_status.setStyleSheet(f"color: {STAR_TEXT_MUTED}; font-size: 12px;")
         lay.addWidget(self._knowledge_status)
         self._knowledge_type = QComboBox()
         self._knowledge_type.addItem("世界观 / 背景", "world")
         self._knowledge_type.addItem("角色设定", "character")
         self._knowledge_type.addItem("对话示例", "dialogue")
-        self._knowledge_type.setStyleSheet("""
-            QComboBox { background: #ffffff; color: #2c3e50;
-                        border: 1px solid #d3d7de; border-radius: 6px;
-                        padding: 4px 10px; min-height: 20px; }
-            QComboBox::drop-down { border: none; width: 24px; }
-            QComboBox QAbstractItemView { background: #ffffff; color: #2c3e50;
-                                          border: 1px solid #d3d7de;
-                                          selection-background-color: #fce4ec;
-                                          selection-color: #e94560;
-                                          outline: none; }
-            QComboBox QAbstractItemView::item { min-height: 26px; padding: 4px 8px; }
-            QComboBox QAbstractItemView::item:hover { background: #f5f7fa; }
+        self._knowledge_type.setStyleSheet(f"""
+            QComboBox {{ background: {STAR_INPUT}; color: {STAR_TEXT};
+                        border: 1px solid {STAR_BORDER}; border-radius: 6px;
+                        padding: 4px 10px; min-height: 20px; }}
+            QComboBox::drop-down {{ border: none; width: 24px; }}
+            QComboBox QAbstractItemView {{ background: {STAR_SURFACE_ELEVATED}; color: {STAR_TEXT};
+                                          border: 1px solid {STAR_BORDER};
+                                          selection-background-color: {STAR_ACCENT};
+                                          selection-color: #ffffff;
+                                          outline: none; }}
+            QComboBox QAbstractItemView::item {{ min-height: 26px; padding: 4px 8px; }}
+            QComboBox QAbstractItemView::item:hover {{ background: #293765; }}
         """)
         self._row("导入资料类型", self._knowledge_type, lay)
         import_btn = QPushButton("导入资料文件（TXT / Markdown / JSON）")
@@ -1144,7 +1016,6 @@ class SettingsWindow(QDialog):
 
     def _open_page(self, key: str):
         """Route dashboard actions through the same navigation state as clicks."""
-        self._last_page_key = key
         self._switch_page(key)
         for index in range(self._tree.topLevelItemCount()):
             parent = self._tree.topLevelItem(index)
@@ -1308,58 +1179,9 @@ class SettingsWindow(QDialog):
         self._tree.setCurrentItem(item)
         children = item.data(0, Qt.UserRole + 1)
         if children:
-            if self._collapsed:
-                # 折叠状态：弹菜单选择子页面
-                self._popup_children_menu(item, children)
-                # 恢复到上一个选中的非父节点
-                if self._last_page_key:
-                    for i in range(self._tree.topLevelItemCount()):
-                        p = self._tree.topLevelItem(i)
-                        if p.data(0, Qt.UserRole) == self._last_page_key:
-                            self._tree.setCurrentItem(p)
-                            break
-                        for j in range(p.childCount()):
-                            c = p.child(j)
-                            if c.data(0, Qt.UserRole) == self._last_page_key:
-                                self._tree.setCurrentItem(c)
-                                break
-            else:
-                # 展开状态：切换子项的展开/收起
-                item.setExpanded(not item.isExpanded())
+            item.setExpanded(not item.isExpanded())
         else:
-            self._last_page_key = item.data(0, Qt.UserRole)
-            self._switch_page(self._last_page_key)
-
-    def _popup_children_menu(self, item, children):
-        menu = QMenu(self)
-        menu.setStyleSheet("""
-            QMenu { background: #2c3e50; color: #ecf0f1;
-                    border: 1px solid #e94560;
-                    border-radius: 6px; padding: 4px; }
-            QMenu::item { padding: 6px 20px; border-radius: 4px; }
-            QMenu::item:selected { background: #e94560; }""")
-        for emoji, text, key in children:
-            action = QAction(f"{emoji}  {text}", self)
-            action.setData(key)
-            action.triggered.connect(
-                lambda checked, k=key: self._on_child_selected(k))
-            menu.addAction(action)
-        rect = self._tree.visualItemRect(item)
-        pos = self._tree.viewport().mapToGlobal(rect.bottomLeft())
-        menu.exec(pos)
-
-    def _on_child_selected(self, key):
-        """子菜单选中后：切换页面 + 更新导航高亮"""
-        self._last_page_key = key
-        self._switch_page(key)
-        # 在树中高亮对应的子项
-        for i in range(self._tree.topLevelItemCount()):
-            p = self._tree.topLevelItem(i)
-            for j in range(p.childCount()):
-                c = p.child(j)
-                if c.data(0, Qt.UserRole) == key:
-                    self._tree.setCurrentItem(c)
-                    return
+            self._switch_page(item.data(0, Qt.UserRole))
 
     def open_page(self, key: str) -> None:
         """Public routing hook used by first-run setup and tray shortcuts."""
@@ -1413,6 +1235,13 @@ class SettingsWindow(QDialog):
                      ).value() / 100.0
                 if safe(getattr(self, "_opacity", None))
                 else 1.0
+            ),
+            "renderer": (
+                safe(getattr(self, "_renderer_combo", None),
+                     type("", (), {"currentData": lambda: "static"})()
+                     ).currentData()
+                if safe(getattr(self, "_renderer_combo", None))
+                else self.config.get("window", "renderer", default="static")
             ),
         }
         s["behavior"] = {

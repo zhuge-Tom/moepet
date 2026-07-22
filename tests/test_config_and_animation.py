@@ -5,7 +5,7 @@ import os
 import pytest
 from PySide6.QtCore import QPoint, Qt
 from PySide6.QtGui import QMouseEvent
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QPushButton
 
 from core.character import CharacterLoader
 from core.config import Config
@@ -255,6 +255,353 @@ def test_tts_player_uses_qt_objects_without_a_non_qt_parent():
     assert "QMediaPlayer()" in source
 
 
+def test_live2d_receives_speak_state_while_static_portraits_keep_their_frame(tmp_path, monkeypatch):
+    import pet_manager as pet_manager_module
+
+    class LiveWindow:
+        def __init__(self): self.states = []
+        def set_state(self, state): self.states.append(state)
+
+    class StaticWindow:
+        def __init__(self): self.states = []
+        def set_state(self, state): self.states.append(state)
+        def set_sprite_by_name(self, _name): pass
+
+    monkeypatch.setattr(pet_manager_module, "Live2DWindow", LiveWindow)
+    manager = type("Manager", (), {})()
+    manager.config = Config(tmp_path / "config.json")
+    manager.config.set("current_character", "noir")
+    manager._char_data = {}
+    manager._windows = {"noir": LiveWindow()}
+    PetManager._set_pet_state(manager, "speak")
+    assert manager._windows["noir"].states == ["speak"]
+
+    manager._windows = {"noir": StaticWindow()}
+    PetManager._set_pet_state(manager, "speak")
+    assert manager._windows["noir"].states == []
+
+
+def test_live2d_routes_reply_expression_to_the_model_state(tmp_path, monkeypatch):
+    import pet_manager as pet_manager_module
+
+    class LiveWindow:
+        def __init__(self): self.states = []
+        def set_state(self, state): self.states.append(state)
+
+    monkeypatch.setattr(pet_manager_module, "Live2DWindow", LiveWindow)
+    monkeypatch.setattr(pet_manager_module, "select_expression", lambda *_args: "content")
+    manager = type("Manager", (), {})()
+    manager.config = Config(tmp_path / "config.json")
+    manager.config.set("current_character", "noir")
+    manager._char_data = {"noir": object()}
+    manager._windows = {"noir": LiveWindow()}
+    manager._last_user_text = ""
+
+    PetManager._show_reply_expression(manager, "ok")
+    assert manager._windows["noir"].states == ["content"]
+
+
+def test_live2d_uses_line_eye_reaction_for_a_happy_reply(tmp_path, monkeypatch):
+    import pet_manager as pet_manager_module
+
+    class LiveWindow:
+        def __init__(self): self.states = []
+        def set_state(self, state): self.states.append(state)
+
+    monkeypatch.setattr(pet_manager_module, "Live2DWindow", LiveWindow)
+    monkeypatch.setattr(pet_manager_module, "select_expression", lambda *_args: "happy")
+    manager = type("Manager", (), {})()
+    manager.config = Config(tmp_path / "config.json")
+    manager.config.set("current_character", "noir")
+    manager._char_data = {"noir": object()}
+    manager._windows = {"noir": LiveWindow()}
+    manager._last_user_text = ""
+
+    PetManager._show_reply_expression(manager, "happy reply")
+    assert manager._windows["noir"].states == ["happy"]
+
+
+def test_live2d_text_reply_starts_a_speaking_turn_without_tts(tmp_path, monkeypatch):
+    import pet_manager as pet_manager_module
+
+    class LiveWindow:
+        def __init__(self): self.states = []
+        def set_state(self, state): self.states.append(state)
+
+    monkeypatch.setattr(pet_manager_module, "Live2DWindow", LiveWindow)
+    scheduled = []
+    monkeypatch.setattr(pet_manager_module.QTimer, "singleShot", lambda delay, callback: scheduled.append((delay, callback)))
+    manager = type("Manager", (), {})()
+    manager.config = Config(tmp_path / "config.json")
+    manager.config.set("current_character", "noir")
+    manager._role_epoch = 0
+    manager._windows = {"noir": LiveWindow()}
+    manager._show_reply_expression = lambda text: manager._windows["noir"].states.append(f"expression:{text}")
+
+    PetManager._animate_text_speech(manager, "你好")
+    assert manager._windows["noir"].states == ["speak"]
+    assert scheduled[0][0] == 1100
+    scheduled[0][1]()
+    assert manager._windows["noir"].states == ["speak", "expression:你好"]
+
+
+def test_live2d_advance_passes_the_frame_delta_to_the_native_model():
+    from ui.live2d_window import Live2DCanvas
+
+    calls = []
+
+    class NativeModel:
+        def LoadParameters(self): calls.append("load")
+        def UpdateMotion(self, value): calls.append(("motion", value))
+        def SaveParameters(self): calls.append("save")
+        def UpdateBlink(self, value): calls.append(("blink", value))
+        def UpdateExpression(self, value): calls.append(("expression", value))
+        def UpdateDrag(self, value): calls.append(("drag", value))
+        def UpdateBreath(self, value): calls.append(("breath", value))
+        def UpdatePhysics(self, value): calls.append(("physics", value))
+        def UpdatePose(self, value): calls.append(("pose", value))
+        def Update(self, value): calls.append(("update", value))
+        def SetParameterValueById(self, *_args): calls.append("mouth")
+
+    class Model:
+        _model = NativeModel()
+        def Drag(self, *_args): calls.append("target")
+        def SetParameterValue(self, *_args): pass
+
+    canvas = Live2DCanvas(Path("model3.json"))
+    canvas._model = Model()
+    canvas._update_lipsync = lambda: calls.append("lipsync")
+    canvas._advance_model(0.033)
+    assert calls[-2] == ("update", 0.033)
+    assert calls[-1] == "mouth"
+
+
+def test_live2d_applies_mouse_and_closed_mouth_parameters_after_physics():
+    from ui.live2d_window import Live2DCanvas
+
+    applied = []
+
+    class NativeModel:
+        def SetParameterValueById(self, parameter, value): applied.append((parameter, value))
+    class Model:
+        _model = NativeModel()
+        def SetParameterValue(self, parameter, value):
+            applied.append((parameter, value))
+
+    canvas = Live2DCanvas(Path("model3.json"))
+    canvas._model = Model()
+    canvas._drag_target = (0.5, -0.25)
+    canvas._mouth_open = 0.0
+    canvas._apply_visible_parameters()
+
+    assert applied == [
+        ("ParamAngleX", 15.0),
+        ("ParamAngleY", -4.5),
+        ("ParamEyeBallX", -0.5),
+        ("ParamEyeBallY", -0.25),
+        ("ParamMouthOpenY", 0.0),
+    ]
+
+
+def test_live2d_keeps_the_line_eye_parameter_after_auto_updates():
+    from ui.live2d_window import Live2DCanvas
+
+    applied = []
+    class NativeModel:
+        def SetParameterValueById(self, parameter, value): applied.append((parameter, value))
+    class Model:
+        _model = NativeModel()
+        def SetParameterValue(self, parameter, value): applied.append((parameter, value))
+
+    canvas = Live2DCanvas(Path("model3.json"))
+    canvas._model = Model()
+    canvas._line_eye_active = True
+    canvas._apply_visible_parameters()
+    assert applied[-1] == ("Param40", -1.0)
+
+
+def test_dialog_position_is_persisted_relative_to_the_active_pet(tmp_path):
+    manager = type("Manager", (), {})()
+    manager.config = Config(tmp_path / "config.json")
+    manager.config.set("current_character", "noir")
+    pet = type("Pet", (), {"x": lambda self: 1000, "y": lambda self: 400})()
+    manager._windows = {"noir": pet}
+
+    PetManager._save_dialog_offset(manager, 1012, 155)
+    assert manager.config.get("dialog", "offset_x") == 12
+    assert manager.config.get("dialog", "offset_y") == -245
+
+
+def test_visible_dialog_moves_with_the_pet_using_saved_offset(tmp_path):
+    class Pet:
+        def x(self): return 600
+        def y(self): return 300
+        def width(self): return 360
+    class Dialog:
+        def __init__(self): self.moves = []
+        def isVisible(self): return True
+        def move(self, x, y): self.moves.append((x, y))
+        def width(self): return 480
+        def height(self): return 240
+
+    manager = type("Manager", (), {})()
+    manager.config = Config(tmp_path / "config.json")
+    manager.config.set("current_character", "noir")
+    manager.config.set("dialog", "offset_x", 8)
+    manager.config.set("dialog", "offset_y", -220)
+    manager._windows = {"noir": Pet()}
+    manager._dialog = Dialog()
+    manager._dialog_offset_for = lambda _win: PetManager._dialog_offset_for(manager, _win)
+    PetManager._move_dialog_with_pet(manager)
+    assert manager._dialog.moves == [(608, 80)]
+
+
+def test_start_keeps_settings_closed_even_when_chat_is_unconfigured(tmp_path):
+    manager = type("Manager", (), {})()
+    manager.config = Config(tmp_path / "config.json")
+    manager.config.set("current_character", "noir")
+    manager._windows = {"noir": type("Window", (), {
+        "move": lambda self, *_args: None, "show": lambda self: None,
+    })()}
+    manager._setup_tray = lambda: None
+    manager._needs_initial_setup = lambda: True
+    manager._open_settings = lambda *_args, **_kwargs: (_ for _ in ()).throw(
+        AssertionError("settings opened during startup"))
+
+    PetManager.start(manager)
+    assert manager.config.get("dialog", "visible") is False
+
+
+def test_live2d_uses_the_model_dazed_expression_for_thinking_states():
+    from ui.live2d_window import Live2DWindow
+
+    class Canvas:
+        def __init__(self):
+            self.expression = self.speaking = None
+            self._drag_target = (0.0, 0.0)
+        def set_expression(self, expression): self.expression = expression
+        def set_speaking(self, speaking): self.speaking = speaking
+
+    timer = type("Timer", (), {"stop": lambda self: None})()
+    overlay = type("Overlay", (), {"set_pose": lambda self, *_args: None})()
+    window = type("Window", (), {
+        "_label": Canvas(), "_mouth_timer": timer, "_overlay": overlay,
+    })()
+    Live2DWindow.set_state(window, "think")
+    assert window._label.expression == "quanquan"
+    assert window._label.speaking is False
+
+
+def test_live2d_speaking_keeps_the_line_eye_reply_reaction_visible():
+    from ui.live2d_window import Live2DWindow
+
+    class Canvas:
+        def __init__(self):
+            self.expressions = []
+            self._drag_target = (0.0, 0.0)
+        def set_expression(self, expression): self.expressions.append(expression)
+        def set_speaking(self, _speaking): pass
+
+    timer = type("Timer", (), {"start": lambda self: None, "stop": lambda self: None})()
+    overlay = type("Overlay", (), {"set_pose": lambda self, *_args: None})()
+    window = type("Window", (), {
+        "_label": Canvas(), "_mouth_timer": timer, "_overlay": overlay,
+        "_mouth_started_at": 0.0, "_advance_mouth_overlay": lambda self: None,
+    })()
+    Live2DWindow.set_state(window, "content")
+    Live2DWindow.set_state(window, "speak")
+    assert window._label.expressions == ["eyeclose"]
+
+
+def test_live2d_idle_line_eye_reaction_enables_the_frame_parameter(monkeypatch):
+    import ui.live2d_window as live2d_window_module
+    from ui.live2d_window import Live2DWindow
+
+    scheduled = []
+    monkeypatch.setattr(live2d_window_module.QTimer, "singleShot", lambda delay, callback: scheduled.append((delay, callback)))
+    monkeypatch.setattr(live2d_window_module.random, "randint", lambda _low, _high: 1600)
+
+    class Canvas:
+        def __init__(self): self.calls = []
+        def set_expression(self, expression, force=False): self.calls.append(("expression", expression, force))
+        def set_line_eye_active(self, active): self.calls.append(("line", active))
+
+    window = type("Window", (), {
+        "_frame_state": "idle", "_label": Canvas(), "isVisible": lambda self: True,
+        "_schedule_idle_line_eye_reaction": lambda self: None,
+    })()
+    Live2DWindow._play_idle_line_eye_reaction(window)
+    assert window._label.calls[:2] == [("expression", "eyeclose", True), ("line", True)]
+    assert scheduled[0][0] == 1600
+
+
+
+
+def test_live2d_model_hit_uses_cubism_drawable_meshes_not_part_bounds():
+    from PySide6.QtCore import QPointF
+    from ui.live2d_window import Live2DWindow
+
+    class NativeModel:
+        def HitDrawable(self, x, y, top_only):
+            return ["ArtMesh"] if (x, y, top_only) == (180.0, 280.0, False) else []
+
+    class Model:
+        _model = NativeModel()
+
+    window = type("Window", (), {
+        "width": lambda self: 360,
+        "height": lambda self: 520,
+        "_label": type("Canvas", (), {"_model": Model()})(),
+    })()
+    assert Live2DWindow._is_model_point(window, QPointF(180, 280))
+    assert not Live2DWindow._is_model_point(window, QPointF(8, 8))
+
+
+def test_live2d_context_menu_ignores_transparent_artboard_padding(qapp):
+    from PySide6.QtCore import QPoint
+    from PySide6.QtGui import QContextMenuEvent
+    from ui.live2d_window import Live2DWindow
+
+    opened = []
+    window = type("Window", (), {
+        "_is_model_point": lambda _self, point: point.x() > 20,
+        "_menu": type("Menu", (), {"exec": lambda _self, point: opened.append(point)})(),
+    })()
+    empty_event = QContextMenuEvent(QContextMenuEvent.Mouse, QPoint(8, 8), QPoint(8, 8))
+    Live2DWindow.contextMenuEvent(window, empty_event)
+    body_event = QContextMenuEvent(QContextMenuEvent.Mouse, QPoint(80, 80), QPoint(80, 80))
+    Live2DWindow.contextMenuEvent(window, body_event)
+    assert opened == [QPoint(80, 80)]
+
+
+def test_live2d_draws_a_visible_mouth_overlay_at_pet_scale(qapp, tmp_path):
+    from ui.live2d_window import MouthOverlay
+
+    overlay = MouthOverlay()
+    overlay.resize(360, 520)
+    overlay.set_pose(1.0, 0.0, 0.0)
+    # The fallback mouth is centered near the model face and must remain
+    # visible even when the authored texture mouth is only a few pixels wide.
+    assert overlay._openness == 1.0
+
+
+def test_live2d_mouth_overlay_uses_its_own_timer(qapp, tmp_path):
+    from ui.live2d_window import Live2DWindow
+
+    class Canvas:
+        _drag_target = (0.0, 0.0)
+        def set_expression(self, _expression): pass
+        def set_speaking(self, _speaking): pass
+        def set_visual_mouth_open(self, openness): self.openness = openness
+
+    window = type("Window", (), {
+        "_label": Canvas(), "_mouth_started_at": 0.0,
+        "_mouth_timer": type("Timer", (), {"isActive": lambda self: True})(),
+    })()
+    Live2DWindow._advance_mouth_overlay(window)
+    assert window._label.openness > 0.1
+
+
 def test_frame_animation_and_single_png_fallback(tmp_path):
     character_dir = tmp_path / "pet"
     sprites = character_dir / "sprites"
@@ -421,8 +768,27 @@ def test_start_places_portrait_bottom_right_and_closes_dialog(tmp_path, monkeypa
     manager._needs_initial_setup = lambda: False
     monkeypatch.setattr("pet_manager.QApplication.primaryScreen", lambda: Screen())
     PetManager.start(manager)
-    assert manager._windows["noir"].moves == [(1796, 856)]
+    assert manager._windows["noir"].moves == [(1105, 364)]
     assert manager.config.get("dialog", "visible") is False
+
+
+def test_start_restores_saved_portrait_position(tmp_path, monkeypatch):
+    class Window:
+        def __init__(self): self.moves = []
+        def width(self): return 100
+        def height(self): return 200
+        def move(self, *position): self.moves.append(position)
+        def show(self): pass
+
+    manager = type("Manager", (), {})()
+    manager.config = Config(tmp_path / "config.json")
+    manager.config.save_position("pet", 654, 321)
+    manager._windows = {"noir": Window()}
+    manager._setup_tray = lambda: None
+    manager._needs_initial_setup = lambda: False
+    monkeypatch.setattr("pet_manager.QApplication.primaryScreen", lambda: None)
+    PetManager.start(manager)
+    assert manager._windows["noir"].moves == [(654, 321)]
 
 
 def test_screen_chat_intent_is_explicit():
@@ -723,6 +1089,57 @@ def test_settings_window_public_page_route(qapp, tmp_path):
     window = SettingsWindow(Config(tmp_path / "config.json"), ["noir"], "noir", tmp_path)
     window.open_page("vision")
     assert window._stack.currentWidget() is window._pages["vision"]
+
+
+def test_settings_window_uses_static_starfield_shell(qapp, tmp_path):
+    from ui.settings_components import ServiceStatusCard
+    from ui.settings_window import SettingsWindow
+
+    window = SettingsWindow(Config(tmp_path / "config.json"), ["noir"], "noir", tmp_path)
+    assert window._starfield.objectName() == "settings_starfield"
+    assert len(window._starfield._stars) >= 60
+    assert len(window._starfield._constellations) >= 3
+    assert window._starfield._meteor_cycle.interval() == 9000
+    assert not window._starfield._meteor_timer.isActive()
+    assert window._nav_frame.objectName() == "settings_navigation"
+    assert window.findChild(type(window._starfield), "settings_starfield") is window._starfield
+    card = ServiceStatusCard("服务", "说明")
+    assert card.badge.objectName() == "service_status_badge"
+    card.set_state(True)
+    assert card.badge.text() == "已就绪"
+    confirm = next(
+        button for button in window.findChildren(QPushButton)
+        if button.text() == "确定"
+    )
+    assert confirm.objectName() == "settings_confirm_button"
+
+
+def test_settings_window_text_navigation_keeps_child_routing(qapp, tmp_path):
+    from ui.settings_window import SettingsWindow
+
+    window = SettingsWindow(Config(tmp_path / "config.json"), ["noir"], "noir", tmp_path)
+    parent = window._tree.topLevelItem(1)
+    child = parent.child(1)
+    assert parent.icon(0).isNull()
+    assert child.icon(0).isNull()
+    window._tree.setCurrentItem(child)
+    assert window._stack.currentWidget() is window._pages["character_sprites"]
+    assert window._nav_frame.width() == 208
+    assert window.width() >= 980
+
+
+def test_settings_window_offers_live2d_when_the_model_is_present(qapp, tmp_path):
+    from ui.settings_window import SettingsWindow
+
+    model_dir = tmp_path / "characters" / "noir" / "sprites" / "live2d" / "NOIR"
+    model_dir.mkdir(parents=True)
+    (model_dir / "noir.model3.json").write_text("{}", encoding="utf-8")
+    window = SettingsWindow(Config(tmp_path / "config.json"), ["noir"], "noir", tmp_path)
+    window.open_page("character_sprites")
+    assert window._renderer_combo.findData("static") >= 0
+    assert window._renderer_combo.findData("live2d") >= 0
+    window._renderer_combo.setCurrentIndex(window._renderer_combo.findData("live2d"))
+    assert window._collect_settings()["window"]["renderer"] == "live2d"
 
 
 def test_independent_settings_pages_build_without_window():

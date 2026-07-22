@@ -5,6 +5,7 @@ __pycache__/
 *.pyo
 venv/
 .venv/
+tools/.cubism_external_token.json
 
 # IDE
 .vscode/
@@ -12,6 +13,7 @@ venv/
 
 # 角色资源（自己下载）
 # characters/*/sprites/*.png
+characters/*/sprites/live2d/
 
 # 音色模型
 voice/models/

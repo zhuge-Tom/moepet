@@ -128,11 +128,11 @@ class PetWindow(QMainWindow):
         self._switch_menu = self._menu.addMenu("切换角色")
         self._menu.addSeparator()
 
-        dialog_action = QAction("💬 对话框", self)
+        dialog_action = QAction("对话框", self)
         dialog_action.triggered.connect(signals.dialog_toggle_requested.emit)
         self._menu.addAction(dialog_action)
 
-        settings_action = QAction("⚙ 设置", self)
+        settings_action = QAction("设置", self)
         settings_action.triggered.connect(self._open_settings)
         self._menu.addAction(settings_action)
 
@@ -407,6 +407,7 @@ class PetWindow(QMainWindow):
             QEvent.MouseButtonDblClick,
             QEvent.MouseMove,
             QEvent.MouseButtonRelease,
+            QEvent.ContextMenu,
         ):
             if event.type() == QEvent.MouseButtonPress:
                 self.mousePressEvent(event)
@@ -416,6 +417,8 @@ class PetWindow(QMainWindow):
                 self.mouseMoveEvent(event)
             elif event.type() == QEvent.MouseButtonRelease:
                 self.mouseReleaseEvent(event)
+            elif event.type() == QEvent.ContextMenu:
+                self.contextMenuEvent(event)
             return True
         return super().eventFilter(obj, event)
 
@@ -445,7 +448,7 @@ class PetWindow(QMainWindow):
             self._drag_pos = QPoint()
 
     def mouseDoubleClickEvent(self, event: QMouseEvent):
-        """Toggle the dialog without also treating the second click as a sprite action."""
+        """Double-clicking the pet toggles chat; right click only opens its menu."""
         if event.button() == Qt.LeftButton:
             self._click_timer.stop()
             signals.dialog_toggle_requested.emit()

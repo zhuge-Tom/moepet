@@ -12,9 +12,10 @@ from copy import deepcopy
 DEFAULTS = {
     "current_character": "noir",
     "window": {
-        "scale": 0.5,
+        "scale": 0.6,
         "always_on_top": True,
         "opacity": 1.0,
+        "renderer": "live2d",
     },
     "behavior": {
         "click_action": "switch_sprite",
@@ -71,15 +72,18 @@ DEFAULTS = {
         "format_prompt": "",
     },
     "position": {
-        "pet_x": -1,
-        "pet_y": -1,
+        "pet_x": 1105,
+        "pet_y": 364,
         "dialog_x": -1,
         "dialog_y": -1,
     },
     "dialog": {
         "visible": False,
         "width": 480,
-        "height": 200,
+        "height": 240,
+        # Keep chat anchored to the pet instead of to an absolute desktop point.
+        "offset_x": -24,
+        "offset_y": -80,
     },
 }
 

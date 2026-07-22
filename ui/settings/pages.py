@@ -11,6 +11,10 @@ from PySide6.QtWidgets import (
 )
 
 from ui.settings_components import ServiceStatusCard
+from ui.theme import (
+    STAR_ACCENT, STAR_BORDER, STAR_FOCUS, STAR_INPUT, STAR_SURFACE_ELEVATED,
+    STAR_TEXT, STAR_TEXT_MUTED, STAR_TEXT_SUBTLE,
+)
 from ui.settings.provider_presets import (
     CHAT_PRESETS, VISION_PRESETS, preset_key_for_url,
 )
@@ -27,14 +31,14 @@ def _page_layout() -> tuple[QWidget, QVBoxLayout]:
 
 def _section(layout: QVBoxLayout, title: str) -> None:
     label = QLabel(title)
-    label.setStyleSheet("font-weight: bold; font-size: 14px; color: #475569;")
+    label.setStyleSheet(f"font-weight: bold; font-size: 14px; color: {STAR_TEXT};")
     layout.addWidget(label)
 
 
 def _hint(layout: QVBoxLayout, text: str) -> None:
     label = QLabel(text)
     label.setWordWrap(True)
-    label.setStyleSheet("color: #94a3b8; font-size: 11px;")
+    label.setStyleSheet(f"color: {STAR_TEXT_SUBTLE}; font-size: 11px;")
     layout.addWidget(label)
 
 
@@ -45,8 +49,9 @@ def _line_edit(placeholder: str, password: bool = False) -> QLineEdit:
     if password:
         field.setEchoMode(QLineEdit.Password)
     field.setStyleSheet(
-        "QLineEdit { border: 1px solid #d3d7de; border-radius: 6px; padding: 4px 10px; font-size: 13px; }"
-        "QLineEdit:focus { border-color: #e94560; }")
+        f"QLineEdit {{ background: {STAR_INPUT}; color: {STAR_TEXT}; border: 1px solid {STAR_BORDER};"
+        " border-radius: 6px; padding: 4px 10px; font-size: 13px; }"
+        f"QLineEdit:focus {{ border-color: {STAR_FOCUS}; }}")
     return field
 
 
@@ -54,7 +59,7 @@ def _row(layout: QVBoxLayout, label: str, widget: QWidget) -> None:
     row = QHBoxLayout()
     row.setSpacing(16)
     text = QLabel(label)
-    text.setStyleSheet("font-size: 13px; color: #2c3e50;")
+    text.setStyleSheet(f"font-size: 13px; color: {STAR_TEXT_MUTED};")
     row.addWidget(text)
     row.addWidget(widget, 1)
     layout.addLayout(row)
@@ -67,7 +72,7 @@ def _field_row(layout: QVBoxLayout, label: str, widget: QWidget) -> QWidget:
     row.setContentsMargins(0, 0, 0, 0)
     row.setSpacing(16)
     text = QLabel(label)
-    text.setStyleSheet("font-size: 13px; color: #2c3e50;")
+    text.setStyleSheet(f"font-size: 13px; color: {STAR_TEXT_MUTED};")
     row.addWidget(text)
     row.addWidget(widget, 1)
     layout.addWidget(container)
@@ -80,12 +85,12 @@ def _model_discovery_controls(layout: QVBoxLayout) -> tuple[QPushButton, QComboB
     button = QPushButton("获取可用模型")
     button.setFixedHeight(30)
     button.setStyleSheet(
-        "QPushButton { background: #eef2ff; color: #3730a3; border: 1px solid #c7d2fe;"
+        f"QPushButton {{ background: {STAR_SURFACE_ELEVATED}; color: {STAR_TEXT}; border: 1px solid {STAR_BORDER};"
         " border-radius: 6px; padding: 4px 14px; }"
-        "QPushButton:hover { background: #e0e7ff; }")
+        f"QPushButton:hover {{ background: #293765; border-color: {STAR_FOCUS}; }}")
     status = QLabel("填写地址后可从服务读取模型列表")
     status.setWordWrap(True)
-    status.setStyleSheet("color: #64748b; font-size: 12px;")
+    status.setStyleSheet(f"color: {STAR_TEXT_MUTED}; font-size: 12px;")
     row.addWidget(button)
     row.addWidget(status, 1)
     layout.addLayout(row)
@@ -262,9 +267,7 @@ def make_ai_page(config) -> tuple[QWidget, dict[str, QWidget]]:
 
     test_button = QPushButton("测试连接")
     test_button.setFixedHeight(32)
-    test_button.setStyleSheet(
-        "QPushButton { background: #3498db; color: #fff; border: none; border-radius: 7px; padding: 7px 22px; }"
-        "QPushButton:hover { background: #2980b9; }")
+    test_button.setObjectName("settings_primary_button")
     layout.addWidget(test_button)
     status = QLabel("")
     status.setWordWrap(True)
@@ -373,7 +376,7 @@ def make_about_page() -> QWidget:
         "立绘动画演出、按住说话、屏幕理解与系统托盘。\n\n"
         "GitHub: zhuge-Tom/moepet"
     )
-    about.setStyleSheet("color: #475569; font-size: 13px; padding: 16px;")
+    about.setStyleSheet(f"color: {STAR_TEXT_MUTED}; font-size: 13px; padding: 16px;")
     about.setAlignment(Qt.AlignCenter)
     layout.addWidget(about)
     layout.addStretch()
@@ -386,7 +389,7 @@ def make_character_parent_page() -> QWidget:
     layout.setContentsMargins(28, 24, 28, 28)
     hint = QLabel("请从左侧子项管理角色接口、立绘和资料库。")
     hint.setAlignment(Qt.AlignCenter)
-    hint.setStyleSheet("color: #94a3b8; font-size: 13px; padding: 20px;")
+    hint.setStyleSheet(f"color: {STAR_TEXT_MUTED}; font-size: 13px; padding: 20px;")
     layout.addWidget(hint)
     layout.addStretch()
     return page

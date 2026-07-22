@@ -4,6 +4,7 @@
 Galgame 风格对话框、立绘动画演出。
 """
 
+import os
 import sys
 import logging
 from pathlib import Path
@@ -28,7 +29,9 @@ def main():
     app.setQuitOnLastWindowClosed(False)
     app.setApplicationName("Moepet")
 
-    if hasattr(Qt, "AA_UseSoftwareOpenGL"):
+    # Live2D uses a QOpenGLWidget. Software OpenGL remains an opt-in fallback
+    # for machines that cannot create a hardware context.
+    if os.environ.get("MOEPET_SOFTWARE_OPENGL") == "1" and hasattr(Qt, "AA_UseSoftwareOpenGL"):
         app.setAttribute(Qt.AA_UseSoftwareOpenGL)
 
     config = Config(BASE_DIR / "config.json")

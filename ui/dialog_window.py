@@ -23,6 +23,8 @@ class DialogWindow(QDialog):
     voice_pressed = Signal()
     voice_released = Signal()
     screen_capture_requested = Signal()
+    position_changed = Signal(int, int)
+    size_changed = Signal(int, int)
 
     TYPING_INTERVAL = 40  # 逐字显示间隔（毫秒）
 
@@ -301,3 +303,8 @@ class DialogWindow(QDialog):
     def mouseReleaseEvent(self, event: QMouseEvent):
         if event.button() == Qt.LeftButton:
             self._drag_pos = QPoint()
+            self.position_changed.emit(self.x(), self.y())
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self.size_changed.emit(self.width(), self.height())

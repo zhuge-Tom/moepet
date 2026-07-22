@@ -10,7 +10,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from PySide6.QtWidgets import QApplication, QDialog
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer
 
 from core.config import Config
 from core.character import CharacterLoader, CharacterData
@@ -28,6 +28,7 @@ from core.hotkeys import HotkeyService
 from core.knowledge_base import KnowledgeBase
 from core.expression import select_expression
 from ui.pet_window import PetWindow
+from ui.live2d_window import Live2DWindow
 from ui.dialog_window import DialogWindow
 from ui.settings_window import SettingsWindow
 from ui.settings.service_status import asr_ready
@@ -131,21 +132,71 @@ class PetManager:
             if char_data is None:
                 continue
             self._char_data[name] = char_data
-            scale = self.config.get("window", "scale", default=char_data.scale)
-            win = PetWindow(char_data, scale_override=scale)
-            win.set_opacity(self.config.get("window", "opacity", default=1.0))
-            win.set_state("idle")
-            win.configure_behavior(
-                self.config.get("behavior", "click_action", default="switch_sprite"),
-                self.config.get("behavior", "auto_idle", default=True),
-                self.config.get("behavior", "idle_interval", default=30),
-            )
+            win = self._create_pet_window(name, char_data)
             self._windows[name] = win
 
         names = list(self._windows.keys())
         current = self.config.current_character
         for win in self._windows.values():
             win.set_character_menu(names, current, self._switch_character)
+
+    def _live2d_model_path(self, name: str) -> Path:
+        return (
+            self.base_dir / "characters" / name / "sprites" / "live2d"
+            / "NOIR" / "noir.model3.json"
+        )
+
+    def _create_pet_window(self, name: str, char_data: CharacterData):
+        scale = self.config.get("window", "scale", default=char_data.scale)
+        renderer = self.config.get("window", "renderer", default="static")
+        model_path = self._live2d_model_path(name)
+        if renderer == "live2d" and model_path.exists():
+            win = Live2DWindow(char_data, model_path, scale_override=scale)
+            win.live2d_failed.connect(
+                lambda message, character=name: self._on_live2d_failed(character, message))
+        else:
+            win = PetWindow(char_data, scale_override=scale)
+        win.set_opacity(self.config.get("window", "opacity", default=1.0))
+        win.set_state("idle")
+        win.configure_behavior(
+            self.config.get("behavior", "click_action", default="switch_sprite"),
+            self.config.get("behavior", "auto_idle", default=True),
+            self.config.get("behavior", "idle_interval", default=30),
+        )
+        return win
+
+    def _on_live2d_failed(self, name: str, message: str) -> None:
+        """Keep the pet usable when an OpenGL context or model cannot load."""
+        if not isinstance(self._windows.get(name), Live2DWindow):
+            return
+        LOGGER.warning("%s", message)
+        self.config.set("window", "renderer", "static")
+        self.config.save()
+        self._recreate_pet_windows()
+        if self._dialog and self._dialog.isVisible():
+            self._dialog.display_text("Live2D 无法初始化，已自动切回静态立绘。", "assistant")
+
+    def _recreate_pet_windows(self) -> None:
+        """Rebuild windows when the renderer changes while preserving pet placement."""
+        current = self.config.current_character
+        old_windows = self._windows
+        positions = {name: win.pos() for name, win in old_windows.items()}
+        visible = {name: win.isVisible() for name, win in old_windows.items()}
+        self._windows = {}
+        for name, char_data in self._char_data.items():
+            old = old_windows.get(name)
+            if old:
+                old.hide()
+                old.deleteLater()
+            win = self._create_pet_window(name, char_data)
+            if name in positions:
+                win.move(positions[name])
+            self._windows[name] = win
+        names = list(self._windows.keys())
+        for name, win in self._windows.items():
+            win.set_character_menu(names, current, self._switch_character)
+            if visible.get(name, False):
+                win.show()
 
     def _load_knowledge_base(self):
         char = self._char_data.get(self.config.current_character)
@@ -213,15 +264,19 @@ class PetManager:
         current = self.config.current_character
         if current in self._windows:
             win = self._windows[current]
-            screen = QApplication.primaryScreen()
-            if screen:
-                area = screen.availableGeometry()
-                margin = 24
-                win.move(
-                    area.right() - win.width() - margin + 1,
-                    area.bottom() - win.height() - margin + 1,
-                )
-                self.config.save_position("pet", win.x(), win.y())
+            saved_position = self.config.get_position("pet")
+            if saved_position:
+                win.move(*saved_position)
+            else:
+                screen = QApplication.primaryScreen()
+                if screen:
+                    area = screen.availableGeometry()
+                    margin = 24
+                    win.move(
+                        area.right() - win.width() - margin + 1,
+                        area.bottom() - win.height() - margin + 1,
+                    )
+                    self.config.save_position("pet", win.x(), win.y())
             win.show()
 
         self._setup_tray()
@@ -229,8 +284,6 @@ class PetManager:
         # Chat is opt-in at every launch; double-clicking the portrait toggles it.
         self.config.set("dialog", "visible", False)
         self.config.save()
-        if self._needs_initial_setup():
-            self._open_settings(initial_page="ai")
 
     def _needs_initial_setup(self) -> bool:
         """Open the focused first-run setup only when chat cannot yet be used."""
@@ -323,17 +376,19 @@ class PetManager:
             self._dialog.screen_capture_requested.connect(self._capture_screen)
             self._dialog.set_typing_speed(
                 self.config.get("general", "typing_speed", default=40))
+            self._dialog.position_changed.connect(self._save_dialog_offset)
+            self._dialog.size_changed.connect(self._save_dialog_size)
+            self._dialog.resize(
+                self.config.get("dialog", "width", default=480),
+                self.config.get("dialog", "height", default=240),
+            )
 
         self._refresh_dialog_capabilities()
 
-        # 始终定位在立绘正上方居中，紧挨着
         if win:
             self._dialog.show()
-            dlg_w = self._dialog.width()
-            dlg_h = self._dialog.height()
-            dialog_x = win.x() + (win.width() - dlg_w) // 2
-            dialog_y = win.y() - dlg_h + 110
-            self._dialog.move(dialog_x, dialog_y)
+            offset_x, offset_y = self._dialog_offset_for(win)
+            self._dialog.move(win.x() + offset_x, win.y() + offset_y)
         self.config.set("dialog", "visible", True)
         self.config.save()
 
@@ -361,7 +416,10 @@ class PetManager:
         self._last_user_text = text
         self._llm.add_user_message(text)
         self._llm.set_turn_context(self._knowledge_context(text))
-        self._set_pet_state("think")
+        # Only show the dazed reaction for an actually slow reply. Quick
+        # turns retain the natural blinking model without a forced reset.
+        request_epoch = self._role_epoch
+        QTimer.singleShot(1400, lambda: self._show_delayed_thinking(request_epoch))
 
         stream = self.config.get("llm", "stream", default=True)
         if stream:
@@ -422,8 +480,10 @@ class PetManager:
         self._show_reply_expression(full_text)
         if sync_text:
             self._queue_text_for_audio(full_text)
-        if not self._speak(full_text) and sync_text:
-            self._show_pending_tts_text()
+        if not self._speak(full_text):
+            self._animate_text_speech(full_text)
+            if sync_text:
+                self._show_pending_tts_text()
 
     def _on_llm_done_non_stream(self, full_text: str):
         """非流式完成"""
@@ -437,8 +497,10 @@ class PetManager:
         self._show_reply_expression(full_text)
         if sync_text:
             self._queue_text_for_audio(full_text)
-        if not self._speak(full_text) and sync_text:
-            self._show_pending_tts_text()
+        if not self._speak(full_text):
+            self._animate_text_speech(full_text)
+            if sync_text:
+                self._show_pending_tts_text()
 
     def _on_llm_error(self, err: str):
         """LLM 错误"""
@@ -466,6 +528,12 @@ class PetManager:
     def _set_pet_state(self, state: str):
         win = self._windows.get(self.config.current_character)
         if win:
+            # Live2D needs every semantic state: notably ``speak`` starts
+            # its mouth controller, whereas static portraits have no frame
+            # for that state and deliberately keep their current sprite.
+            if isinstance(win, Live2DWindow):
+                win.set_state(state)
+                return
             # Static portraits share semantic states with the animation API.
             expression = {"idle": "idle"}.get(state)
             char = self._char_data.get(self.config.current_character)
@@ -481,11 +549,48 @@ class PetManager:
         if not char or not win:
             return
         expression = select_expression(reply, getattr(self, "_last_user_text", ""))
+        if isinstance(win, Live2DWindow):
+            # Audio playback temporarily uses the speaking state. Remember the
+            # semantic expression so it can return after the mouth closes.
+            self._last_live2d_expression = expression
+            # Ordinary dialogue intentionally has no forced expression: the
+            # model keeps its natural auto-blink. Only meaningful reactions
+            # are applied briefly by the Live2D window.
+            if expression != "idle":
+                win.set_state(expression)
+            return
         if expression == "idle":
             return
         sprite_name = char.sprite_for_expression(expression)
         if sprite_name:
             win.set_sprite_by_name(sprite_name)
+
+    def _show_delayed_thinking(self, epoch: int) -> None:
+        """Show dazed eyes only while a reply remains pending after a delay."""
+        if epoch != self._role_epoch or not self._llm.is_busy():
+            return
+        self._set_pet_state("think")
+
+    def _animate_text_speech(self, text: str) -> None:
+        """Give Live2D a natural speaking turn when audio is disabled."""
+        win = self._windows.get(self.config.current_character)
+        if not isinstance(win, Live2DWindow) or not text.strip():
+            return
+        epoch = self._role_epoch
+        # Chinese dialogue is commonly 4-5 characters per second.  Bound the
+        # visual turn so a very short reply is visible and a long reply does
+        # not hold the mouth open for an excessive time.
+        duration_ms = max(1100, min(14000, len(text.strip()) * 220))
+        win.set_state("speak")
+
+        def finish_text_speech():
+            if epoch != self._role_epoch:
+                return
+            active = self._windows.get(self.config.current_character)
+            if active is win:
+                self._show_reply_expression(text)
+
+        QTimer.singleShot(duration_ms, finish_text_speech)
 
     @staticmethod
     def _is_screen_request(text: str) -> bool:
@@ -739,7 +844,8 @@ class PetManager:
             self._dialog.display_text(text, "assistant")
         self._save_chat_history()
         self._set_pet_state("happy")
-        self._speak(text)
+        if not self._speak(text):
+            self._animate_text_speech(text)
 
     def _on_screen_response_error(self, _error: str):
         active = self._screen_response_epoch == self._role_epoch
@@ -805,7 +911,8 @@ class PetManager:
             self._dialog.display_text(text, "assistant")
         self._save_chat_history()
         self._set_pet_state("happy")
-        self._speak(text)
+        if not self._speak(text):
+            self._animate_text_speech(text)
 
     def _on_observation_error(self, _error: str):
         active = self._observation_epoch == self._role_epoch
@@ -913,7 +1020,6 @@ class PetManager:
             local_config=self.config.get("tts", "local_config", default=""),
         )
         if started:
-            self._set_pet_state("speak")
             signals.tts_state_changed.emit(True)
 
     def _on_tts_done(self, audio_path: str):
@@ -933,12 +1039,20 @@ class PetManager:
         self._player.mediaStatusChanged.connect(self._on_audio_status)
         self._player_epoch = self._role_epoch
         self._tts_available = True
+        self._set_pet_state("speak")
+        win = self._windows.get(self.config.current_character)
+        if isinstance(win, Live2DWindow):
+            win.start_lipsync(audio_path)
         self._player.play()
 
     def _on_audio_status(self, status):
         from PySide6.QtMultimedia import QMediaPlayer
         if status == QMediaPlayer.EndOfMedia and getattr(self, "_player_epoch", None) == self._role_epoch:
-            self._set_pet_state("idle")
+            expression = getattr(self, "_last_live2d_expression", "")
+            if expression:
+                self._set_pet_state(expression)
+            else:
+                self._set_pet_state("idle")
             signals.tts_state_changed.emit(False)
 
     def _on_tts_error(self, error: str):
@@ -992,6 +1106,30 @@ class PetManager:
             return
         self.config.set("screen_capture", "auto_observe", enabled)
         self.config.save()
+
+    def _dialog_offset_for(self, win) -> tuple[int, int]:
+        """Return a saved chat position relative to the active pet window."""
+        # Center chat over the Live2D face and keep it visually close to the
+        # model despite the transparent padding around the artboard.
+        default_x = (win.width() - self._dialog.width()) // 2
+        default_y = -80
+        return (
+            self.config.get("dialog", "offset_x", default=default_x),
+            self.config.get("dialog", "offset_y", default=default_y),
+        )
+
+    def _save_dialog_offset(self, x: int, y: int) -> None:
+        win = self._windows.get(self.config.current_character)
+        if not win:
+            return
+        self.config.set("dialog", "offset_x", x - win.x())
+        self.config.set("dialog", "offset_y", y - win.y())
+        self.config.save()
+
+    def _save_dialog_size(self, width: int, height: int) -> None:
+        self.config.set("dialog", "width", width)
+        self.config.set("dialog", "height", height)
+        self.config.save()
         self._configure_screen_observer()
         if self._tray:
             self._tray.set_observation_enabled(enabled)
@@ -1037,9 +1175,18 @@ class PetManager:
         always_on_top = self.config.get("window", "always_on_top", default=True)
         scale = self.config.get("window", "scale", default=0.5)
         opacity = self.config.get("window", "opacity", default=1.0)
+        renderer = self.config.get("window", "renderer", default="static")
         click_action = self.config.get("behavior", "click_action", default="switch_sprite")
         auto_idle = self.config.get("behavior", "auto_idle", default=True)
         idle_interval = self.config.get("behavior", "idle_interval", default=30)
+
+        renderer_changed = any(
+            (renderer == "live2d" and self._live2d_model_path(name).exists())
+            != isinstance(win, Live2DWindow)
+            for name, win in self._windows.items()
+        )
+        if renderer_changed:
+            self._recreate_pet_windows()
 
         for win in self._windows.values():
             win.set_always_on_top(always_on_top)
@@ -1090,6 +1237,17 @@ class PetManager:
                 self.config.save_position("pet", win.x(), win.y())
         else:
             self.config.save_position("pet", x, y)
+            self._move_dialog_with_pet()
+
+    def _move_dialog_with_pet(self) -> None:
+        """Preserve the user's saved chat-to-pet offset after a pet drag."""
+        if not self._dialog or not self._dialog.isVisible():
+            return
+        win = self._windows.get(self.config.current_character)
+        if not win:
+            return
+        offset_x, offset_y = self._dialog_offset_for(win)
+        self._dialog.move(win.x() + offset_x, win.y() + offset_y)
 
     # ─── 退出 ────────────────────────────────
 
@@ -1104,7 +1262,8 @@ class PetManager:
         if win:
             self.config.save_position("pet", win.x(), win.y())
         if self._dialog and self._dialog.isVisible():
-            self.config.save_position("dialog", self._dialog.x(), self._dialog.y())
+            self._save_dialog_offset(self._dialog.x(), self._dialog.y())
+            self._save_dialog_size(self._dialog.width(), self._dialog.height())
             self.config.set("dialog", "visible", True)
         else:
             self.config.set("dialog", "visible", False)

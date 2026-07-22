@@ -105,10 +105,81 @@ DIALOG_QSS = f"""
     }}
 """
 
-SETTINGS_QSS = """
-    QDialog {
-        background: #f5f7fa;
-    }
+STAR_CANVAS = "#0b1026"
+STAR_SURFACE = "#141b3d"
+STAR_SURFACE_ELEVATED = "#1b2450"
+STAR_INPUT = "#101735"
+STAR_BORDER = "#38477a"
+STAR_BORDER_SOFT = "#29355e"
+STAR_TEXT = "#f4f5ff"
+STAR_TEXT_MUTED = "#aeb9df"
+STAR_TEXT_SUBTLE = "#7f8cb7"
+STAR_ACCENT = "#f05c91"
+STAR_ACCENT_HOVER = "#ff79aa"
+STAR_FOCUS = "#b78cff"
+STAR_SUCCESS = "#71d6bb"
+STAR_WARNING = "#f5c66b"
+
+
+SETTINGS_QSS = f"""
+    QDialog {{
+        background: {STAR_CANVAS};
+        color: {STAR_TEXT};
+    }}
+    QWidget {{ color: {STAR_TEXT}; font-size: 13px; }}
+    QLabel {{ background: transparent; }}
+    QLineEdit, QTextEdit, QComboBox, QSpinBox {{
+        background: {STAR_INPUT}; color: {STAR_TEXT};
+        border: 1px solid {STAR_BORDER}; border-radius: 7px;
+        padding: 5px 10px; selection-background-color: {STAR_ACCENT};
+    }}
+    QLineEdit:hover, QTextEdit:hover, QComboBox:hover, QSpinBox:hover {{ border-color: {STAR_FOCUS}; }}
+    QLineEdit:focus, QTextEdit:focus, QComboBox:focus, QSpinBox:focus {{ border: 2px solid {STAR_FOCUS}; padding: 4px 9px; }}
+    QComboBox::drop-down {{ border: none; width: 24px; }}
+    QComboBox QAbstractItemView {{
+        background: {STAR_SURFACE_ELEVATED}; color: {STAR_TEXT}; border: 1px solid {STAR_BORDER};
+        selection-background-color: {STAR_ACCENT}; selection-color: #ffffff; outline: none;
+    }}
+    QComboBox QAbstractItemView::item {{ min-height: 28px; padding: 4px 8px; }}
+    QComboBox QAbstractItemView::item:hover {{ background: #293765; }}
+    QCheckBox {{ color: {STAR_TEXT}; spacing: 8px; font-size: 13px; }}
+    QCheckBox::indicator {{ width: 16px; height: 16px; border: 2px solid {STAR_BORDER}; border-radius: 5px; background: {STAR_INPUT}; }}
+    QCheckBox::indicator:checked {{ background: {STAR_ACCENT}; border-color: {STAR_ACCENT_HOVER}; }}
+    QSlider::groove:horizontal {{ height: 5px; background: {STAR_BORDER_SOFT}; border-radius: 3px; }}
+    QSlider::sub-page:horizontal {{ background: {STAR_ACCENT}; border-radius: 3px; }}
+    QSlider::handle:horizontal {{ width: 15px; height: 15px; margin: -5px 0; background: {STAR_TEXT}; border: 3px solid {STAR_ACCENT}; border-radius: 8px; }}
+    QSlider::handle:horizontal:hover {{ border-color: {STAR_FOCUS}; }}
+    QPushButton {{
+        background: {STAR_SURFACE_ELEVATED}; color: {STAR_TEXT}; border: 1px solid {STAR_BORDER};
+        border-radius: 7px; padding: 6px 14px; font-weight: 600;
+    }}
+    QPushButton:hover {{ background: #293765; border-color: {STAR_FOCUS}; }}
+    QPushButton:focus {{ border: 2px solid {STAR_FOCUS}; }}
+    QPushButton#settings_primary_button {{ background: {STAR_ACCENT}; border-color: {STAR_ACCENT}; color: #fff; }}
+    QPushButton#settings_primary_button:hover {{ background: {STAR_ACCENT_HOVER}; border-color: {STAR_ACCENT_HOVER}; }}
+    QPushButton#settings_confirm_button {{
+        background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
+            stop:0 #ff76aa, stop:0.48 {STAR_ACCENT}, stop:1 #9c6cff);
+        color: #ffffff; border: 1px solid #ff9dca; border-radius: 7px;
+        padding: 6px 14px; font-weight: 700;
+    }}
+    QPushButton#settings_confirm_button:hover {{
+        background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
+            stop:0 #ff9dca, stop:0.48 #ff699f, stop:1 #bc8dff);
+        border-color: #ffd1e4;
+    }}
+    QPushButton#settings_confirm_button:pressed {{ background: #d94e83; }}
+    QPushButton#settings_secondary_button {{ background: #1b2450; color: {STAR_TEXT_MUTED}; }}
+    QPushButton#settings_secondary_button:hover {{ color: {STAR_TEXT}; }}
+    QScrollBar:vertical {{ width: 7px; background: transparent; margin: 4px 0; }}
+    QScrollBar::handle:vertical {{ background: {STAR_BORDER}; border-radius: 3px; min-height: 30px; }}
+    QScrollBar::handle:vertical:hover {{ background: {STAR_FOCUS}; }}
+    QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0; }}
+"""
+
+# Legacy selectors retained for small, older settings widgets that still use
+# these object names. New settings surfaces use the star tokens above.
+LEGACY_SETTINGS_QSS = """
     QFrame#nav_panel {
         background: #2c3e50;
         border: none;
