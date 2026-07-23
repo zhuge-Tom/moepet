@@ -46,6 +46,9 @@ class PetManager:
         self.config = config
         self._loader = CharacterLoader(base_dir / "characters")
         self._windows: dict[str, PetWindow] = {}
+        # Failed Live2D renderers fall back only for this process; the saved
+        # preference remains Live2D for the next launch.
+        self._live2d_session_fallbacks: set[str] = set()
         self._char_data: dict[str, CharacterData] = {}
         self._knowledge: KnowledgeBase | None = None
         self._dialog: DialogWindow | None = None
@@ -148,9 +151,10 @@ class PetManager:
 
     def _create_pet_window(self, name: str, char_data: CharacterData):
         scale = self.config.get("window", "scale", default=char_data.scale)
-        renderer = self.config.get("window", "renderer", default="static")
+        renderer = self.config.get("window", "renderer", default="live2d")
         model_path = self._live2d_model_path(name)
-        if renderer == "live2d" and model_path.exists():
+        if (renderer == "live2d" and model_path.exists()
+                and name not in self._live2d_session_fallbacks):
             win = Live2DWindow(char_data, model_path, scale_override=scale)
             win.live2d_failed.connect(
                 lambda message, character=name: self._on_live2d_failed(character, message))
@@ -170,8 +174,7 @@ class PetManager:
         if not isinstance(self._windows.get(name), Live2DWindow):
             return
         LOGGER.warning("%s", message)
-        self.config.set("window", "renderer", "static")
-        self.config.save()
+        self._live2d_session_fallbacks.add(name)
         self._recreate_pet_windows()
         if self._dialog and self._dialog.isVisible():
             self._dialog.display_text("Live2D 无法初始化，已自动切回静态立绘。", "assistant")
@@ -1109,10 +1112,10 @@ class PetManager:
 
     def _dialog_offset_for(self, win) -> tuple[int, int]:
         """Return a saved chat position relative to the active pet window."""
-        # Center chat over the Live2D face and keep it visually close to the
-        # model despite the transparent padding around the artboard.
-        default_x = (win.width() - self._dialog.width()) // 2
-        default_y = -80
+        # Match the initial placement beside/above Noir from the reference
+        # layout. A user drag persists a different relative offset below.
+        default_x = -61
+        default_y = -104
         return (
             self.config.get("dialog", "offset_x", default=default_x),
             self.config.get("dialog", "offset_y", default=default_y),
@@ -1130,9 +1133,6 @@ class PetManager:
         self.config.set("dialog", "width", width)
         self.config.set("dialog", "height", height)
         self.config.save()
-        self._configure_screen_observer()
-        if self._tray:
-            self._tray.set_observation_enabled(enabled)
 
     def _open_settings(self, initial_page: str = ""):
         if self._settings_dlg and self._settings_dlg.isVisible():
@@ -1175,7 +1175,10 @@ class PetManager:
         always_on_top = self.config.get("window", "always_on_top", default=True)
         scale = self.config.get("window", "scale", default=0.5)
         opacity = self.config.get("window", "opacity", default=1.0)
-        renderer = self.config.get("window", "renderer", default="static")
+        renderer = self.config.get("window", "renderer", default="live2d")
+        if settings.get("window", {}).get("renderer") == "live2d":
+            # An explicit settings apply retries a renderer that failed earlier.
+            self._live2d_session_fallbacks.clear()
         click_action = self.config.get("behavior", "click_action", default="switch_sprite")
         auto_idle = self.config.get("behavior", "auto_idle", default=True)
         idle_interval = self.config.get("behavior", "idle_interval", default=30)

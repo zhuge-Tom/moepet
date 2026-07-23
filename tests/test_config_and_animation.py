@@ -143,8 +143,91 @@ def test_role_switch_saves_old_history_and_loads_new_history(tmp_path):
     assert events == ["cancel-async", "save-old", "load-knowledge", "load-new"]
 
 
+def test_main_loads_live2d_from_project_site_packages(monkeypatch, tmp_path):
+    import main as main_module
+
+    site_packages = tmp_path / ".venv" / "Lib" / "site-packages"
+    site_packages.mkdir(parents=True)
+    specs = iter([None, object()])
+    added = []
+    monkeypatch.setattr(main_module, "BASE_DIR", tmp_path)
+    monkeypatch.setattr(main_module.importlib.util, "find_spec", lambda name: next(specs))
+    monkeypatch.setattr(main_module.site, "addsitedir", lambda path: added.append(path))
+    monkeypatch.setattr(main_module.importlib, "invalidate_caches", lambda: None)
+    monkeypatch.setattr(main_module.os, "execv", lambda *_args: (_ for _ in ()).throw(AssertionError("must not restart")))
+
+    main_module._ensure_live2d_runtime()
+
+    assert added == [str(site_packages)]
+
+def test_main_reexecutes_project_venv_when_live2d_is_missing(monkeypatch, tmp_path):
+    import main as main_module
+
+    venv_python = tmp_path / ".venv" / "Scripts" / "python.exe"
+    venv_python.parent.mkdir(parents=True)
+    venv_python.write_bytes(b"")
+    calls = []
+    monkeypatch.setattr(main_module, "BASE_DIR", tmp_path)
+    monkeypatch.setattr(main_module.sys, "executable", "C:/Python/python.exe")
+    monkeypatch.setattr(main_module.sys, "argv", ["main.py", "--test"])
+    monkeypatch.setattr(main_module.importlib.util, "find_spec", lambda name: None)
+    monkeypatch.setattr(main_module.os, "execv", lambda executable, args: calls.append((executable, args)))
+
+    main_module._ensure_live2d_runtime()
+
+    assert calls == [(str(venv_python), [str(venv_python), str(tmp_path / "main.py"), "--test"])]
+
+def test_save_dialog_size_only_persists_dimensions():
+    from pet_manager import PetManager
+
+    calls = []
+    config = type("Config", (), {
+        "set": lambda _self, *args: calls.append(("set", *args)),
+        "save": lambda _self: calls.append(("save",)),
+    })()
+    manager = type("Manager", (), {
+        "config": config,
+        "_tray": type("Tray", (), {
+            "set_observation_enabled": lambda *_args: calls.append(("tray",)),
+        })(),
+        "_configure_screen_observer": lambda _self: calls.append(("observer",)),
+    })()
+
+    PetManager._save_dialog_size(manager, 460, 240)
+    assert calls == [
+        ("set", "dialog", "width", 460),
+        ("set", "dialog", "height", 240),
+        ("save",),
+    ]
+
+def test_live2d_failure_keeps_the_saved_live2d_preference(monkeypatch):
+    import pet_manager as pet_manager_module
+
+    class LiveWindow:
+        pass
+
+    monkeypatch.setattr(pet_manager_module, "Live2DWindow", LiveWindow)
+    recreated = []
+    manager = type("Manager", (), {
+        "_windows": {"noir": LiveWindow()},
+        "_live2d_session_fallbacks": set(),
+        "_recreate_pet_windows": lambda _self: recreated.append(True),
+        "_dialog": None,
+        "config": type("Config", (), {
+            "set": lambda *_args: (_ for _ in ()).throw(AssertionError("must not persist static")),
+            "save": lambda *_args: (_ for _ in ()).throw(AssertionError("must not save static")),
+        })(),
+    })()
+
+    pet_manager_module.PetManager._on_live2d_failed(manager, "noir", "OpenGL failed")
+    assert manager._live2d_session_fallbacks == {"noir"}
+    assert recreated == [True]
+
 def test_config_has_multimodal_defaults(tmp_path):
     config = Config(tmp_path / "config.json")
+    assert config.get("window", "renderer") == "live2d"
+    assert config.get("dialog", "offset_x") == -61
+    assert config.get("dialog", "offset_y") == -104
     assert config.get("asr", "compute_type") == "int8"
     assert config.get("screen_capture", "keep_captures") is False
     assert config.get("screen_capture", "auto_observe") is False
@@ -469,6 +552,26 @@ def test_dialog_position_is_persisted_relative_to_the_active_pet(tmp_path):
     assert manager.config.get("dialog", "offset_y") == -245
 
 
+def test_dragged_dialog_offset_overrides_the_default_distance(tmp_path):
+    manager = type("Manager", (), {})()
+    manager.config = Config(tmp_path / "config.json")
+    manager.config.set("current_character", "noir")
+    manager._dialog = type("Dialog", (), {
+        "width": lambda self: 460,
+        "height": lambda self: 240,
+    })()
+    pet = type("Pet", (), {
+        "x": lambda self: 1000,
+        "y": lambda self: 400,
+        "width": lambda self: 410,
+    })()
+    manager._windows = {"noir": pet}
+
+    PetManager._save_dialog_offset(manager, 1012, 155)
+
+    assert PetManager._dialog_offset_for(manager, pet) == (12, -245)
+
+
 def test_dragging_pet_does_not_move_an_open_dialog(tmp_path):
     class Dialog:
         def isVisible(self): return True
@@ -560,25 +663,20 @@ def test_live2d_idle_line_eye_reaction_enables_the_frame_parameter(monkeypatch):
 
 
 
-def test_live2d_model_hit_uses_cubism_drawable_meshes_not_part_bounds():
-    from PySide6.QtCore import QPointF
-    from ui.live2d_window import Live2DWindow
+def test_live2d_alpha_mask_maps_qt_top_left_to_opengl_bottom_left():
+    from PySide6.QtCore import QPoint
+    from ui.live2d_window import Live2DCanvas
 
-    class NativeModel:
-        def HitDrawable(self, x, y, top_only):
-            return ["ArtMesh"] if (x, y, top_only) == (180.0, 280.0, False) else []
-
-    class Model:
-        _model = NativeModel()
-
-    window = type("Window", (), {
-        "width": lambda self: 360,
-        "height": lambda self: 520,
-        "_label": type("Canvas", (), {"_model": Model()})(),
+    canvas = type("Canvas", (), {
+        "_alpha_mask_size": (2, 2),
+        # OpenGL rows: bottom [0, 64], top [128, 255].
+        "_alpha_mask": bytes([0, 64, 128, 255]),
+        "devicePixelRatioF": lambda self: 1.0,
     })()
-    assert Live2DWindow._is_model_point(window, QPointF(180, 280))
-    assert not Live2DWindow._is_model_point(window, QPointF(8, 8))
-
+    assert Live2DCanvas.alpha_at(canvas, QPoint(0, 0)) == 128
+    assert Live2DCanvas.alpha_at(canvas, QPoint(1, 0)) == 255
+    assert Live2DCanvas.alpha_at(canvas, QPoint(0, 1)) == 0
+    assert Live2DCanvas.alpha_at(canvas, QPoint(1, 1)) == 64
 
 def test_live2d_transparent_hit_test_passes_non_model_points_to_desktop():
     from PySide6.QtCore import QPoint
@@ -591,17 +689,75 @@ def test_live2d_transparent_hit_test_passes_non_model_points_to_desktop():
     assert Live2DWindow._should_pass_pointer_through(window, QPoint(8, 8))
 
 
-def test_live2d_interactive_outline_scales_with_window_size():
+def test_live2d_pointer_passthrough_keeps_gl_canvas_non_native(monkeypatch):
+    import ui.live2d_window as live2d_window_module
+    from ui.live2d_window import Live2DWindow
+
+    calls = []
+    monkeypatch.setattr(
+        live2d_window_module,
+        "_set_native_mouse_transparent",
+        lambda hwnd, enabled: calls.append((hwnd, enabled)),
+    )
+    window = type("Window", (), {
+        "_native_pointer_passthrough": False,
+        "_native_pointer_handles": (),
+        "winId": lambda _self: 101,
+        "_label": type("Canvas", (), {
+            "winId": lambda _self: (_ for _ in ()).throw(
+                AssertionError("QOpenGLWidget must stay non-native")),
+        })(),
+    })()
+
+    Live2DWindow._set_native_pointer_passthrough(window, True)
+    Live2DWindow._set_native_pointer_passthrough(window, True)
+    Live2DWindow._set_native_pointer_passthrough(window, False)
+
+    assert calls == [(101, True), (101, False)]
+
+
+def test_live2d_native_hit_test_uses_qt_logical_cursor_position(monkeypatch):
+    import ui.live2d_window as live2d_window_module
+    from PySide6.QtCore import QPoint
+    from ui.live2d_window import Live2DWindow
+
+    seen = []
+    monkeypatch.setattr(live2d_window_module.QCursor, "pos", lambda: QPoint(101, 101))
+    window = type("Window", (), {
+        "_sync_pointer_passthrough": lambda _self, point: seen.append(point) or True,
+    })()
+
+    assert Live2DWindow._native_hit_test_result(window) == -1
+    assert seen == [QPoint(101, 101)]
+
+
+def test_live2d_interactive_point_uses_rendered_alpha():
     from PySide6.QtCore import QPoint
     from ui.live2d_window import Live2DWindow
 
     window = type("Window", (), {
-        "width": lambda self: 360, "height": lambda self: 520,
-        "_is_model_point": lambda _self, point: True,
+        "_label": type("Canvas", (), {
+            "alpha_at": lambda _self, point: 255 if point.x() == 180 else 0,
+        })(),
     })()
     assert Live2DWindow._is_interactive_point(window, QPoint(180, 260))
     assert not Live2DWindow._is_interactive_point(window, QPoint(8, 8))
 
+def test_live2d_resize_sets_one_fixed_window_size():
+    from ui.live2d_window import Live2DWindow
+
+    calls = []
+    window = type("Window", (), {
+        "_base_size": (720, 880),
+        "_scale": 0.5,
+        "setFixedSize": lambda _self, width, height: calls.append((width, height)),
+        "_label": type("Canvas", (), {
+            "set_model_scale": lambda _self, scale: None,
+            "set_model_offset_y": lambda _self, offset: None,
+        })(),
+    })()
+    Live2DWindow._resize_live2d(window)
+    assert calls == [(360, 440)]
 
 def test_live2d_context_menu_ignores_transparent_artboard_padding(qapp):
     from PySide6.QtCore import QPoint

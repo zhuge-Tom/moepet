@@ -942,7 +942,7 @@ class SettingsWindow(QDialog):
         if live2d_model.exists():
             combo.addItem("Live2D 动态模型（Noir）", "live2d")
         renderer_index = combo.findData(
-            self.config.get("window", "renderer", default="static"))
+            self.config.get("window", "renderer", default="live2d"))
         combo.setCurrentIndex(max(renderer_index, 0))
         return combo
 
@@ -1243,10 +1243,10 @@ class SettingsWindow(QDialog):
             ),
             "renderer": (
                 safe(getattr(self, "_renderer_combo", None),
-                     type("", (), {"currentData": lambda: "static"})()
+                     type("", (), {"currentData": lambda: "live2d"})()
                      ).currentData()
                 if safe(getattr(self, "_renderer_combo", None))
-                else self.config.get("window", "renderer", default="static")
+                else self.config.get("window", "renderer", default="live2d")
             ),
         }
         s["behavior"] = {

@@ -81,9 +81,10 @@ DEFAULTS = {
         "visible": False,
         "width": 480,
         "height": 240,
-        # Keep chat anchored to the pet instead of to an absolute desktop point.
-        "offset_x": -24,
-        "offset_y": -80,
+        # Screenshot-matched initial placement above Noir. Once the user
+        # drags the dialog, the saved relative offset overrides these values.
+        "offset_x": -61,
+        "offset_y": -104,
     },
 }
 

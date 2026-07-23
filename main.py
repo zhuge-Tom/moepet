@@ -7,6 +7,8 @@ Galgame 风格对话框、立绘动画演出。
 import os
 import sys
 import logging
+import importlib.util
+import site
 from pathlib import Path
 
 from PySide6.QtWidgets import QApplication
@@ -24,7 +26,38 @@ logging.basicConfig(
 )
 
 
+def _ensure_live2d_runtime() -> None:
+    """Restart with the project venv when the selected Python lacks Live2D."""
+    if importlib.util.find_spec("live2d") is not None:
+        return
+
+    project_site_packages = BASE_DIR / ".venv" / "Lib" / "site-packages"
+    if project_site_packages.is_dir():
+        site.addsitedir(str(project_site_packages))
+        importlib.invalidate_caches()
+        if importlib.util.find_spec("live2d") is not None:
+            return
+
+    venv_python = BASE_DIR / ".venv" / "Scripts" / "python.exe"
+    try:
+        already_using_venv = Path(sys.executable).resolve() == venv_python.resolve()
+    except OSError:
+        already_using_venv = False
+    if venv_python.is_file() and not already_using_venv:
+        os.execv(
+            str(venv_python),
+            [str(venv_python), str(BASE_DIR / "main.py"), *sys.argv[1:]],
+        )
+        return
+
+    raise RuntimeError(
+        "Live2D 运行时未安装。请执行："
+        r".\.venv\Scripts\python.exe -m pip install live2d-py==0.7.0.4"
+    )
+
+
 def main():
+    _ensure_live2d_runtime()
     app = QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(False)
     app.setApplicationName("Moepet")

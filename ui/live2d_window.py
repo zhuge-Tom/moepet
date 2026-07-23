@@ -3,6 +3,7 @@
 from pathlib import Path
 import math
 import random
+import sys
 import time
 
 from PySide6.QtCore import QPoint, Qt, Signal, QTimer
@@ -17,6 +18,30 @@ _SMILE_MOUTH_LAYER = 1.0
 _PURSED_MOUTH_LAYER = 1.0
 _WM_NCHITTEST = 0x0084
 _HTTRANSPARENT = -1
+_HTCLIENT = 1
+_GWL_EXSTYLE = -20
+_WS_EX_TRANSPARENT = 0x00000020
+
+
+def _set_native_mouse_transparent(hwnd: int, enabled: bool) -> None:
+    """Toggle Win32 mouse transparency without changing window geometry."""
+    if sys.platform != "win32" or not hwnd:
+        return
+    from ctypes import c_ssize_t, windll
+
+    user32 = windll.user32
+    get_style = user32.GetWindowLongPtrW
+    set_style = user32.SetWindowLongPtrW
+    get_style.restype = c_ssize_t
+    set_style.restype = c_ssize_t
+    style = int(get_style(int(hwnd), _GWL_EXSTYLE))
+    updated = (
+        style | _WS_EX_TRANSPARENT
+        if enabled
+        else style & ~_WS_EX_TRANSPARENT
+    )
+    if updated != style:
+        set_style(int(hwnd), _GWL_EXSTYLE, updated)
 
 
 def _native_hit_test_position(message):
@@ -60,6 +85,10 @@ class Live2DCanvas(QOpenGLWidget):
         self._line_eye_active = False
         self._last_frame_at = time.monotonic()
         self._render_timer_id = None
+        # Cache final framebuffer alpha while paintGL owns the OpenGL context.
+        # WM_NCHITTEST can then perform a cheap lookup without rendering/resizing.
+        self._alpha_mask = b""
+        self._alpha_mask_size = (0, 0)
         surface = QSurfaceFormat()
         surface.setAlphaBufferSize(8)
         surface.setDepthBufferSize(24)
@@ -105,6 +134,39 @@ class Live2DCanvas(QOpenGLWidget):
         import live2d.v3 as live2d
 
         self._canvas.Draw(lambda: (live2d.clearBuffer(), self._model.Draw()))
+        self._cache_framebuffer_alpha()
+
+    def _cache_framebuffer_alpha(self) -> None:
+        """Copy final OpenGL alpha into a compact bottom-up hit-test mask."""
+        try:
+            from ctypes import c_ubyte
+
+            pixel_ratio = self.devicePixelRatioF()
+            width = max(1, round(self.width() * pixel_ratio))
+            height = max(1, round(self.height() * pixel_ratio))
+            rgba = (c_ubyte * (width * height * 4))()
+            functions = self.context().functions()
+            # GL_RGBA / GL_UNSIGNED_BYTE; QOpenGLWidget's FBO is bound here.
+            functions.glReadPixels(0, 0, width, height, 0x1908, 0x1401, rgba)
+            self._alpha_mask = bytes(rgba)[3::4]
+            self._alpha_mask_size = (width, height)
+        except (AttributeError, RuntimeError, TypeError, ValueError):
+            # A missing frame is transparent and must not block the desktop.
+            self._alpha_mask = b""
+            self._alpha_mask_size = (0, 0)
+
+    def alpha_at(self, point) -> int:
+        """Return cached rendered alpha for a logical widget coordinate."""
+        width, height = self._alpha_mask_size
+        if not self._alpha_mask or width <= 0 or height <= 0:
+            return 0
+        pixel_ratio = self.devicePixelRatioF()
+        x = int(point.x() * pixel_ratio)
+        y = int(point.y() * pixel_ratio)
+        if x < 0 or y < 0 or x >= width or y >= height:
+            return 0
+        gl_y = height - 1 - y
+        return self._alpha_mask[gl_y * width + x]
 
     def nativeEvent(self, event_type, message):
         """Let desktop clicks pass through transparent model padding.
@@ -116,9 +178,8 @@ class Live2DCanvas(QOpenGLWidget):
             global_pos = _native_hit_test_position(message)
             owner = self.window()
             if (global_pos is not None and
-                    hasattr(owner, "_should_pass_pointer_through") and
-                    owner._should_pass_pointer_through(global_pos)):
-                return True, _HTTRANSPARENT
+                    hasattr(owner, "_native_hit_test_result")):
+                return True, owner._native_hit_test_result()
         return super().nativeEvent(event_type, message)
 
     def timerEvent(self, event) -> None:
@@ -305,6 +366,8 @@ class Live2DWindow(PetWindow):
 
     def __init__(self, char_data, model_path: Path, scale_override: float = None, parent=None):
         self._live2d_model_path = Path(model_path)
+        self._native_pointer_passthrough = False
+        self._native_pointer_handles = ()
         super().__init__(char_data, scale_override, parent)
         self._label.initialization_failed.connect(self.live2d_failed.emit)
         self._cursor_timer = QTimer(self)
@@ -422,55 +485,48 @@ class Live2DWindow(PetWindow):
     def _is_head_point(self, point) -> bool:
         return False
 
-    def _is_model_point(self, point) -> bool:
-        """Accept only Cubism drawables, never their transparent bounds."""
-        model = getattr(self._label, "_model", None)
-        if model is not None:
-            try:
-                # HitPart uses broad authored part bounds.  HitDrawable tests
-                # the rendered mesh itself, so it correctly rejects the large
-                # transparent area around Noir's artboard.
-                return bool(model._model.HitDrawable(
-                    float(point.x()), float(point.y()), False))
-            except Exception:
-                # Never widen interaction to the entire transparent widget if
-                # the renderer is still initializing or a model is malformed.
-                return False
-        return False
-
     def _is_interactive_point(self, point) -> bool:
-        """Use a scale-aware silhouette to avoid claiming the artboard padding."""
-        width, height = self.width(), self.height()
-        if width <= 0 or height <= 0:
-            return False
-        x, y = point.x() / width, point.y() / height
-        # A conservative outline around Noir's visible ears, hair, body, and
-        # tail. It scales with the window but does not clip model rendering.
-        boundary = (
-            (0.32, 0.08), (0.20, 0.15), (0.23, 0.36), (0.12, 0.78),
-            (0.20, 1.00), (0.82, 1.00), (0.88, 0.78), (0.77, 0.36),
-            (0.80, 0.15), (0.66, 0.08),
-        )
-        inside = False
-        previous_x, previous_y = boundary[-1]
-        for current_x, current_y in boundary:
-            if ((current_y > y) != (previous_y > y) and
-                    x < (previous_x - current_x) * (y - current_y) /
-                    (previous_y - current_y) + current_x):
-                inside = not inside
-            previous_x, previous_y = current_x, current_y
-        return inside and self._is_model_point(point)
+        """Accept exactly pixels rendered with non-zero framebuffer alpha."""
+        return self._label.alpha_at(point) > 0
 
     def _should_pass_pointer_through(self, global_pos) -> bool:
         return not self._is_interactive_point(self.mapFromGlobal(global_pos))
 
+    def _set_native_pointer_passthrough(self, enabled: bool) -> None:
+        """Apply click-through without making QOpenGLWidget a native child.
+
+        Calling ``self._label.winId()`` forces QOpenGLWidget into a separate
+        native window. On Windows that bypasses Qt's translucent top-level
+        composition and turns transparent OpenGL pixels black.
+        """
+        enabled = bool(enabled)
+        handles = (int(self.winId()),)
+        if (self._native_pointer_passthrough == enabled and
+                self._native_pointer_handles == handles):
+            return
+        for hwnd in handles:
+            _set_native_mouse_transparent(hwnd, enabled)
+        self._native_pointer_passthrough = enabled
+        self._native_pointer_handles = handles
+
+    def _sync_pointer_passthrough(self, global_pos) -> bool:
+        transparent = self._should_pass_pointer_through(global_pos)
+        self._set_native_pointer_passthrough(transparent)
+        return transparent
+
+    def _native_hit_test_result(self) -> int:
+        """Use Qt's DPI-correct global cursor coordinate for the Alpha lookup."""
+        return (
+            _HTTRANSPARENT
+            if self._sync_pointer_passthrough(QCursor.pos())
+            else _HTCLIENT
+        )
+
     def nativeEvent(self, event_type, message):
         """Pass pointer input through the transparent Live2D artboard on Windows."""
         if bytes(event_type) in {b"windows_generic_MSG", b"windows_dispatcher_MSG"}:
-            global_pos = _native_hit_test_position(message)
-            if (global_pos is not None and
-                    self._should_pass_pointer_through(global_pos)):
-                return True, _HTTRANSPARENT
+            if _native_hit_test_position(message) is not None:
+                return True, self._native_hit_test_result()
         return super().nativeEvent(event_type, message)
 
     def mouseDoubleClickEvent(self, event) -> None:
@@ -505,7 +561,7 @@ class Live2DWindow(PetWindow):
     def _resize_live2d(self) -> None:
         width = max(280, round(self._base_size[0] * self._scale))
         height = max(400, round(self._base_size[1] * self._scale))
-        self.resize(width, height)
+        self.setFixedSize(width, height)
         # This model's artboard has generous transparent padding.
         self._label.set_model_scale(1.65)
         self._label.set_model_offset_y(0.0)
@@ -518,6 +574,7 @@ class Live2DWindow(PetWindow):
         if not self.isVisible() or self.width() <= 0 or self.height() <= 0:
             return
         cursor = QCursor.pos()
+        self._sync_pointer_passthrough(cursor)
         center = self.frameGeometry().center()
         x = (cursor.x() - center.x()) / max(1.0, self.width() * 0.8)
         y = (center.y() - cursor.y()) / max(1.0, self.height() * 0.8)
@@ -541,6 +598,7 @@ class Live2DWindow(PetWindow):
             self._mouth_timer.start()
 
     def hideEvent(self, event) -> None:
+        self._set_native_pointer_passthrough(False)
         self._label.set_rendering_enabled(False)
         self._cursor_timer.stop()
         self._mouth_timer.stop()
