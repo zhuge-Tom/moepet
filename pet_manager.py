@@ -1223,20 +1223,13 @@ class PetManager:
     # ─── 位置记忆 ─────────────────────────────
 
     def _on_position_changed(self, x: int, y: int):
+        """Move for this session without changing the fixed startup position."""
         if x == -1 and y == -1:
             current = self.config.current_character
             win = self._windows.get(current)
-            screen = QApplication.primaryScreen()
-            if win and screen:
-                area = screen.availableGeometry()
-                margin = 24
-                win.move(
-                    area.right() - win.width() - margin + 1,
-                    area.bottom() - win.height() - margin + 1,
-                )
-                self.config.save_position("pet", win.x(), win.y())
-        else:
-            self.config.save_position("pet", x, y)
+            fixed_position = self.config.get_position("pet")
+            if win and fixed_position:
+                win.move(*fixed_position)
 
     # ─── 退出 ────────────────────────────────
 
@@ -1246,10 +1239,6 @@ class PetManager:
         self._screen_hotkey.close()
         self._asr_hotkey.close()
         self._save_chat_history()
-        current = self.config.current_character
-        win = self._windows.get(current)
-        if win:
-            self.config.save_position("pet", win.x(), win.y())
         if self._dialog and self._dialog.isVisible():
             self._save_dialog_offset(self._dialog.x(), self._dialog.y())
             self._save_dialog_size(self._dialog.width(), self._dialog.height())

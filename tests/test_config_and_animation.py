@@ -397,8 +397,12 @@ def test_live2d_applies_mouse_and_closed_mouth_parameters_after_physics():
 
     assert applied == [
         ("ParamAngleX", 15.0),
-        ("ParamAngleY", -4.5),
-        ("ParamEyeBallX", -0.5),
+        ("ParamAngleY", -7.5),
+        ("ParamEyeBallX", 0.5),
+        ("ParamEyeBallY", -0.25),
+        ("ParamAngleX", 15.0),
+        ("ParamAngleY", -7.5),
+        ("ParamEyeBallX", 0.5),
         ("ParamEyeBallY", -0.25),
         ("ParamMouthOpenY", 0.0),
         ("ParamMouthForm", 1.0),
@@ -409,6 +413,31 @@ def test_live2d_applies_mouse_and_closed_mouth_parameters_after_physics():
         ("Param18", 1.0),
         ("Param19", 1.0),
     ]
+
+
+def test_live2d_commits_leftward_and_vertical_tracking_to_native_frame():
+    from ui.live2d_window import Live2DCanvas
+
+    applied = []
+
+    class NativeModel:
+        def SetParameterValueById(self, parameter, value):
+            applied.append((parameter, value))
+
+    class Model:
+        _model = NativeModel()
+        def SetParameterValue(self, *_args):
+            pass
+
+    canvas = Live2DCanvas(Path("model3.json"))
+    canvas._model = Model()
+    canvas._drag_target = (-1.0, 1.0)
+    canvas._apply_visible_parameters()
+
+    assert ("ParamAngleX", -30.0) in applied
+    assert ("ParamAngleY", 30.0) in applied
+    assert ("ParamEyeBallX", -1.0) in applied
+    assert ("ParamEyeBallY", 1.0) in applied
 
 
 def test_live2d_keeps_the_line_eye_parameter_after_auto_updates():
@@ -449,7 +478,7 @@ def test_dragging_pet_does_not_move_an_open_dialog(tmp_path):
     manager._windows = {}
     manager._dialog = Dialog()
     PetManager._on_position_changed(manager, 608, 80)
-    assert manager.config.get_position("pet") == (608, 80)
+    assert manager.config.get_position("pet") == (1105, 364)
 
 
 def test_start_keeps_settings_closed_even_when_chat_is_unconfigured(tmp_path):
@@ -826,7 +855,7 @@ def test_start_places_portrait_bottom_right_and_closes_dialog(tmp_path, monkeypa
     assert manager.config.get("dialog", "visible") is False
 
 
-def test_start_restores_saved_portrait_position(tmp_path, monkeypatch):
+def test_start_uses_the_fixed_portrait_position_after_a_drag(tmp_path, monkeypatch):
     class Window:
         def __init__(self): self.moves = []
         def width(self): return 100
@@ -841,6 +870,7 @@ def test_start_restores_saved_portrait_position(tmp_path, monkeypatch):
     manager._setup_tray = lambda: None
     manager._needs_initial_setup = lambda: False
     monkeypatch.setattr("pet_manager.QApplication.primaryScreen", lambda: None)
+    PetManager._on_position_changed(manager, 1200, 700)
     PetManager.start(manager)
     assert manager._windows["noir"].moves == [(654, 321)]
 

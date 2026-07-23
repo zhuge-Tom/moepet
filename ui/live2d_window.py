@@ -241,9 +241,18 @@ class Live2DCanvas(QOpenGLWidget):
         # The model's authored X axis matches desktop left/right.  Use its
         # full range so the turn remains obvious at desktop-pet scale.
         self._model.SetParameterValue("ParamAngleX", x * 30.0)
-        self._model.SetParameterValue("ParamAngleY", y * 18.0)
-        self._model.SetParameterValue("ParamEyeBallX", -x)
+        self._model.SetParameterValue("ParamAngleY", y * 30.0)
+        # Desktop cursor coordinates are not camera-mirrored. Noir's native
+        # parameter uses the standard negative-left / positive-right axis.
+        self._model.SetParameterValue("ParamEyeBallX", x)
         self._model.SetParameterValue("ParamEyeBallY", y)
+        # Physics can overwrite the wrapper's saved parameter values before
+        # Draw. Commit tracking directly to the native current frame so left
+        # and right turns remain symmetric, and use Noir's full Y range.
+        self._model._model.SetParameterValueById("ParamAngleX", x * 30.0)
+        self._model._model.SetParameterValueById("ParamAngleY", y * 30.0)
+        self._model._model.SetParameterValueById("ParamEyeBallX", x)
+        self._model._model.SetParameterValueById("ParamEyeBallY", y)
         # Keep the authored mouth values in both Cubism parameter stores.
         # `SetParameterValue` persists through LoadParameters; the direct
         # call still affects the draw about to happen this frame.
