@@ -27,19 +27,25 @@ class LLMService(QObject):
         self._buffer = ""
         self._streaming = False
         self._turn_context = ""
+        self._history_message_limit = 0
 
     def configure(self, base_url: str, api_key: str, model: str,
-                  post_processing: str = "", ignore_format_error: bool = True):
+                  post_processing: str = "", ignore_format_error: bool = True,
+                  clean_response: bool = True, history_message_limit: int = 0):
         """设置 API 参数"""
         self._base_url = base_url.rstrip("/")
         self._api_key = api_key
         self._model = model
         self._post_processing = post_processing.strip()
         self._ignore_format_error = bool(ignore_format_error)
+        self._clean_enabled = bool(clean_response)
+        self._history_message_limit = max(0, int(history_message_limit or 0))
 
     def _clean_response(self, text: str) -> str:
         """Keep the displayed reply as concise dialogue rather than role-play markup."""
         text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
+        if not getattr(self, "_clean_enabled", True):
+            return text
         # Stage directions such as "(tilts her head)" do not belong in the
         # chat bubble or the speech sent to TTS. Repeat to cover nested pairs.
         previous = None
@@ -123,10 +129,7 @@ class LLMService(QObject):
 
         url = chat_completions_url(self._base_url)
 
-        messages = [
-            {"role": item["role"], "content": item["content"]}
-            for item in self._messages
-        ]
+        messages = self._messages_for_request()
         if self._turn_context:
             insert_at = 1 if messages and messages[0].get("role") == "system" else 0
             messages.insert(insert_at, {"role": "system", "content": self._turn_context})
@@ -155,6 +158,18 @@ class LLMService(QObject):
         else:
             self._current_reply = self._manager.post(request, QByteArray(json.dumps(body).encode()))
             self._current_reply.finished.connect(self._on_non_stream_finished)
+
+    def _messages_for_request(self) -> list[dict]:
+        """Return the bounded provider payload without changing saved history."""
+        messages = [
+            {"role": item["role"], "content": item["content"]}
+            for item in self._messages
+        ]
+        if self._history_message_limit and len(messages) > self._history_message_limit:
+            system = messages[:1] if messages and messages[0].get("role") == "system" else []
+            dialogue = messages[len(system):]
+            messages = system + dialogue[-self._history_message_limit:]
+        return messages
 
     def _on_stream_data(self):
         """处理流式数据（SSE 格式）"""
@@ -191,6 +206,8 @@ class LLMService(QObject):
         """流式请求结束"""
         reply = self._current_reply
         self._current_reply = None
+        if reply is None:
+            return
 
         if reply.error() != QNetworkReply.NoError:
             err = reply.errorString()
@@ -220,6 +237,8 @@ class LLMService(QObject):
         """非流式请求结束"""
         reply = self._current_reply
         self._current_reply = None
+        if reply is None:
+            return
 
         if reply.error() != QNetworkReply.NoError:
             self.error_occurred.emit(f"请求失败: {reply.errorString()}")

@@ -6,7 +6,7 @@ form persistence while individual pages own their own presentation tree.
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QCheckBox, QComboBox, QFrame, QHBoxLayout, QLabel, QLineEdit, QPushButton,
+    QCheckBox, QComboBox, QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton,
     QSpinBox, QVBoxLayout, QWidget,
 )
 
@@ -367,18 +367,64 @@ def make_vision_page(config, add_probe) -> tuple[QWidget, dict[str, QWidget]]:
 def make_about_page() -> QWidget:
     page = QWidget()
     layout = QVBoxLayout(page)
-    layout.setContentsMargins(28, 24, 28, 28)
-    layout.setSpacing(16)
-    about = QLabel(
-        "Moepet - 萌系桌面宠物\n"
-        "基于 PySide6 的角色桌面伴侣\n\n"
-        "支持多角色切换、AI 对话、Galgame 风格对话框、\n"
-        "立绘动画演出、按住说话、屏幕理解与系统托盘。\n\n"
-        "GitHub: zhuge-Tom/moepet"
+    layout.setContentsMargins(18, 14, 18, 22)
+    layout.setSpacing(12)
+
+    hero = QFrame()
+    hero.setObjectName("about_hero")
+    hero.setStyleSheet(
+        f"QFrame#about_hero{{background:qlineargradient(x1:0,y1:0,x2:1,y2:1,"
+        f"stop:0 #202b5c,stop:1 #2c235d);border:1px solid {STAR_BORDER};border-radius:14px;}}"
+        "QLabel{background:transparent;border:none;}")
+    hero_layout = QVBoxLayout(hero)
+    hero_layout.setContentsMargins(22, 18, 22, 18)
+    hero_layout.setSpacing(5)
+    brand = QLabel("MOEPET")
+    brand.setStyleSheet(f"color:{STAR_ACCENT};font-size:12px;font-weight:800;letter-spacing:2px;")
+    title = QLabel("让角色真正住进你的桌面")
+    title.setStyleSheet(f"color:{STAR_TEXT};font-size:22px;font-weight:800;")
+    subtitle = QLabel("Live2D 桌面陪伴、自然对话与持续成长的本地记忆，汇聚在一个轻巧的桌面伙伴中。")
+    subtitle.setWordWrap(True)
+    subtitle.setStyleSheet(f"color:{STAR_TEXT_MUTED};font-size:13px;")
+    hero_layout.addWidget(brand); hero_layout.addWidget(title); hero_layout.addWidget(subtitle)
+    layout.addWidget(hero)
+
+    section = QLabel("核心能力")
+    section.setStyleSheet(f"color:{STAR_TEXT};font-size:14px;font-weight:700;padding:2px 2px;")
+    layout.addWidget(section)
+    grid = QGridLayout(); grid.setSpacing(9)
+    features = (
+        ("Live2D 陪伴", "透明背景与实体区域交互，安静融入桌面。"),
+        ("角色对话", "兼容多种 AI 服务，支持流式回复与语音交互。"),
+        ("分层记忆", "近期摘要、长期事实和日记归档按角色独立保存。"),
+        ("感知能力", "可选屏幕理解与主动观察，授权边界清晰可控。"),
     )
-    about.setStyleSheet(f"color: {STAR_TEXT_MUTED}; font-size: 13px; padding: 16px;")
-    about.setAlignment(Qt.AlignCenter)
-    layout.addWidget(about)
+    for index, (feature_title, description) in enumerate(features):
+        card = QFrame(); card.setObjectName("about_feature")
+        card.setStyleSheet(
+            f"QFrame#about_feature{{background:{STAR_SURFACE_ELEVATED};border:1px solid {STAR_BORDER};"
+            "border-radius:10px;} QFrame#about_feature:hover{background:#293765;border-color:#b78cff;}"
+            "QLabel{background:transparent;border:none;}")
+        card_layout = QVBoxLayout(card); card_layout.setContentsMargins(14, 12, 14, 12); card_layout.setSpacing(4)
+        heading = QLabel(feature_title); heading.setStyleSheet(f"color:{STAR_TEXT};font-weight:700;font-size:13px;")
+        detail = QLabel(description); detail.setWordWrap(True)
+        detail.setStyleSheet(f"color:{STAR_TEXT_MUTED};font-size:12px;")
+        card_layout.addWidget(heading); card_layout.addWidget(detail)
+        grid.addWidget(card, index // 2, index % 2)
+    layout.addLayout(grid)
+
+    footer = QFrame(); footer.setObjectName("about_footer")
+    footer.setStyleSheet(
+        f"QFrame#about_footer{{background:#111a3c;border:1px solid {STAR_BORDER};border-radius:10px;}}"
+        "QLabel{background:transparent;border:none;}")
+    footer_layout = QVBoxLayout(footer); footer_layout.setContentsMargins(14, 10, 14, 10)
+    footer_layout.setSpacing(3)
+    project = QLabel("开源项目  ·  zhuge-Tom/moepet")
+    project.setStyleSheet(f"color:{STAR_TEXT};font-weight:600;")
+    stack = QLabel("PySide6  ·  OpenGL  ·  SQLite  ·  Rust")
+    stack.setStyleSheet(f"color:{STAR_TEXT_SUBTLE};font-size:11px;")
+    footer_layout.addWidget(project); footer_layout.addWidget(stack)
+    layout.addWidget(footer)
     layout.addStretch()
     return page
 

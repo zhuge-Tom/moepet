@@ -1380,6 +1380,9 @@ def test_settings_window_offers_live2d_when_the_model_is_present(qapp, tmp_path)
     assert window._renderer_combo.findData("live2d") >= 0
     window._renderer_combo.setCurrentIndex(window._renderer_combo.findData("live2d"))
     assert window._collect_settings()["window"]["renderer"] == "live2d"
+    assert window._static_sprite_section.isHidden()
+    window._renderer_combo.setCurrentIndex(window._renderer_combo.findData("static"))
+    assert not window._static_sprite_section.isHidden()
 
 
 def test_independent_settings_pages_build_without_window():

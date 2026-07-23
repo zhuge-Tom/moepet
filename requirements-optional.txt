@@ -8,4 +8,6 @@ faster-whisper>=1.1
 sounddevice>=0.5
 keyboard>=0.13
 rapidocr-onnxruntime>=1.4
+# Lightweight Chinese tokenization used by local hybrid memory retrieval.
+jieba>=0.42
 # CosyVoice follows its upstream installation instructions and model licenses.

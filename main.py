@@ -6,6 +6,7 @@ Galgame 风格对话框、立绘动画演出。
 
 import os
 import sys
+import ctypes
 import logging
 import importlib.util
 import site
@@ -13,6 +14,7 @@ from pathlib import Path
 
 from PySide6.QtWidgets import QApplication
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QIcon
 
 from core.config import Config
 from core.signals import signals
@@ -58,9 +60,17 @@ def _ensure_live2d_runtime() -> None:
 
 def main():
     _ensure_live2d_runtime()
+    if sys.platform == "win32":
+        try:
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("zhuge-Tom.Moepet")
+        except (AttributeError, OSError):
+            pass
     app = QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(False)
     app.setApplicationName("Moepet")
+    icon_path = BASE_DIR / "assets" / "moepet.ico"
+    if icon_path.is_file():
+        app.setWindowIcon(QIcon(str(icon_path)))
 
     # Live2D uses a QOpenGLWidget. Software OpenGL remains an opt-in fallback
     # for machines that cannot create a hardware context.

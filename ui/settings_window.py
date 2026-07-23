@@ -16,7 +16,7 @@ from PySide6.QtWidgets import (
     QSizePolicy, QTextEdit, QSpinBox, QStackedWidget,
 )
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QDesktopServices
+from PySide6.QtGui import QDesktopServices, QIcon
 from PySide6.QtCore import QUrl
 from PySide6.QtWidgets import QFileDialog, QMessageBox
 from core.knowledge_base import KnowledgeBase
@@ -36,6 +36,7 @@ from ui.settings.service_status import (
     vision_ready,
 )
 from ui.settings.persistence import apply_settings, save_character_prompt
+from ui.settings.memory_page import MemorySettingsPage
 from ui.settings.pages import (
     make_about_page, make_asr_page, make_character_parent_page, make_screen_page,
     make_tts_page, make_vision_page, make_ai_page,
@@ -58,6 +59,13 @@ NAV_TREE = [
     ("语音输入", "asr", True, []),
     ("屏幕识别", "screen", True, []),
     ("图像理解", "vision", True, []),
+    ("记忆模块", "memory", True, [
+        ("记忆概览", "memory_overview"),
+        ("时间线", "memory_timeline"),
+        ("日记", "memory_diary"),
+        ("近期摘要", "memory_recent"),
+        ("长期记忆", "memory_facts"),
+    ]),
     ("关于", "about", True, []),
 ]
 NAV_WIDTH = 208
@@ -70,6 +78,8 @@ _NAV_HOVER = "#293765"
 class SettingsWindow(QDialog):
     scale_changed = Signal(float)
     apply_clicked = Signal(dict)
+    memory_cleared = Signal(str)
+    memory_changed = Signal(str)
 
     def __init__(self, config: Config, characters: list[str], current_char: str,
                  base_dir: Path = None, parent=None):
@@ -84,7 +94,12 @@ class SettingsWindow(QDialog):
         self._settings_baseline = ""
 
         self.setWindowTitle("Moepet 设置")
-        self.setWindowFlag(Qt.WindowStaysOnTopHint, True)
+        self.setWindowFlag(Qt.WindowStaysOnTopHint, False)
+        self.setWindowFlag(Qt.WindowMinimizeButtonHint, True)
+        self.setWindowFlag(Qt.WindowMaximizeButtonHint, True)
+        icon_path = self._base_dir / "assets" / "moepet.ico"
+        if icon_path.is_file():
+            self.setWindowIcon(QIcon(str(icon_path)))
         self.setMinimumSize(760, 620)
         self.resize(980, 720)
         self.setStyleSheet(SETTINGS_QSS)
@@ -125,8 +140,8 @@ class SettingsWindow(QDialog):
             f"QFrame#settings_navigation {{ background: rgba(10, 16, 39, 238); border-right: 1px solid {STAR_BORDER}; }}")
 
         layout = QVBoxLayout(frame)
-        layout.setContentsMargins(12, 16, 12, 16)
-        layout.setSpacing(12)
+        layout.setContentsMargins(12, 13, 12, 12)
+        layout.setSpacing(7)
 
         # A text-only identity keeps the navigation quiet and spacious.
         self._desc_label = QLabel("Moepet")
@@ -142,24 +157,23 @@ class SettingsWindow(QDialog):
         # Text-only navigation keeps every destination visible at all times.
         self._tree = QTreeWidget()
         self._tree.setHeaderHidden(True)
-        self._tree.setIndentation(12)
+        self._tree.setIndentation(14)
         self._tree.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self._tree.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        self._tree.verticalScrollBar().setEnabled(False)
         self._tree.setAnimated(True)
         self._tree.setAutoFillBackground(True)
         self._tree.setStyleSheet(f"""
             QTreeWidget {{
-                background: transparent; border: none; outline: none; font-size: 14px;
+                background: transparent; border: none; outline: none; font-size: 13px;
             }}
             QTreeWidget::item {{
-                padding: 9px 10px; border-radius: 7px; color: {STAR_TEXT_MUTED};
+                min-height: 18px; padding: 4px 9px; border-radius: 7px; color: {STAR_TEXT_MUTED};
             }}
             QTreeWidget::item:selected {{
-                background: {STAR_ACCENT}; color: #fff; font-weight: bold;
+                background: {STAR_ACCENT}; color: #fff; font-weight: 700;
             }}
             QTreeWidget::item:hover:!selected {{
-                background: {_NAV_HOVER};
+                background: {_NAV_HOVER}; color: #ffffff;
             }}""")
 
         for text, key, enabled, children in NAV_TREE:
@@ -178,8 +192,7 @@ class SettingsWindow(QDialog):
 
         self._tree.itemClicked.connect(self._on_item_clicked)
         self._tree.currentItemChanged.connect(self._on_tree_changed)
-        layout.addWidget(self._tree)
-        layout.addStretch()
+        layout.addWidget(self._tree, 1)
         return frame
 
     # ═══════════════════════════════════
@@ -249,6 +262,7 @@ class SettingsWindow(QDialog):
             ("asr", self._build_asr_page),
             ("screen", self._build_screen_page),
             ("vision", self._build_vision_page),
+            ("memory", self._build_memory_page),
             ("about", make_about_page),
         ]
         for key, builder in page_builders:
@@ -315,15 +329,18 @@ class SettingsWindow(QDialog):
     def _watch_settings_changes(self) -> None:
         """Track edits centrally so closing a long configuration form is safe."""
         for field in self._stack.findChildren(QLineEdit):
-            field.textChanged.connect(self._refresh_dirty_state)
+            if not field.property("settings_ignore_dirty"):
+                field.textChanged.connect(self._refresh_dirty_state)
         for field in self._stack.findChildren(QTextEdit):
             field.textChanged.connect(self._refresh_dirty_state)
         for field in self._stack.findChildren(QCheckBox):
             field.stateChanged.connect(self._refresh_dirty_state)
         for field in self._stack.findChildren(QComboBox):
-            field.currentIndexChanged.connect(self._refresh_dirty_state)
+            if not field.property("settings_ignore_dirty"):
+                field.currentIndexChanged.connect(self._refresh_dirty_state)
         for field in self._stack.findChildren(QSpinBox):
-            field.valueChanged.connect(self._refresh_dirty_state)
+            if not field.property("settings_ignore_dirty"):
+                field.valueChanged.connect(self._refresh_dirty_state)
         for field in self._stack.findChildren(QSlider):
             field.valueChanged.connect(self._refresh_dirty_state)
 
@@ -356,8 +373,18 @@ class SettingsWindow(QDialog):
                 return
         super().reject()
 
+    def closeEvent(self, event) -> None:
+        page = getattr(self, "_memory_page", None)
+        if page and not getattr(self, "_memory_page_closed", False):
+            page.shutdown()
+            self._memory_page_closed = True
+        super().closeEvent(event)
+
     def _switch_page(self, key):
         """QStackedWidget 切换页面 — 旧页面自动隐藏，新页面自动显示"""
+        if key.startswith("memory_"):
+            self._stack.setCurrentWidget(self._pages["memory"])
+            self._memory_page.open_section(key)
         if key in self._pages:
             self._stack.setCurrentWidget(self._pages[key])
         titles = {
@@ -365,7 +392,11 @@ class SettingsWindow(QDialog):
             "character_api": "接口设置", "character_sprites": "立绘设置",
             "character_knowledge": "角色资料库",
             "ai": "AI 模型", "tts": "语音合成", "asr": "语音输入",
-            "screen": "屏幕识别", "vision": "图像理解", "about": "关于",
+            "screen": "屏幕识别", "vision": "图像理解", "memory": "记忆模块", "about": "关于",
+            "memory_overview": "记忆概览", "memory_timeline": "记忆时间线",
+            "memory_diary": "日记", "memory_weekly": "周记", "memory_monthly": "月记",
+            "memory_quarterly": "季记", "memory_yearly": "年记", "memory_recent": "近期摘要",
+            "memory_facts": "长期记忆", "memory_export": "一键导出记忆",
         }
         self._page_title.setText(titles.get(key, ""))
         descriptions = {
@@ -379,6 +410,17 @@ class SettingsWindow(QDialog):
             "asr": "配置语音输入与本地识别选项。",
             "screen": "按需启用屏幕识别，并设置快捷键和隐私选项。",
             "vision": "配置截图后交给模型理解的方式。",
+            "memory": "管理当前角色的分层记忆、情绪连续性和本地检索。",
+            "memory_overview": "查看各层记忆数量和调整高级参数。",
+            "memory_timeline": "按时间查看聊天与陪伴频率分布。",
+            "memory_diary": "按天查看自动整理的陪伴日记。",
+            "memory_weekly": "按自然周查看自动整理的周记。",
+            "memory_monthly": "按月份查看自动整理的月记。",
+            "memory_quarterly": "按季度查看自动整理的季记。",
+            "memory_yearly": "按年份查看自动整理的年记。",
+            "memory_recent": "查看参与检索的近期对话摘要。",
+            "memory_facts": "搜索、编辑和维护长期事实。",
+            "memory_export": "将当前角色全部记忆与 Markdown 正本打包导出。",
             "about": "查看版本信息、项目说明和相关链接。",
         }
         self._page_description.setText(descriptions.get(key, ""))
@@ -600,6 +642,14 @@ class SettingsWindow(QDialog):
         for field in (self._vision_url, self._vision_model, self._vision_key):
             field.textChanged.connect(self._refresh_service_status_cards)
         return page
+
+    def _build_memory_page(self):
+        self._memory_page = MemorySettingsPage(
+            self.config, self._base_dir, self._current_char)
+        self._memory_page.memory_cleared.connect(self.memory_cleared)
+        self._memory_page.memory_changed.connect(self.memory_changed)
+        self._memory_page.section_requested.connect(self._open_page)
+        return self._memory_page
 
     def _build_tts_page(self):
         page, fields, rows = make_tts_page(
@@ -904,7 +954,11 @@ class SettingsWindow(QDialog):
             "若显卡 OpenGL 无法初始化，会自动恢复静态立绘。",
         )
 
-        self._sec(lay, "静态立绘文件")
+        self._static_sprite_section = QWidget()
+        static_layout = QVBoxLayout(self._static_sprite_section)
+        static_layout.setContentsMargins(0, 0, 0, 0)
+        static_layout.setSpacing(12)
+        self._sec(static_layout, "静态立绘文件")
 
         self._sprite_list = QTreeWidget()
         self._sprite_list.setHeaderHidden(True)
@@ -915,7 +969,7 @@ class SettingsWindow(QDialog):
             "QTreeWidget::item:selected {"
             f" background: {STAR_ACCENT}; color: #ffffff; }}")
         self._sprite_list.setFixedHeight(140)
-        lay.addWidget(self._sprite_list)
+        static_layout.addWidget(self._sprite_list)
 
         # 首次填充
         self._refresh_sprite_list()
@@ -925,9 +979,11 @@ class SettingsWindow(QDialog):
         open_sprite_btn = QPushButton("📂 打开立绘文件夹")
         open_sprite_btn.clicked.connect(self._open_sprites_folder)
         row.addWidget(open_sprite_btn)
-        lay.addLayout(row)
+        static_layout.addLayout(row)
 
-        self._hint(lay, "将 .png 立绘文件放入 sprites 文件夹即可自动加载。")
+        self._hint(static_layout, "将 .png 立绘文件放入 sprites 文件夹即可自动加载。")
+        lay.addWidget(self._static_sprite_section)
+        self._update_static_sprite_visibility(self._renderer_combo.currentData())
 
         lay.addStretch()
         return page
@@ -959,6 +1015,12 @@ class SettingsWindow(QDialog):
                 combo.blockSignals(True)
                 combo.setCurrentIndex(index)
                 combo.blockSignals(False)
+        self._update_static_sprite_visibility(source.currentData())
+
+    def _update_static_sprite_visibility(self, renderer=None) -> None:
+        section = getattr(self, "_static_sprite_section", None)
+        if section is not None:
+            section.setVisible((renderer or "static") == "static")
 
     def _refresh_sprite_list(self):
         """刷新立绘列表（切换角色时调用）"""
@@ -1185,6 +1247,8 @@ class SettingsWindow(QDialog):
         children = item.data(0, Qt.UserRole + 1)
         if children:
             item.setExpanded(not item.isExpanded())
+            if item.data(0, Qt.UserRole) == "memory":
+                self._switch_page("memory")
         else:
             self._switch_page(item.data(0, Qt.UserRole))
 
@@ -1357,6 +1421,8 @@ class SettingsWindow(QDialog):
         s["knowledge"] = {
             "enabled": safe(getattr(self, "_knowledge_enabled", None)).isChecked() if safe(getattr(self, "_knowledge_enabled", None)) else True,
         }
+        memory_page = safe(getattr(self, "_memory_page", None))
+        s["memory"] = memory_page.collect() if memory_page else self.config.get("memory", default={})
 
         return s
 

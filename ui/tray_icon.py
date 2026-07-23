@@ -3,7 +3,7 @@
 右键菜单：显示主设置、重置立绘位置、置顶切换、退出。
 """
 
-from PySide6.QtWidgets import QSystemTrayIcon, QMenu
+from PySide6.QtWidgets import QApplication, QSystemTrayIcon, QMenu
 from PySide6.QtGui import QIcon, QPixmap, QAction, QColor
 from PySide6.QtCore import Signal, QObject
 
@@ -77,7 +77,10 @@ class TrayIcon(QSystemTrayIcon):
 
     @staticmethod
     def _make_icon() -> QIcon:
-        """生成一个简单的托盘图标"""
+        """Use the same application icon in the tray and Windows taskbar."""
+        app = QApplication.instance()
+        if app and not app.windowIcon().isNull():
+            return app.windowIcon()
         pm = QPixmap(32, 32)
         pm.fill(QColor(0, 0, 0, 0))
         from PySide6.QtGui import QPainter, QFont

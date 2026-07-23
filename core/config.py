@@ -67,6 +67,17 @@ DEFAULTS = {
     "knowledge": {
         "enabled": True, "retrieval_count": 4, "max_context_chars": 3000,
     },
+    "memory": {
+        "enabled": True,
+        "emotion_enabled": True,
+        "smart_filter": True,
+        "recent_turns": 12,
+        "summary_limit": 12,
+        "fact_limit": 128,
+        "retrieval_count": 6,
+        "max_context_chars": 2400,
+        "min_importance": 2,
+    },
     "character_prompt": {
         "system_prompt": "你正在扮演 Noir。使用简短、自然、温柔的中文回答。保持安静、谨慎且真诚的气质，不要刻意卖萌、过度活泼、夸张热情或使用网络梗。面对陌生话题先温和确认；尊重边界，不强迫用户或自己做不舒服的事。回复通常控制在 100 字以内。",
         "format_prompt": "",
@@ -105,6 +116,10 @@ class Config:
                 self._merge(self._data, stored)
                 # Do not keep provider credentials in the project config file.
                 migrated = False
+                for key in ("enabled", "emotion_enabled", "smart_filter"):
+                    if self._data.get("memory", {}).get(key) is not True:
+                        self._data.setdefault("memory", {})[key] = True
+                        migrated = True
                 for section in ("llm", "vision", "asr", "tts"):
                     migrated = self._migrate_secret(section, stored) or migrated
                 # A pasted document must never be treated as an API credential.

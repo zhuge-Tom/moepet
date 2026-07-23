@@ -5,6 +5,7 @@
 
 import json
 import logging
+import sqlite3
 import tempfile
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -26,6 +27,7 @@ from core.voice_input import PushToTalkRecorder
 from core.startup import set_enabled as set_startup_enabled
 from core.hotkeys import HotkeyService
 from core.knowledge_base import KnowledgeBase
+from core.memory import MemoryAnalyzer, MemorySettings, MemoryStore
 from core.expression import select_expression
 from ui.pet_window import PetWindow
 from ui.live2d_window import Live2DWindow
@@ -51,6 +53,15 @@ class PetManager:
         self._live2d_session_fallbacks: set[str] = set()
         self._char_data: dict[str, CharacterData] = {}
         self._knowledge: KnowledgeBase | None = None
+        self._memory: MemoryStore | None = None
+        self._memory_analyzer = MemoryAnalyzer()
+        self._memory_analyzer.finished.connect(self._on_memory_analysis_done)
+        self._memory_analyzer.failed.connect(self._on_memory_analysis_failed)
+        self._memory_screener = MemoryAnalyzer()
+        self._memory_screener.screened.connect(self._on_memory_screened)
+        self._memory_screener.failed.connect(self._on_memory_screen_failed)
+        self._memory_screen_pending: dict | None = None
+        self._memory_analysis_queue: list[dict] = []
         self._dialog: DialogWindow | None = None
         self._settings_dlg: SettingsWindow | None = None
         self._tray: TrayIcon | None = None
@@ -91,6 +102,7 @@ class PetManager:
         self._screen_observer = ScreenObserver()
         self._screen_observer.observation_requested.connect(self._observe_screen)
         self._configure_llm()
+        self._open_memory_store()
         self._load_chat_history()
 
         self._load_characters()
@@ -110,6 +122,7 @@ class PetManager:
             model=self.config.get("llm", "model", default=""),
             post_processing=self.config.get("llm", "post_processing", default=""),
             ignore_format_error=self.config.get("llm", "ignore_format_error", default=True),
+            history_message_limit=int(self.config.get("memory", "recent_turns", default=12)) * 2,
         )
         char = self._char_data.get(self.config.current_character)
         prompt_config = char.character_prompt if char else {}
@@ -219,6 +232,17 @@ class PetManager:
 
     # ─── 对话历史持久化 ──────────────────────────
 
+    def _open_memory_store(self) -> None:
+        if self._memory:
+            self._memory.close()
+        self._memory = None
+        try:
+            char_dir = self.base_dir / "characters" / self.config.current_character
+            self._memory = MemoryStore(
+                char_dir, MemorySettings.from_dict(self.config.get("memory", default={})))
+        except (OSError, sqlite3.Error) as exc:
+            LOGGER.warning("记忆数据库初始化失败：%s", exc)
+
     def _history_path(self, char_name: str = None) -> Path:
         """获取对话历史文件路径"""
         name = char_name or self.config.current_character
@@ -239,6 +263,8 @@ class PetManager:
                         continue
                     self._llm.add_user_message(msg["content"]) if msg["role"] == "user" \
                         else self._llm.add_assistant_message(msg["content"])
+                if self._memory:
+                    self._memory.import_history_once(messages)
             except (json.JSONDecodeError, OSError, KeyError):
                 pass
 
@@ -309,12 +335,23 @@ class PetManager:
         self._save_chat_history()
         self._llm.cancel()
         self._llm.clear_history()
+        analyzer = getattr(self, "_memory_analyzer", None)
+        if analyzer:
+            analyzer.cancel()
+        screener = getattr(self, "_memory_screener", None)
+        if screener:
+            screener.cancel()
+        if hasattr(self, "_memory_screen_pending"):
+            self._memory_screen_pending = None
+        getattr(self, "_memory_analysis_queue", []).clear()
         if old in self._windows:
             self._windows[old].hide()
         if name in self._windows:
             self._windows[name].show()
             self.config.set("current_character", name)
             self.config.save()
+            if hasattr(self, "_memory"):
+                PetManager._open_memory_store(self)
             self._load_knowledge_base()
             self._load_chat_history()
 
@@ -415,10 +452,20 @@ class PetManager:
         if self._llm.is_busy():
             self._dialog.display_text("上一条还在处理中，请稍等~", "assistant")
             return
+        if self._memory_screen_pending:
+            self._dialog.display_text("我还在整理上一条相关记忆，请稍等。", "assistant")
+            return
 
         self._last_user_text = text
+        if self._start_memory_screen(text):
+            self._dialog.start_stream()
+            self._dialog.append_stream("正在回忆…")
+            return
+        self._dispatch_chat_request(text, self._combined_turn_context(text))
+
+    def _dispatch_chat_request(self, text: str, turn_context: str) -> None:
         self._llm.add_user_message(text)
-        self._llm.set_turn_context(self._knowledge_context(text))
+        self._llm.set_turn_context(turn_context)
         # Only show the dazed reaction for an actually slow reply. Quick
         # turns retain the natural blinking model without a forced reset.
         request_epoch = self._role_epoch
@@ -437,6 +484,47 @@ class PetManager:
             self._llm.response_finished.connect(self._on_llm_done_non_stream)
             self._llm.error_occurred.connect(self._on_llm_error)
             self._llm.send(stream=False)
+
+    def _provider_config(self) -> dict:
+        return {
+            "base_url": self.config.get("llm", "base_url", default=""),
+            "api_key": self.config.get_secret("llm") or self.config.get("llm", "api_key", default=""),
+            "model": self.config.get("llm", "model", default=""),
+        }
+
+    def _start_memory_screen(self, text: str) -> bool:
+        if not getattr(self, "_memory", None):
+            return False
+        try:
+            records = self._memory.search(
+                text, visible_message_ids=self._memory.visible_message_ids())
+        except (sqlite3.Error, OSError, ValueError) as exc:
+            LOGGER.warning("记忆候选检索失败：%s", exc)
+            return False
+        if not records:
+            return False
+        token = (self._role_epoch, self.config.current_character, text)
+        self._memory_screen_pending = {"token": token, "records": records}
+        if self._memory_screener.screen(self._provider_config(), text, records, token):
+            return True
+        self._memory_screen_pending = None
+        return False
+
+    def _on_memory_screened(self, selected_ids: list[int], token) -> None:
+        pending, self._memory_screen_pending = self._memory_screen_pending, None
+        if not pending or pending["token"] != token or token[0] != self._role_epoch:
+            return
+        selected = [item for item in pending["records"] if item["id"] in set(selected_ids)]
+        context = self._combined_turn_context(token[2], memory_records=selected)
+        self._dispatch_chat_request(token[2], context)
+
+    def _on_memory_screen_failed(self, message: str, token) -> None:
+        LOGGER.warning("记忆二次筛选失败，使用本地排序结果：%s", message)
+        pending, self._memory_screen_pending = self._memory_screen_pending, None
+        if not pending or pending["token"] != token or token[0] != self._role_epoch:
+            return
+        context = self._combined_turn_context(token[2], memory_records=pending["records"])
+        self._dispatch_chat_request(token[2], context)
 
     def _knowledge_context(self, user_text: str) -> str:
         """Build a bounded, turn-only roleplay context from imported user material."""
@@ -464,6 +552,34 @@ class PetManager:
             f"对话示例（模仿其角色语气，不复述无关内容）：\n{example_text or '无'}"
         )
 
+    def _combined_turn_context(self, user_text: str, memory_records: list[dict] | None = None) -> str:
+        sections = [self._knowledge_context(user_text), self._memory_context(user_text, memory_records)]
+        return "\n\n".join(item for item in sections if item)
+
+    def _memory_context(self, user_text: str, records: list[dict] | None = None) -> str:
+        if not self._memory:
+            return ""
+        try:
+            if records is None:
+                records = self._memory.search(
+                    user_text, visible_message_ids=self._memory.visible_message_ids())
+            mood = self._memory.latest_mood()
+        except (sqlite3.Error, OSError, ValueError) as exc:
+            LOGGER.warning("记忆检索失败：%s", exc)
+            return ""
+        parts = []
+        if mood:
+            parts.append(f"你上一轮留下的心情是：{mood}。保持自然连续，不要直接说明这是情绪记录。")
+        if records:
+            lines = []
+            for item in records:
+                stamp = f"{item['memory_date']} {item['period']}"
+                lines.append(f"- [{stamp}｜{item['category']}｜{item['subject']}] {item['content']}")
+            parts.append(
+                "以下是你自己过去整理的相关记忆。只在确实相关时自然使用，不要提及记忆系统，"
+                "不要重复用户当前已经说出的内容：\n" + "\n".join(lines))
+        return "\n".join(parts)
+
     def _on_llm_chunk(self, chunk: str):
         """流式输出片段"""
         # In audio-sync mode, retain stream chunks in LLMService only. Showing
@@ -480,6 +596,7 @@ class PetManager:
         if self._dialog and not sync_text:
             self._dialog.finish_stream(full_text)
         self._save_chat_history()
+        self._schedule_memory_analysis(full_text)
         self._show_reply_expression(full_text)
         if sync_text:
             self._queue_text_for_audio(full_text)
@@ -497,6 +614,7 @@ class PetManager:
             self._dialog._text_display.clear()
             self._dialog.display_text(full_text, "assistant")
         self._save_chat_history()
+        self._schedule_memory_analysis(full_text)
         self._show_reply_expression(full_text)
         if sync_text:
             self._queue_text_for_audio(full_text)
@@ -504,6 +622,52 @@ class PetManager:
             self._animate_text_speech(full_text)
             if sync_text:
                 self._show_pending_tts_text()
+
+    def _schedule_memory_analysis(self, assistant_text: str) -> None:
+        if not getattr(self, "_memory", None):
+            return
+        user_text = getattr(self, "_last_user_text", "").strip()
+        if not user_text or not assistant_text.strip():
+            return
+        try:
+            _, assistant_id = self._memory.add_turn(user_text, assistant_text)
+        except (sqlite3.Error, OSError) as exc:
+            LOGGER.warning("记忆写入失败：%s", exc)
+            return
+        self._memory_analysis_queue.append({
+            "epoch": self._role_epoch,
+            "character": self.config.current_character,
+            "user_text": user_text,
+            "assistant_text": assistant_text,
+            "assistant_id": assistant_id,
+        })
+        self._start_next_memory_analysis()
+
+    def _start_next_memory_analysis(self) -> None:
+        if self._memory_analyzer.is_busy() or not self._memory_analysis_queue or not self._memory:
+            return
+        item = self._memory_analysis_queue.pop(0)
+        char = self._char_data.get(item["character"])
+        provider = self._provider_config()
+        token = (item["epoch"], item["character"], item["assistant_id"])
+        started = self._memory_analyzer.analyze(
+            provider, char.name if char else item["character"], item["user_text"],
+            item["assistant_text"], self._memory.pending_summary(), token)
+        if not started:
+            self._memory_analysis_queue.insert(0, item)
+
+    def _on_memory_analysis_done(self, analysis: dict, token) -> None:
+        if (self._memory and token and token[0] == self._role_epoch
+                and token[1] == self.config.current_character):
+            try:
+                self._memory.apply_analysis(analysis, token[2])
+            except (sqlite3.Error, OSError, TypeError, ValueError) as exc:
+                LOGGER.warning("记忆分析写回失败：%s", exc)
+        self._start_next_memory_analysis()
+
+    def _on_memory_analysis_failed(self, message: str, token) -> None:
+        LOGGER.warning("后台记忆分析失败：%s", message)
+        self._start_next_memory_analysis()
 
     def _on_llm_error(self, err: str):
         """LLM 错误"""
@@ -1149,6 +1313,8 @@ class PetManager:
 
         dlg.scale_changed.connect(self._on_live_scale)
         dlg.apply_clicked.connect(self._apply_settings)
+        dlg.memory_cleared.connect(self._on_memory_cleared)
+        dlg.memory_changed.connect(self._on_memory_changed)
 
         def on_finished(result):
             self._settings_dlg = None
@@ -1212,6 +1378,10 @@ class PetManager:
 
         # 重新配置 LLM
         self._configure_llm()
+        if self._memory:
+            self._memory.update_settings(self.config.get("memory", default={}))
+        else:
+            self._open_memory_store()
         self._register_screen_hotkey()
         self._register_asr_hotkey()
         self._configure_screen_observer()
@@ -1222,6 +1392,21 @@ class PetManager:
         new_char = settings.get("current_character")
         if new_char and new_char != self.config.current_character:
             self._switch_character(new_char)
+
+    def _on_memory_cleared(self, character: str) -> None:
+        if character != self.config.current_character:
+            return
+        self._memory_analyzer.cancel()
+        self._memory_screener.cancel()
+        self._memory_analysis_queue.clear()
+        self._memory_screen_pending = None
+        self._llm.cancel()
+        self._llm.clear_history()
+        self._configure_llm()
+
+    def _on_memory_changed(self, character: str) -> None:
+        if character == self.config.current_character and self._memory:
+            self._memory.sync_summary_files()
 
     # ─── 位置记忆 ─────────────────────────────
 
@@ -1242,6 +1427,13 @@ class PetManager:
         self._screen_hotkey.close()
         self._asr_hotkey.close()
         self._save_chat_history()
+        self._memory_analyzer.cancel()
+        self._memory_screener.cancel()
+        self._memory_screen_pending = None
+        self._memory_analysis_queue.clear()
+        if self._memory:
+            self._memory.close()
+            self._memory = None
         if self._dialog and self._dialog.isVisible():
             self._save_dialog_offset(self._dialog.x(), self._dialog.y())
             self._save_dialog_size(self._dialog.width(), self._dialog.height())

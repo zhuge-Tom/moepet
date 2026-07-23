@@ -106,14 +106,14 @@ DIALOG_QSS = f"""
 """
 
 STAR_CANVAS = "#0b1026"
-STAR_SURFACE = "#141b3d"
-STAR_SURFACE_ELEVATED = "#1b2450"
-STAR_INPUT = "#101735"
-STAR_BORDER = "#38477a"
-STAR_BORDER_SOFT = "#29355e"
+STAR_SURFACE = "#151d42"
+STAR_SURFACE_ELEVATED = "#202b5c"
+STAR_INPUT = "#111a3c"
+STAR_BORDER = "#485b94"
+STAR_BORDER_SOFT = "#31406f"
 STAR_TEXT = "#f4f5ff"
-STAR_TEXT_MUTED = "#aeb9df"
-STAR_TEXT_SUBTLE = "#7f8cb7"
+STAR_TEXT_MUTED = "#cbd4f4"
+STAR_TEXT_SUBTLE = "#9eabd3"
 STAR_ACCENT = "#f05c91"
 STAR_ACCENT_HOVER = "#ff79aa"
 STAR_FOCUS = "#b78cff"
@@ -171,6 +171,32 @@ SETTINGS_QSS = f"""
     QPushButton#settings_confirm_button:pressed {{ background: #d94e83; }}
     QPushButton#settings_secondary_button {{ background: #1b2450; color: {STAR_TEXT_MUTED}; }}
     QPushButton#settings_secondary_button:hover {{ color: {STAR_TEXT}; }}
+    QTabWidget::pane {{
+        border: 1px solid {STAR_BORDER}; border-radius: 10px;
+        background: rgba(20, 28, 64, 210); top: -1px;
+    }}
+    QTabBar::tab {{
+        background: transparent; color: {STAR_TEXT_MUTED}; border: none;
+        padding: 9px 16px; margin-right: 3px; font-weight: 600;
+    }}
+    QTabBar::tab:hover {{ color: #ffffff; background: #293765; border-radius: 7px 7px 0 0; }}
+    QTabBar::tab:selected {{
+        color: #ffffff; background: {STAR_SURFACE_ELEVATED};
+        border-bottom: 3px solid {STAR_ACCENT};
+    }}
+    QTableWidget {{
+        background: #111936; alternate-background-color: #172148;
+        color: {STAR_TEXT}; border: 1px solid {STAR_BORDER}; border-radius: 8px;
+        gridline-color: {STAR_BORDER_SOFT}; selection-background-color: #34477f;
+        selection-color: #ffffff;
+    }}
+    QHeaderView::section {{
+        background: #202b5c; color: #f7f8ff; border: none;
+        border-right: 1px solid {STAR_BORDER_SOFT}; border-bottom: 1px solid {STAR_BORDER};
+        padding: 8px 10px; font-weight: 700;
+    }}
+    QTableCornerButton::section {{ background: #202b5c; border: none; }}
+    QToolTip {{ background: #293765; color: #ffffff; border: 1px solid {STAR_FOCUS}; padding: 5px; }}
     QScrollBar:vertical {{ width: 7px; background: transparent; margin: 4px 0; }}
     QScrollBar::handle:vertical {{ background: {STAR_BORDER}; border-radius: 3px; min-height: 30px; }}
     QScrollBar::handle:vertical:hover {{ background: {STAR_FOCUS}; }}
