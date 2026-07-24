@@ -1,11 +1,13 @@
 """GPT-SoVITS API and reply-translation adapters."""
 from pathlib import Path
+from io import BytesIO
 import json
 import os
 import re
 import subprocess
 import threading
 import time
+import wave
 from urllib.error import URLError
 from urllib.request import Request, urlopen
 from PySide6.QtCore import QObject, QTimer, Signal
@@ -103,6 +105,22 @@ class TTSService(BackgroundService):
     def _safe_local_speed(speed: float) -> float:
         """Avoid a CPU GPT-SoVITS bug that emits all-zero WAV above 1.01."""
         return max(0.5, min(float(speed or 1.0), 1.01))
+
+    @staticmethod
+    def _wav_has_signal(audio: bytes, minimum_peak: int = 32) -> bool:
+        """Reject structurally valid WAV files whose PCM is effectively silent."""
+        try:
+            with wave.open(BytesIO(audio), "rb") as wav:
+                sample_width = wav.getsampwidth()
+                pcm = wav.readframes(wav.getnframes())
+            if not pcm:
+                return False
+            if sample_width != 2:
+                return any(pcm)
+            samples = memoryview(pcm).cast("h")
+            return any(abs(int(sample)) >= minimum_peak for sample in samples)
+        except (OSError, ValueError, wave.Error):
+            return False
 
     @staticmethod
     def _service_ready(base_url: str) -> bool:
@@ -211,6 +229,9 @@ class TTSService(BackgroundService):
                 self._ensure_local_service(
                     local_project, local_python, local_config, base_url, cpu_threads,
                     reference_audio, prompt_text, device)
+            requested_speed = (self._safe_local_speed(speed)
+                               if local_project and device == "cpu" else
+                               max(0.5, min(float(speed), 2.0)))
             base_payload = {
                 "text_lang": "all_ja",
                 "ref_audio_path": str(reference_audio),
@@ -219,7 +240,7 @@ class TTSService(BackgroundService):
                 # one continuous utterance so punctuation becomes a natural
                 # pause rather than a boundary between separate WAV files.
                 "text_split_method": "cut0", "batch_size": 1,
-                "speed_factor": max(0.5, min(float(speed), 2.0)),
+                "speed_factor": requested_speed,
                 # Each clause must be a finalized WAV. GPT-SoVITS HTTP
                 # streaming writes zero RIFF/data lengths, which QMediaPlayer
                 # treats as a zero-duration file. Low latency comes from the
@@ -232,15 +253,22 @@ class TTSService(BackgroundService):
             output = Path(output_path)
             for index, part in enumerate(parts):
                 payload = {**base_payload, "text": part}
-                request = Request(
-                    self._tts_url(base_url),
-                    data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
-                    headers={"Content-Type": "application/json; charset=utf-8", **bearer_headers(api_key)},
-                )
-                with urlopen(request, timeout=600) as response:
-                    audio = response.read()
-                if not audio or audio.startswith(b"{"):
-                    raise RuntimeError("GPT-SoVITS 未返回有效 WAV 音频")
+                audio = b""
+                for attempt in range(2):
+                    if attempt:
+                        payload["speed_factor"] = min(requested_speed, 1.0)
+                    request = Request(
+                        self._tts_url(base_url),
+                        data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+                        headers={"Content-Type": "application/json; charset=utf-8", **bearer_headers(api_key)},
+                    )
+                    with urlopen(request, timeout=600) as response:
+                        audio = response.read()
+                    if (audio and not audio.startswith(b"{")
+                            and self._wav_has_signal(audio)):
+                        break
+                if not self._wav_has_signal(audio):
+                    raise RuntimeError("GPT-SoVITS 连续返回静音 WAV，已停止播放")
                 part_path = (output if len(parts) == 1 else
                              output.with_name(f"{output.stem}-{index:02d}{output.suffix}"))
                 part_path.write_bytes(audio)

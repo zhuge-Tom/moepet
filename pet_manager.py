@@ -5,6 +5,7 @@
 
 import json
 import logging
+import shutil
 import sqlite3
 import tempfile
 from collections import deque
@@ -585,6 +586,7 @@ class PetManager:
         self._dispatch_chat_request(text, self._combined_turn_context(text))
 
     def _dispatch_chat_request(self, text: str, turn_context: str) -> None:
+        self._tts_fallback_attempted = False
         self._llm.add_user_message(text)
         self._llm.set_turn_context(turn_context)
         # Only show the dazed reaction for an actually slow reply. Quick
@@ -736,6 +738,7 @@ class PetManager:
         if (not self._llm_bilingual_speech_received and not streamed_speech
                 and not self._speak(full_text)):
             self._animate_text_speech(full_text)
+            PetManager._start_reference_audio_fallback(self)
             if sync_text:
                 self._show_pending_tts_text()
 
@@ -1505,11 +1508,43 @@ class PetManager:
         # The coordinator can be exercised without the optional audio queue.
         if hasattr(self, "_show_pending_tts_text"):
             self._show_pending_tts_text()
-        self._set_pet_state("idle")
-        signals.tts_state_changed.emit(False)
+        fallback_started = PetManager._start_reference_audio_fallback(self)
+        if not fallback_started:
+            self._set_pet_state("idle")
+            signals.tts_state_changed.emit(False)
         # TTS is optional output. Keep transport failures out of the role's
         # conversation and leave details available in the process log.
         LOGGER.error("TTS synthesis failed: %s", error)
+
+    def _start_reference_audio_fallback(self) -> bool:
+        """Guarantee an audible Noir response when synthesis fails or is silent."""
+        if getattr(self, "_tts_fallback_attempted", False):
+            return False
+        config = getattr(self, "config", None)
+        if (config is None
+                or not config.get("tts", "enabled", default=False)
+                or not config.get("tts", "auto_play", default=True)):
+            return False
+        provider = config.get("tts", "provider", default="gpt_sovits_cpu")
+        if provider not in {"gpt_sovits_cpu", "gpt_sovits_gpu", "gpt_sovits_local"}:
+            return False
+        try:
+            reference = inspect_noir_voice_assets(self.base_dir).reference_audio
+            if not reference:
+                return False
+            handle = tempfile.NamedTemporaryFile(
+                prefix="moepet-tts-fallback-", suffix=".wav", delete=False)
+            fallback_path = Path(handle.name)
+            handle.close()
+            shutil.copyfile(reference, fallback_path)
+        except (OSError, ValueError):
+            return False
+        self._tts_fallback_attempted = True
+        self._tts_epoch = self._role_epoch
+        self._tts_audio_queue.append(str(fallback_path))
+        if not self._tts_audio_playing:
+            self._play_next_tts_fragment()
+        return True
 
     # ─── 立绘请求 ─────────────────────────────
 

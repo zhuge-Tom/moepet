@@ -371,6 +371,29 @@ def test_tts_failure_reveals_a_reply_waiting_for_audio():
     assert displayed == [("等待语音的回复", "assistant")]
 
 
+def test_tts_failure_queues_a_reference_voice_fallback(tmp_path):
+    from collections import deque
+
+    reference = tmp_path / "voice_assets" / "noir" / "reference.wav"
+    reference.parent.mkdir(parents=True)
+    reference.write_bytes(b"RIFF-reference-voice")
+    manager = type("Manager", (), {})()
+    manager.base_dir = tmp_path
+    manager.config = Config(tmp_path / "config.json")
+    manager.config.set("tts", "enabled", True)
+    manager.config.set("tts", "auto_play", True)
+    manager.config.set("tts", "provider", "gpt_sovits_cpu")
+    manager._role_epoch = 3
+    manager._tts_audio_queue = deque()
+    manager._tts_audio_playing = True
+    manager._tts_fallback_attempted = False
+
+    assert PetManager._start_reference_audio_fallback(manager)
+    fallback = Path(manager._tts_audio_queue[0])
+    assert fallback.read_bytes() == reference.read_bytes()
+    fallback.unlink()
+
+
 def test_audio_sync_does_not_display_stream_chunks():
     manager = type("Manager", (), {})()
     received = []
@@ -468,6 +491,24 @@ def test_cpu_gpt_sovits_speed_is_capped_before_it_can_produce_silence():
 
     assert TTSService._safe_local_speed(1.2) == 1.01
     assert TTSService._safe_local_speed(1.0) == 1.0
+
+
+def test_tts_detects_silent_and_voiced_wav_payloads():
+    import io
+    import wave
+    from core.tts_service import TTSService
+
+    def wav_bytes(frames):
+        output = io.BytesIO()
+        with wave.open(output, "wb") as wav:
+            wav.setnchannels(1)
+            wav.setsampwidth(2)
+            wav.setframerate(32000)
+            wav.writeframes(frames)
+        return output.getvalue()
+
+    assert not TTSService._wav_has_signal(wav_bytes(b"\0" * 64))
+    assert TTSService._wav_has_signal(wav_bytes(b"\0\4" * 32))
 
 
 def test_live2d_lipsync_skips_a_silent_wav(tmp_path):
