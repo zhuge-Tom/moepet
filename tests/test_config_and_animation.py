@@ -32,6 +32,21 @@ def test_character_config_keeps_its_own_prompt(tmp_path):
     assert data.character_prompt["system_prompt"] == "pet-only"
 
 
+def test_config_migrates_legacy_local_gpt_sovits_to_cpu_package(tmp_path):
+    config_path = tmp_path / "config.json"
+    config_path.write_text(json.dumps({"tts": {
+        "provider": "gpt_sovits_local",
+        "local_device": "cuda",
+        "local_config": "characters/noir/voice/noir_cpu.yaml",
+    }}), encoding="utf-8")
+
+    config = Config(config_path)
+
+    assert config.get("tts", "provider") == "gpt_sovits_cpu"
+    assert config.get("tts", "local_device") == "cpu"
+    assert config.get("tts", "local_config") == ""
+
+
 def test_expression_selector_prefers_the_reply_then_user_context():
     from core.expression import select_expression
 

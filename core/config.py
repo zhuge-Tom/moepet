@@ -139,6 +139,17 @@ class Config:
                     tts["enabled"] = True
                     tts["auto_play"] = True
                     migrated = True
+                # Before CPU and GPU packages became separate providers, the
+                # built-in CPU path was saved as gpt_sovits_local.  Preserve
+                # its intent while dropping the removed YAML and CUDA default.
+                if tts.get("provider") == "gpt_sovits_local":
+                    tts["provider"] = "gpt_sovits_cpu"
+                    if tts.get("local_device") == "cuda":
+                        tts["local_device"] = "cpu"
+                    if str(tts.get("local_config", "")).replace("\\", "/").endswith(
+                            "characters/noir/voice/noir_cpu.yaml"):
+                        tts["local_config"] = ""
+                    migrated = True
                 for section in ("llm", "vision", "asr", "tts"):
                     migrated = self._migrate_secret(section, stored) or migrated
                 # A pasted document must never be treated as an API credential.
