@@ -36,10 +36,9 @@
     ]
   },
   "voice": {
-    "model": "gpt-sovits-v2proplus-cpu",
-    "reference_audio": "noi0287.wav",
-    "remote_reference_audio": "/root/autodl-tmp/noi0287.wav",
+    "model": "gpt-sovits-v2proplus",
     "reference_text": "……すみません。ケンカ、って、怖くて。",
+    "reference_text_zh": "……对不起。吵架这种事，我很害怕。",
     "pitch": 1.0,
     "speed": 1.0
   },

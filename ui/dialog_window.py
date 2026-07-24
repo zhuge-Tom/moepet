@@ -27,6 +27,7 @@ class DialogWindow(QDialog):
     size_changed = Signal(int, int)
 
     TYPING_INTERVAL = 40  # 逐字显示间隔（毫秒）
+    CONTROL_HEIGHT = 40
 
     def __init__(self, char_name: str = "???", parent=None):
         super().__init__(parent)
@@ -50,9 +51,11 @@ class DialogWindow(QDialog):
         )
         self.setAttribute(Qt.WA_TranslucentBackground)
         self.setStyleSheet(DIALOG_QSS)
-        # Reserve room for capture, input, and send controls at high DPI.
-        self.setMinimumSize(460, 240)
-        self.resize(520, 280)
+        # Reserve room for the full-height input text and controls.  The
+        # stylesheet's 16px input text plus vertical padding needs more than
+        # the former 32px control height on Windows and high-DPI displays.
+        self.setMinimumSize(460, 260)
+        self.resize(520, 300)
 
         self._typing_timer = QTimer(self)
         self._typing_timer.setInterval(self.TYPING_INTERVAL)
@@ -82,26 +85,26 @@ class DialogWindow(QDialog):
         self._text_display = QTextEdit()
         self._text_display.setObjectName("chat_display")
         self._text_display.setReadOnly(True)
-        self._text_display.setMinimumHeight(120)
+        self._text_display.setMinimumHeight(100)
         self._text_display.setMaximumHeight(400)
         frame_layout.addWidget(self._text_display, 1)
 
         # 底部操作栏
         bottom = QHBoxLayout()
-        bottom.setContentsMargins(12, 6, 12, 0)
+        bottom.setContentsMargins(12, 8, 12, 12)
         bottom.setSpacing(8)
 
         self._input = QLineEdit()
         self._input.setObjectName("input_field")
         self._input.setPlaceholderText("说点什么...")
-        self._input.setFixedHeight(32)
+        self._input.setFixedHeight(self.CONTROL_HEIGHT)
         self._input.setMinimumWidth(160)
         self._input.returnPressed.connect(self._on_submit)
         bottom.addWidget(self._input, 1)
 
         self._voice_btn = QPushButton("按住说话")
         self._voice_btn.setObjectName("voice_btn")
-        self._voice_btn.setFixedHeight(32)
+        self._voice_btn.setFixedHeight(self.CONTROL_HEIGHT)
         self._voice_btn.setToolTip("按住录音，松开后转写")
         self._voice_btn.pressed.connect(self.voice_pressed)
         self._voice_btn.released.connect(self.voice_released)
@@ -109,14 +112,14 @@ class DialogWindow(QDialog):
 
         self._screen_btn = QPushButton("识图")
         self._screen_btn.setObjectName("screen_btn")
-        self._screen_btn.setFixedHeight(32)
+        self._screen_btn.setFixedHeight(self.CONTROL_HEIGHT)
         self._screen_btn.setToolTip("识别当前屏幕")
         self._screen_btn.clicked.connect(self.screen_capture_requested)
         bottom.addWidget(self._screen_btn)
 
         self._send_btn = QPushButton("发送")
         self._send_btn.setObjectName("send_btn")
-        self._send_btn.setFixedSize(72, 32)
+        self._send_btn.setFixedSize(72, self.CONTROL_HEIGHT)
         self._send_btn.clicked.connect(self._on_submit)
         bottom.addWidget(self._send_btn)
 
@@ -271,7 +274,7 @@ class DialogWindow(QDialog):
             return
         ratio = percent / self._scale_percent
         self._scale_percent = percent
-        self.resize(max(460, round(self.width() * ratio)), max(240, round(self.height() * ratio)))
+        self.resize(max(460, round(self.width() * ratio)), max(260, round(self.height() * ratio)))
         for widget in (self._name_label, self._text_display, self._input,
                        self._voice_btn, self._screen_btn, self._send_btn):
             font = QFont(widget.font())
@@ -282,7 +285,7 @@ class DialogWindow(QDialog):
                 minimum = 15.0 if widget is self._text_display else 11.0
                 font.setPointSizeF(max(minimum, size * ratio))
                 widget.setFont(font)
-        control_height = max(32, round(32 * percent / 100))
+        control_height = max(self.CONTROL_HEIGHT, round(self.CONTROL_HEIGHT * percent / 100))
         self._send_btn.setFixedHeight(control_height)
         self._input.setFixedHeight(control_height)
         self._voice_btn.setFixedHeight(control_height)

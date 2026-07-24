@@ -47,6 +47,10 @@ from ui.settings.provider_presets import (
 )
 
 from core.config import Config
+from core.local_tts_bundle import (
+    inspect_local_tts_bundle, inspect_noir_voice_assets, make_noir_inference_config,
+)
+from core.tts_service import AudioPlaybackService, TTSService
 
 NAV_TREE = [
     ("通用设置", "general", True, []),
@@ -92,6 +96,10 @@ class SettingsWindow(QDialog):
         self._probe_widgets = {}
         self._probe_runner = ProbeRunner(self)
         self._model_runner = ModelDiscoveryRunner(self)
+        self._tts_preview_service = TTSService(self)
+        self._tts_preview_audio = AudioPlaybackService(self)
+        self._tts_preview_service.completed.connect(self._on_tts_preview_ready)
+        self._tts_preview_service.failed.connect(self._on_tts_preview_failed)
         self._settings_baseline = ""
 
         self.setWindowTitle("Moepet 设置")
@@ -594,7 +602,145 @@ class SettingsWindow(QDialog):
             if url and not url.rstrip("/").endswith("/tts"):
                 url = url.rstrip("/") + "/tts"
             return lambda: probe_http_endpoint(url, key, {})
-        return lambda: probe_cosyvoice(model_path)
+        return lambda: probe_cosyvoice(model_path, self._tts_local_config.text().strip())
+
+    def _refresh_local_tts_bundle(self, *_args):
+        """Reflect the selected user-managed package before it is saved."""
+        bundle = self._selected_local_tts_bundle()
+        assets = inspect_noir_voice_assets(self._base_dir)
+        color = "#71d6bb" if bundle.ready else "#ffbc6b"
+        self._tts_bundle_status.setText(bundle.message)
+        self._tts_bundle_status.setStyleSheet(f"color: {color}; font-size: 12px;")
+        assets_color = "#71d6bb" if assets.ready else "#ff789d"
+        assets_text = assets.message
+        if assets.reference_text_zh:
+            assets_text += f"；参考中文：{assets.reference_text_zh}"
+        self._tts_assets_status.setText(assets_text)
+        self._tts_assets_status.setStyleSheet(f"color: {assets_color}; font-size: 12px;")
+        if not self._tts_local_reference.text().strip() and assets.reference_audio:
+            self._tts_local_reference.setText(str(assets.reference_audio))
+        if not self._tts_local_reference_text.text().strip() and assets.reference_text:
+            self._tts_local_reference_text.setText(assets.reference_text)
+        self._refresh_service_status_cards()
+
+    def _selected_local_tts_bundle(self):
+        """Resolve a portable bundle setting against this Moepet installation."""
+        path = Path(self._tts_model.text().strip())
+        if path and not path.is_absolute():
+            path = self._base_dir / path
+        return inspect_local_tts_bundle(str(path) if str(path) != "." else "",
+                                        self._tts_local_config.text().strip())
+
+    def _choose_local_tts_bundle(self):
+        folder = QFileDialog.getExistingDirectory(
+            self, "选择 GPT-SoVITS 整合包解压后的根目录", self._tts_model.text().strip())
+        if folder:
+            self._tts_model.setText(folder)
+            bundle = inspect_local_tts_bundle(folder, self._tts_local_config.text().strip())
+            if bundle.python:
+                self._tts_local_python = str(bundle.python)
+            self._refresh_local_tts_bundle()
+
+    def _choose_local_tts_reference(self):
+        path, _ = QFileDialog.getOpenFileName(
+            self, "选择 GPT-SoVITS 参考音频", self._tts_local_reference.text().strip(),
+            "Audio (*.wav *.mp3 *.flac);;All files (*.*)")
+        if path:
+            self._tts_local_reference.setText(path)
+
+    def _show_local_tts_guide(self):
+        provider = self._tts_provider.currentData()
+        is_cpu = provider in {"gpt_sovits_cpu", "gpt_sovits_local"}
+        title = "CPU 兼容包安装引导" if is_cpu else "GPU 整合包安装引导"
+        download_label = "打开 CPU 兼容包下载" if is_cpu else "打开官方 GPU 发布页"
+        download_url = (
+            "https://github.com/zhuge-Tom/moepet/releases/tag/tts-assets-v2"
+            if is_cpu else "https://github.com/RVC-Boss/GPT-SoVITS/releases")
+        package_kind = "Moepet GPT-SoVITS CPU 兼容包" if is_cpu else "GPT-SoVITS Windows GPU 整合包"
+        dialog = QDialog(self)
+        dialog.setWindowTitle(title)
+        dialog.setMinimumWidth(600)
+        layout = QVBoxLayout(dialog)
+        if is_cpu:
+            guide_text = (
+                "<h3>让角色使用本地 CPU 语音</h3>"
+                "<p>普通克隆不会包含 CPU 兼容包、Noir 权重或参考音频。</p>"
+                "<p><b>1. 下载并安装</b><br>在项目根目录执行："
+                "<br><code>powershell -ExecutionPolicy Bypass -File .\\setup.ps1 -InstallCpuTts</code></p>"
+                "<p><b>2. 自动检测</b><br>安装器会校验下载包，并将兼容包安装到 "
+                "<code>vendor/gpt_sovits_cpu</code>，同时放入 Noir 权重、参考音频和参考文本。</p>"
+                "<p><b>3. 测试</b><br>回到本页，状态显示“已就绪”后点击“测试并播放语音”。"
+                "默认路径已自动填写；如需使用另一份兼容包，仍可手动修改或选择文件夹。</p>"
+                "<p>CPU 兼容包不需要 NVIDIA 显卡，但首次加载和生成会较慢。</p>")
+        else:
+            guide_text = (
+                f"<h3>让角色使用本地 GPU 语音</h3>"
+                f"<p><b>1. 下载</b><br>获取 {package_kind}。</p>"
+                "<p><b>2. 解压</b><br>解压到固定位置，例如 <code>D:\\GPT-SoVITS</code>。不要只选择 runtime 子文件夹。</p>"
+                "<p><b>3. 选择目录</b><br>回到本页点击“选择文件夹”，Moepet 会自动检测 <code>runtime\\python.exe</code> 和 <code>api_v2.py</code>。</p>"
+                "<p><b>4. 检查角色资产</b><br>项目根目录的 <code>voice_assets/noir/</code> 必须已有两份权重、参考音频和参考文本；Moepet 会自动预填它们。</p>"
+                "<p><b>5. 测试并播放</b><br>点击“测试并播放语音”。通过后保存设置，之后聊天会自动朗读。</p>"
+                "<p>确认 NVIDIA 驱动与 CUDA 版本符合整合包要求；GPU 推理速度更快。</p>")
+        guide = QLabel(guide_text)
+        guide.setWordWrap(True)
+        guide.setTextFormat(Qt.RichText)
+        layout.addWidget(guide)
+        buttons = QHBoxLayout()
+        official = QPushButton(download_label)
+        official.clicked.connect(lambda: QDesktopServices.openUrl(
+            QUrl(download_url)))
+        close = QPushButton("明白了")
+        close.clicked.connect(dialog.accept)
+        buttons.addWidget(official)
+        buttons.addStretch()
+        buttons.addWidget(close)
+        layout.addLayout(buttons)
+        dialog.exec()
+
+    def _test_and_play_local_tts(self):
+        bundle = self._selected_local_tts_bundle()
+        assets = inspect_noir_voice_assets(self._base_dir)
+        if not bundle.ready:
+            self._on_tts_preview_failed(bundle.message)
+            return
+        if not assets.ready:
+            self._on_tts_preview_failed(assets.message)
+            return
+        try:
+            generated_config = make_noir_inference_config(
+                bundle, assets, self._tts_local_device.currentData() or "cuda")
+        except RuntimeError as exc:
+            self._on_tts_preview_failed(str(exc))
+            return
+        self._tts_preview_button.setEnabled(False)
+        self._tts_preview_status.setText("正在启动 GPT-SoVITS 并合成测试语音…")
+        self._tts_preview_status.setStyleSheet(f"color: {STAR_FOCUS}; font-size: 12px;")
+        output = Path(os.getenv("TEMP", ".")) / "moepet-tts-preview.wav"
+        started = self._tts_preview_service.synthesize_gpt_sovits(
+            "こんにちは、Moepetの音声テストです。", self._tts_local_url.text().strip(), "",
+            assets.reference_audio, assets.reference_text, output,
+            self._tts_speed.value() / 100.0,
+            local_project=str(bundle.root), local_python=str(bundle.python),
+            local_config=str(generated_config),
+            cpu_threads=self.config.get("tts", "cpu_threads", default=4),
+            device=self._tts_local_device.currentData() or "cuda")
+        if not started:
+            self._on_tts_preview_failed("无法启动本地语音测试")
+
+    def _on_tts_preview_ready(self, audio_path: str):
+        if not audio_path:
+            return
+        if self._tts_preview_audio.play(audio_path):
+            self._tts_preview_status.setText("测试成功，正在播放声音。保存设置后聊天会自动朗读。")
+            self._tts_preview_status.setStyleSheet("color: #71d6bb; font-size: 12px;")
+        else:
+            self._on_tts_preview_failed("音频已生成，但 Windows 无法播放该文件")
+        self._tts_preview_button.setEnabled(True)
+
+    def _on_tts_preview_failed(self, message: str):
+        self._tts_preview_status.setText(f"测试失败：{message}")
+        self._tts_preview_status.setStyleSheet("color: #ff789d; font-size: 12px;")
+        self._tts_preview_button.setEnabled(True)
 
     def _prepare_ocr_probe(self):
         return probe_ocr
@@ -672,7 +818,9 @@ class SettingsWindow(QDialog):
         for name, widget in fields.items():
             setattr(self, f"_{name}", widget)
         self._tts_rows = rows
-        self._tts_local_fields = (self._tts_model, self._tts_local_url, self._tts_local_config)
+        self._tts_local_fields = (self._tts_model, self._tts_local_url, self._tts_local_config,
+                                  self._tts_local_device, self._tts_local_reference,
+                                  self._tts_local_reference_text)
         self._tts_cloud_fields = (self._tts_api_url, self._tts_api_key, self._tts_remote_reference)
         self._tts_provider.currentIndexChanged.connect(self._sync_tts_provider_fields)
         self._tts_provider_preset.currentIndexChanged.connect(self._apply_tts_preset)
@@ -681,10 +829,28 @@ class SettingsWindow(QDialog):
         self._tts_discover_button.setVisible(False)
         self._tts_model_picker.setVisible(False)
         self._tts_discover_status.setVisible(False)
+        self._tts_local_python = self.config.get("tts", "local_python", default="")
+        self._tts_bundle_browse.clicked.connect(self._choose_local_tts_bundle)
+        self._tts_reference_browse.clicked.connect(self._choose_local_tts_reference)
+        self._tts_guide_button.clicked.connect(self._show_local_tts_guide)
+        self._tts_preview_button = QPushButton("测试并播放语音")
+        self._tts_preview_button.setFixedHeight(30)
+        self._tts_preview_status = QLabel("选择整合包和参考音频后可验证完整语音链路")
+        self._tts_preview_status.setWordWrap(True)
+        self._tts_preview_status.setStyleSheet(f"color: {STAR_TEXT_MUTED}; font-size: 12px;")
+        preview_row = QHBoxLayout()
+        preview_row.addWidget(self._tts_preview_button)
+        preview_row.addWidget(self._tts_preview_status, 1)
+        page.layout().insertLayout(page.layout().count() - 1, preview_row)
+        self._tts_preview_button.clicked.connect(self._test_and_play_local_tts)
         for field in (self._tts_model, self._tts_local_url, self._tts_local_config,
                       self._tts_api_url, self._tts_api_key, self._tts_remote_reference,
                       self._tts_api_model, self._tts_api_voice):
             field.textChanged.connect(self._refresh_service_status_cards)
+        self._tts_model.textChanged.connect(self._refresh_local_tts_bundle)
+        self._tts_local_config.textChanged.connect(self._refresh_local_tts_bundle)
+        self._tts_local_device.currentIndexChanged.connect(self._refresh_local_tts_bundle)
+        self._refresh_local_tts_bundle()
         self._sync_tts_provider_fields()
         return page
 
@@ -1222,14 +1388,28 @@ class SettingsWindow(QDialog):
     def _sync_tts_provider_fields(self, *_args):
         """Switch TTS forms without clearing local or cloud settings."""
         provider = self._tts_provider.currentData()
-        is_local = provider == "gpt_sovits_local"
+        is_cpu = provider in {"gpt_sovits_cpu", "gpt_sovits_local"}
+        is_gpu = provider == "gpt_sovits_gpu"
+        is_local = is_cpu or is_gpu
         is_gpt_remote = provider == "gpt_sovits_remote"
         is_openai = provider == "openai_compatible"
         self._tts_local_section.setVisible(is_local)
         self._tts_remote_section.setVisible(not is_local)
         self._tts_remote_section.setText(
             "OpenAI 兼容 TTS API" if is_openai else "远端 GPT-SoVITS API")
-        for name in ("tts_model", "tts_local_url", "tts_local_config"):
+        self._tts_local_section.setText("本地 GPT-SoVITS CPU 兼容包" if is_cpu else "本地 GPT-SoVITS GPU 整合包")
+        if is_cpu:
+            self._tts_local_device.setCurrentIndex(max(self._tts_local_device.findData("cpu"), 0))
+            if not self._tts_model.text().strip():
+                self._tts_model.setText("vendor/gpt_sovits_cpu")
+            self._tts_local_guide.setText(
+                "CPU 兼容包默认安装到 vendor/gpt_sovits_cpu。未安装时点击“安装引导”；"
+                "安装后会自动检测，目录仍可手动修改。")
+        elif is_gpu:
+            self._tts_local_device.setCurrentIndex(max(self._tts_local_device.findData("cuda"), 0))
+            self._tts_local_guide.setText(
+                "请选择已解压的 GPU 整合包根目录。Moepet 会自动寻找 runtime\\python.exe 和 api_v2.py。")
+        for name in ("tts_model", "tts_local_url", "tts_local_config", "tts_local_device", "tts_local_reference", "tts_local_reference_text"):
             self._tts_rows[name].setVisible(is_local)
         for name in ("tts_api_url", "tts_api_key"):
             self._tts_rows[name].setVisible(not is_local)
@@ -1275,8 +1455,9 @@ class SettingsWindow(QDialog):
             ))
         if hasattr(self, "_tts_status_card"):
             provider = self._tts_provider.currentData()
-            if provider == "gpt_sovits_local":
-                configured = bool(self._tts_model.text().strip())
+            if provider in {"gpt_sovits_cpu", "gpt_sovits_gpu", "gpt_sovits_local"}:
+                configured = self._selected_local_tts_bundle().ready and \
+                    inspect_noir_voice_assets(self._base_dir).ready
             elif provider == "gpt_sovits_remote":
                 configured = bool(self._tts_api_url.text().strip()
                                   and self._tts_remote_reference.text().strip())
@@ -1462,10 +1643,14 @@ class SettingsWindow(QDialog):
                     "model_path": safe(getattr(self, "_tts_model", None)).text().strip() if safe(getattr(self, "_tts_model", None)) else "",
                     "local_api_url": safe(getattr(self, "_tts_local_url", None)).text().strip() if safe(getattr(self, "_tts_local_url", None)) else "http://127.0.0.1:9880",
                     "local_config": safe(getattr(self, "_tts_local_config", None)).text().strip() if safe(getattr(self, "_tts_local_config", None)) else "GPT_SoVITS/configs/noir_v2proplus.yaml",
+                    "local_python": getattr(self, "_tts_local_python", ""),
+                    "local_reference_audio": safe(getattr(self, "_tts_local_reference", None)).text().strip() if safe(getattr(self, "_tts_local_reference", None)) else "",
+                    "local_reference_text": safe(getattr(self, "_tts_local_reference_text", None)).text().strip() if safe(getattr(self, "_tts_local_reference_text", None)) else "",
+                    "local_device": safe(getattr(self, "_tts_local_device", None)).currentData() if safe(getattr(self, "_tts_local_device", None)) else "cuda",
                     "remote_reference_audio": safe(getattr(self, "_tts_remote_reference", None)).text().strip() if safe(getattr(self, "_tts_remote_reference", None)) else "",
                     "speed": safe(getattr(self, "_tts_speed", None)).value() / 100.0 if safe(getattr(self, "_tts_speed", None)) else 1.0,
                     "auto_play": True,
-                    "provider": safe(getattr(self, "_tts_provider", None)).currentData() if safe(getattr(self, "_tts_provider", None)) else "gpt_sovits_local",
+                    "provider": safe(getattr(self, "_tts_provider", None)).currentData() if safe(getattr(self, "_tts_provider", None)) else "gpt_sovits_cpu",
                     "base_url": safe(getattr(self, "_tts_api_url", None)).text().strip() if safe(getattr(self, "_tts_api_url", None)) else "",
                     "api_key": safe(getattr(self, "_tts_api_key", None)).text().strip() if safe(getattr(self, "_tts_api_key", None)) else "",
                     "preset": safe(getattr(self, "_tts_provider_preset", None)).currentData() if safe(getattr(self, "_tts_provider_preset", None)) else "custom",

@@ -7,18 +7,16 @@ __pycache__/
 venv/
 tools/.cubism_external_token.json
 
-# 可重建的本地 CPU 语音运行环境（不提交仓库）
-vendor/gpt_sovits_cpu/.venv/
-vendor/gpt_sovits_cpu/python-runtime/
-vendor/gpt_sovits_cpu/GPT_SoVITS/pretrained_models/*
-!vendor/gpt_sovits_cpu/GPT_SoVITS/pretrained_models/.gitignore
+# 按需下载的本地 CPU GPT-SoVITS 兼容包（不提交仓库）
+vendor/gpt_sovits_cpu/
 
-# 本地角色音色权重与参考音频（单文件超过 GitHub 100 MB 限制）
-characters/*/voice/models/
-characters/*/voice/*.wav
-characters/*/voice/*.mp3
-characters/*/voice/*.flac
-characters/*/voice/*.ogg
+# 本地语音资产（单文件超过 GitHub 100 MB 限制）
+voice_assets/*/*.ckpt
+voice_assets/*/*.pth
+voice_assets/*/*.wav
+voice_assets/*/*.mp3
+voice_assets/*/*.flac
+voice_assets/*/*.ogg
 
 # 临时基准、诊断输出
 work/

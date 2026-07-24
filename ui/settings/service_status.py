@@ -20,9 +20,10 @@ def llm_ready(config) -> bool:
 def tts_ready(config) -> bool:
     if not config.get("tts", "enabled", default=False):
         return False
-    if config.get("tts", "provider", default="gpt_sovits_local") == "gpt_sovits_local":
+    if config.get("tts", "provider", default="gpt_sovits_cpu") in {
+            "gpt_sovits_cpu", "gpt_sovits_gpu", "gpt_sovits_local"}:
         return bool(config.get("tts", "model_path", default=""))
-    provider = config.get("tts", "provider", default="gpt_sovits_local")
+    provider = config.get("tts", "provider", default="gpt_sovits_cpu")
     base_url = config.get("tts", "base_url", default="")
     if provider == "openai_compatible":
         return bool(

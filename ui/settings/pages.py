@@ -113,19 +113,63 @@ def _provider_preset(layout: QVBoxLayout, base_url: str, presets) -> QComboBox:
 
 def make_tts_page(config, add_probe) -> tuple[QWidget, dict[str, QWidget], dict[str, QWidget]]:
     page, layout = _page_layout()
-    card = ServiceStatusCard("语音输出", "中文回复会在后台翻译为日文，再由 Noir 的 GPT-SoVITS 朗读。")
+    card = ServiceStatusCard("语音输出", "默认不下载大模型整合包。CPU 兼容包可按引导安装到 vendor/gpt_sovits_cpu；GPU 包由你选择已解压目录。")
     layout.addWidget(card)
     provider = QComboBox()
-    provider.addItem("本地 GPT-SoVITS v2ProPlus", "gpt_sovits_local")
+    provider.addItem("本地 GPT-SoVITS CPU 兼容包", "gpt_sovits_cpu")
+    provider.addItem("本地 GPT-SoVITS GPU 整合包", "gpt_sovits_gpu")
     provider.addItem("远端 GPT-SoVITS API（推荐 GPU）", "gpt_sovits_remote")
     provider.addItem("OpenAI 兼容 TTS API", "openai_compatible")
     provider.setCurrentIndex(max(provider.findData(config.get("tts", "provider", default="gpt_sovits_local")), 0))
     _row(layout, "语音后端", provider)
 
     local_section = _section(layout, "本地 GPT-SoVITS")
-    model_path = _line_edit(r"G:\GPT-SoVITS")
+    local_guide = QLabel("选择 CPU 后，安装引导会将兼容包下载到 vendor/gpt_sovits_cpu 并自动检测。选择 GPU 后，请选择整合包根目录；仍可手动改为其他本地目录。")
+    local_guide.setWordWrap(True)
+    local_guide.setStyleSheet(f"color: {STAR_TEXT_MUTED}; font-size: 12px;")
+    layout.addWidget(local_guide)
+    guide_button = QPushButton("安装引导")
+    guide_button.setFixedHeight(30)
+    layout.addWidget(guide_button)
+    model_path = _line_edit(r"例如 D:\GPT-SoVITS-v2pro")
     model_path.setText(config.get("tts", "model_path", default=""))
-    local_row = _field_row(layout, "项目目录", model_path)
+    path_container = QWidget()
+    path_layout = QHBoxLayout(path_container)
+    path_layout.setContentsMargins(0, 0, 0, 0)
+    path_layout.setSpacing(8)
+    path_layout.addWidget(model_path, 1)
+    browse_bundle = QPushButton("选择文件夹…")
+    browse_bundle.setFixedHeight(30)
+    path_layout.addWidget(browse_bundle)
+    local_row = _field_row(layout, "整合包目录", path_container)
+    bundle_status = QLabel("尚未检测")
+    bundle_status.setWordWrap(True)
+    bundle_status.setStyleSheet(f"color: {STAR_TEXT_MUTED}; font-size: 12px;")
+    layout.addWidget(bundle_status)
+    assets_status = QLabel("正在检测 Noir 权重与参考音频…")
+    assets_status.setWordWrap(True)
+    assets_status.setStyleSheet(f"color: {STAR_TEXT_MUTED}; font-size: 12px;")
+    layout.addWidget(assets_status)
+    local_device = QComboBox()
+    local_device.addItem("CPU（兼容包，速度较慢）", "cpu")
+    local_device.addItem("GPU / CUDA（GPU 整合包）", "cuda")
+    local_device.setCurrentIndex(max(local_device.findData(
+        config.get("tts", "local_device", default="cuda")), 0))
+    device_row = _field_row(layout, "推理设备", local_device)
+    local_reference = _line_edit("选择角色的参考音频 WAV")
+    local_reference.setText(config.get("tts", "local_reference_audio", default=""))
+    reference_container = QWidget()
+    reference_layout = QHBoxLayout(reference_container)
+    reference_layout.setContentsMargins(0, 0, 0, 0)
+    reference_layout.setSpacing(8)
+    reference_layout.addWidget(local_reference, 1)
+    browse_reference = QPushButton("选择音频…")
+    browse_reference.setFixedHeight(30)
+    reference_layout.addWidget(browse_reference)
+    reference_row = _field_row(layout, "参考音频", reference_container)
+    local_reference_text = _line_edit("参考音频中实际说出的文字（建议与音频语言一致）")
+    local_reference_text.setText(config.get("tts", "local_reference_text", default=""))
+    reference_text_row = _field_row(layout, "参考文本", local_reference_text)
     local_url = _line_edit("http://127.0.0.1:9880")
     local_url.setText(config.get("tts", "local_api_url", default="http://127.0.0.1:9880"))
     local_url_row = _field_row(layout, "本地 API", local_url)
@@ -182,6 +226,11 @@ def make_tts_page(config, add_probe) -> tuple[QWidget, dict[str, QWidget], dict[
     fields = {"tts_status_card": card, "tts_provider": provider,
               "tts_model": model_path, "tts_local_url": local_url,
               "tts_local_config": local_config, "tts_speed": speed,
+              "tts_local_device": local_device, "tts_local_reference": local_reference,
+              "tts_local_reference_text": local_reference_text,
+              "tts_bundle_status": bundle_status, "tts_bundle_browse": browse_bundle,
+              "tts_assets_status": assets_status, "tts_local_guide": local_guide,
+              "tts_reference_browse": browse_reference, "tts_guide_button": guide_button,
               "tts_local_section": local_section, "tts_remote_section": remote_section,
               "tts_api_url": api_url, "tts_api_key": api_key,
               "tts_remote_reference": remote_reference, "tts_discover_button": discover_button,
@@ -190,7 +239,9 @@ def make_tts_page(config, add_probe) -> tuple[QWidget, dict[str, QWidget], dict[
               "tts_api_voice": api_voice, "tts_response_format": response_format,
               "tts_preset_note": preset_note}
     rows = {"tts_model": local_row, "tts_local_url": local_url_row,
-            "tts_local_config": local_config_row, "tts_speed": speed_row, **cloud_rows}
+            "tts_local_config": local_config_row, "tts_local_device": device_row,
+            "tts_local_reference": reference_row, "tts_local_reference_text": reference_text_row,
+            "tts_speed": speed_row, **cloud_rows}
     return page, fields, rows
 
 

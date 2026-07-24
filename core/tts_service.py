@@ -120,11 +120,10 @@ class TTSService(BackgroundService):
         return next((path for path in candidates if path.is_file()), candidates[0])
 
     @staticmethod
-    def _cpu_environment(cpu_threads=4, reference_audio="", prompt_text=""):
+    def _local_environment(device="cuda", cpu_threads=4, reference_audio="", prompt_text=""):
         threads = str(max(1, min(int(cpu_threads or 4), 8)))
         env = {
             **os.environ,
-            "CUDA_VISIBLE_DEVICES": "-1",
             "OMP_NUM_THREADS": threads,
             "MKL_NUM_THREADS": threads,
             "OPENBLAS_NUM_THREADS": threads,
@@ -132,14 +131,20 @@ class TTSService(BackgroundService):
             "TOKENIZERS_PARALLELISM": "false",
             "MOEPET_JA_ONLY": "1",
         }
-        if reference_audio:
-            env["MOEPET_TTS_REFERENCE"] = str(reference_audio)
-        if prompt_text:
-            env["MOEPET_TTS_PROMPT"] = str(prompt_text)
+        if device == "cpu":
+            env["CUDA_VISIBLE_DEVICES"] = "-1"
+        # The selected package is an external, stock GPT-SoVITS distribution.
+        # Do not rely on Moepet-specific environment hooks that only existed in
+        # the removed bundled fork; every request carries its own reference.
         return env
 
+    @staticmethod
+    def _cpu_environment(cpu_threads=4, reference_audio="", prompt_text=""):
+        """Backward-compatible CPU environment helper used by older callers/tests."""
+        return TTSService._local_environment("cpu", cpu_threads, reference_audio, prompt_text)
+
     def _ensure_local_service(self, project_path, python_path, config_path, base_url,
-                              cpu_threads=4, reference_audio="", prompt_text=""):
+                              cpu_threads=4, reference_audio="", prompt_text="", device="cuda"):
         if self._service_ready(base_url):
             return
         with self._local_start_lock:
@@ -147,16 +152,20 @@ class TTSService(BackgroundService):
                 return
             project = Path(project_path)
             python = self._resolve_local_python(project, python_path)
-            config = Path(config_path)
-            if not config.is_absolute():
+            config = Path(config_path) if config_path else None
+            if config and not config.is_absolute():
                 config = project / config
-            if not project.is_dir() or not python.is_file() or not config.is_file():
-                raise RuntimeError("本地 GPT-SoVITS 项目、Python 或 Noir 配置文件不存在")
+            api_script = project / "api_v2.py"
+            if not project.is_dir() or not python.is_file() or not api_script.is_file():
+                raise RuntimeError("未找到 GPT-SoVITS 整合包、runtime\\python.exe 或 api_v2.py")
             if self._local_process is None or self._local_process.poll() is not None:
+                command = [str(python), "api_v2.py", "-a", "127.0.0.1", "-p", "9880"]
+                if config and config.is_file():
+                    command.extend(["-c", str(config)])
                 self._local_process = subprocess.Popen(
-                    [str(python), "api_v2.py", "-a", "127.0.0.1", "-p", "9880", "-c", str(config)],
+                    command,
                     cwd=str(project), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                    env=self._cpu_environment(cpu_threads, reference_audio, prompt_text),
+                    env=self._local_environment(device, cpu_threads, reference_audio, prompt_text),
                     creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
                 )
             for _ in range(240):
@@ -168,14 +177,14 @@ class TTSService(BackgroundService):
         raise RuntimeError("本地 GPT-SoVITS 启动失败或模型加载超时")
 
     def prewarm_local(self, project_path, python_path, config_path, base_url,
-                      cpu_threads=4, reference_audio="", prompt_text=""):
+                      cpu_threads=4, reference_audio="", prompt_text="", device="cuda"):
         """Load the CPU models during application startup without blocking the UI."""
         if not project_path or self._service_ready(base_url):
             return
         def warm():
             try:
                 self._ensure_local_service(project_path, python_path, config_path,
-                                           base_url, cpu_threads, reference_audio, prompt_text)
+                                           base_url, cpu_threads, reference_audio, prompt_text, device)
             except Exception as exc:
                 self.failed.emit(str(exc))
         threading.Thread(target=warm, name="moepet-tts-prewarm", daemon=True).start()
@@ -183,7 +192,7 @@ class TTSService(BackgroundService):
     def synthesize_gpt_sovits(
             self, text, base_url, api_key, reference_audio, prompt_text,
             output_path, speed=1.0, local_project="", local_python="", local_config="",
-            cpu_threads=4, streaming_mode=0, fragment_interval=0.18):
+            cpu_threads=4, streaming_mode=0, fragment_interval=0.18, device="cuda"):
         if not text.strip() or not base_url.strip() or not reference_audio:
             self.failed.emit("请完整配置 GPT-SoVITS 地址和参考音频")
             return False
@@ -191,7 +200,7 @@ class TTSService(BackgroundService):
             if local_project:
                 self._ensure_local_service(
                     local_project, local_python, local_config, base_url, cpu_threads,
-                    reference_audio, prompt_text)
+                    reference_audio, prompt_text, device)
             base_payload = {
                 "text_lang": "all_ja",
                 "ref_audio_path": str(reference_audio),

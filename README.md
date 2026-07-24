@@ -13,7 +13,7 @@
 - 默认使用 Live2D，支持呼吸、眨眼、视线跟随、表情和口型。
 - Windows 透明区域鼠标穿透，只有人物实体区域接收点击。
 - 兼容 OpenAI Chat Completions API，可使用 DeepSeek、OpenAI、Ollama 等服务。
-- 内置 Noir 的 CPU 本地 GPT-SoVITS 语音部署流程。
+- 通过引导按需下载 CPU 兼容包，或连接用户自行下载的 GPT-SoVITS GPU 整合包。
 - 支持本地或 OpenAI 兼容语音识别、OCR 和多模态图像理解。
 - 每个角色拥有独立的聊天历史、记忆库、资料库、声音和显示配置。
 - 支持近期摘要、长期记忆、时间线以及日/周/月/季/年归档。
@@ -27,7 +27,7 @@
 - 首次安装需要联网
 - 至少预留约 4 GB 磁盘空间
 
-本地 TTS 使用 CPU 推理，不要求 NVIDIA 显卡。CPU 性能会影响首次预热和语音生成速度。
+本地 TTS 默认选择 CPU 兼容模式。普通克隆不会包含该包；需要本地声音时，按设置页引导下载到 `vendor/gpt_sovits_cpu`。有 NVIDIA GPU 时，也可以改用自行解压的 GPU 整合包。
 
 ## 安装
 
@@ -40,14 +40,21 @@ powershell -ExecutionPolicy Bypass -File .\setup.ps1
 .\.venv\Scripts\python.exe main.py
 ```
 
-`setup.ps1` 会自动：
+也可以直接双击 `启动桌宠.bat`。它会在首次运行时检测主环境，缺失时调用 `setup.ps1`，随后启动桌宠。
 
-1. 从项目的 GitHub Release 下载 Noir CPU TTS 权重、参考音频和便携 Python 运行时。
-2. 使用 SHA-256 校验全部语音资源。
-3. 创建主程序的 `.venv` 并安装运行依赖。
-4. 创建 GPT-SoVITS 独立环境并安装 CPU 版本 PyTorch。
+`setup.ps1` 只会自动：
 
-这些大文件不使用 Git LFS，因此普通 `git clone` 不会遇到 LFS 配额问题。首次安装下载约 571 MB，安装后的实际占用会更大。
+1. 创建主程序的 `.venv` 并安装运行依赖。
+
+默认不会下载 GPT-SoVITS 整合包、模型权重或参考音频。这样克隆仓库保持轻量；需要 CPU 本地声音时，从“设置 → 语音合成”打开安装引导，或执行以下命令：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\setup.ps1 -InstallCpuTts
+```
+
+安装器会校验 Release 下载包，并将 CPU 兼容包放到 `vendor/gpt_sovits_cpu`，同时安装 Noir 权重、参考音频和参考文本。设置页会自动使用该路径，但仍允许手动选择其他兼容包目录。
+
+因此普通 `git clone` 不会遇到 Git LFS 配额问题。GPU 整合包由用户自行选择下载位置，Moepet 不会占用或复制它。
 
 再次启动只需：
 
@@ -91,42 +98,30 @@ API Key 会优先保存到 Windows 凭据管理器，不应写入仓库、截图
 
 ## 配置语音合成
 
-### Noir 本地 CPU 语音
+### 本地 GPT-SoVITS 语音
 
-完整执行 `setup.ps1` 后，打开“设置 → 语音合成”，选择：
+打开“设置 → 语音合成”，选择：
 
 ```text
 本地 GPT-SoVITS v2ProPlus
 ```
 
-默认配置为：
+语音后端有两条独立路线：
 
-```text
-项目目录       vendor/gpt_sovits_cpu
-本地 Python    vendor/gpt_sovits_cpu/.venv/Scripts/python.exe
-模型配置       characters/noir/voice/noir_cpu.yaml
-服务地址       http://127.0.0.1:9880
-参考音频       characters/noir/voice/noi0287.wav
-```
+- **本地 GPT-SoVITS CPU 兼容包**：不需要显卡。普通克隆时状态会提示“尚未安装”；点击“安装引导”，或在项目根目录执行 `powershell -ExecutionPolicy Bypass -File .\setup.ps1 -InstallCpuTts`。安装完成后默认使用 `vendor/gpt_sovits_cpu`，但可手动选择其他目录。
+- **本地 GPT-SoVITS GPU 整合包**：点击“安装引导”打开 GPT-SoVITS 官方发布页，下载适合 Windows 与 CUDA 环境的整合包。
 
-程序会在第一次需要朗读时自动启动本地服务，也会在后台预热。语音生成和播放默认开启，无需额外勾选。语速位于当前语音服务的配置区域中。
+GPU 整合包解压后依次完成：
 
-本地语音所需文件：
+1. 点击“选择文件夹”，选择整合包根目录，例如 `D:\GPT-SoVITS-v2pro`。
+2. Moepet 自动检测 `runtime\python.exe` 和 `api_v2.py`；检测通过后状态会显示“整合包已就绪”。
+3. 保持“GPU / CUDA”推理设备，或在没有 GPU 时改为 CPU。
+4. 确认项目根目录 `voice_assets/noir/` 中已有 Noir GPT/SoVITS 权重、`reference.wav` 与参考文本；设置页会自动预填，不需要手动选择。
+5. 点击“测试并播放语音”；听到测试音频后点击应用即可。
 
-```text
-characters/noir/voice/
-├─ models/
-│  ├─ noir-e15.ckpt
-│  └─ noir_e8_s968.pth
-├─ noi0287.wav
-└─ noir_cpu.yaml
-```
+Moepet 会记住手动选择的整合包绝对路径，不会移动或修改它。整合包与 `voice_assets/noir/` 的四类资源同时存在时，配置才会显示“已就绪”；缺少任一项时可以继续文字聊天，但不会启动本地朗读。CPU 安装包包含这些资源，GPU 路线使用用户选定的外部整合包。
 
-如果文件缺失或校验失败，重新运行：
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\setup.ps1
-```
+程序会在第一次需要朗读时自动启动整合包中的本地服务，也会在后台预热。语音生成和播放默认开启，无需额外勾选。建议先使用整合包的默认推理配置；“推理配置”留空时，Moepet 会让 `api_v2.py` 使用其默认配置。
 
 ### OpenAI 兼容 TTS
 
@@ -270,7 +265,6 @@ characters/<角色>/memory/
 | `characters/<角色>/config.json` | 角色名称、立绘、提示词和语音信息 |
 | `characters/<角色>/animations.json` | 动画与动作映射 |
 | `characters/<角色>/voice/*.yaml` | 本地 GPT-SoVITS 模型路径和推理设备 |
-| `tts-assets.manifest.json` | Release 语音资源的路径、大小和 SHA-256 |
 
 路径尽量使用相对于项目根目录的正斜杠路径。修改 JSON 前先退出程序，并确保 JSON 中没有注释或尾随逗号。
 
@@ -306,10 +300,10 @@ py -3.11 --version
 
 ### 本地 TTS 没有声音
 
-1. 完整运行 `setup.ps1`，不要使用跳过 TTS 的参数。
-2. 在语音合成中选择“本地 GPT-SoVITS v2ProPlus”。
-3. 检查 `characters/noir/voice/noi0287.wav` 和两个模型权重是否存在。
-4. 等待首次 CPU 预热完成，再发送一条较短的消息测试。
+1. 在语音合成中选择“本地 GPT-SoVITS v2ProPlus”。
+2. 选择整合包根目录，确认状态显示“整合包已就绪”。
+3. 选择有效的参考音频，点击“测试并播放语音”。
+4. GPU 用户确认整合包与显卡驱动/CUDA 版本匹配；CPU 用户改选 CPU 模式。
 5. 确认 Windows 默认输出设备和应用音量正常。
 
 ### 重新安装依赖

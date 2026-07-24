@@ -1622,6 +1622,17 @@ def test_settings_window_tracks_unsaved_form_changes(qapp, tmp_path):
     assert window._dirty_label.text() == "有未保存的更改"
 
 
+def test_cpu_tts_defaults_to_the_optional_vendor_package(qapp, tmp_path):
+    from ui.settings_window import SettingsWindow
+
+    window = SettingsWindow(Config(tmp_path / "config.json"), ["noir"], "noir", tmp_path)
+
+    assert window._tts_provider.currentData() == "gpt_sovits_cpu"
+    assert window._tts_model.text() == "vendor/gpt_sovits_cpu"
+    assert "CPU 兼容包尚未安装" in window._tts_bundle_status.text()
+    assert window._tts_model.isEnabled()
+
+
 def test_settings_window_only_accepts_after_successful_apply(qapp, tmp_path, monkeypatch):
     from ui.settings_window import SettingsWindow
     window = SettingsWindow(Config(tmp_path / "config.json"), ["noir"], "noir", tmp_path)
@@ -1677,6 +1688,24 @@ def test_dialog_actions_show_recording_and_screen_busy_state(qapp):
     assert window._screen_btn.text() == "识图中..."
     window.set_screen_busy(False)
     assert window._screen_btn.isEnabled()
+
+
+def test_dialog_input_keeps_full_text_height_at_small_and_scaled_sizes(qapp):
+    from ui.dialog_window import DialogWindow
+
+    window = DialogWindow("Test")
+    window.resize(460, 240)
+    window.show()
+    qapp.processEvents()
+
+    assert window._input.height() >= window._input.sizeHint().height()
+    assert window._input.geometry().bottom() < window.height()
+
+    window.set_dialog_scale(200)
+    qapp.processEvents()
+    assert window._input.height() >= window._input.sizeHint().height()
+    assert window._input.geometry().bottom() < window.height()
+    window.close()
 
 
 def test_voice_recorder_cancel_discards_active_stream():

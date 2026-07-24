@@ -21,6 +21,9 @@ from core.signals import signals
 from core.llm_service import LLMService
 from core.ocr_service import OcrService
 from core.tts_service import AudioPlaybackService, JapaneseTranslationService, TTSService
+from core.local_tts_bundle import (
+    inspect_local_tts_bundle, inspect_noir_voice_assets, make_noir_inference_config,
+)
 from core.vision_service import VisionService
 from core.openai_compat import is_local_endpoint
 from core.screen_observer import ScreenObserver
@@ -124,19 +127,21 @@ class PetManager:
     def _prewarm_local_tts(self) -> None:
         if not self.config.get("tts", "enabled", default=False):
             return
-        if self.config.get("tts", "provider", default="gpt_sovits_local") != "gpt_sovits_local":
+        if self.config.get("tts", "provider", default="gpt_sovits_cpu") not in {
+                "gpt_sovits_cpu", "gpt_sovits_gpu", "gpt_sovits_local"}:
             return
         char = self._char_data.get(self.config.current_character)
-        reference = char.voice.get("reference_audio", "") if char else ""
-        reference_path = char.base_dir / "voice" / reference if char and reference else ""
+        try:
+            bundle, assets, generated_config = self._local_tts_runtime()
+        except RuntimeError:
+            return
         self._tts.prewarm_local(
-            self._project_path(self.config.get("tts", "model_path", default="")),
-            self._project_path(self.config.get("tts", "local_python", default="")),
-            self._project_path(self.config.get("tts", "local_config", default="")),
+            str(bundle.root), str(bundle.python), str(generated_config),
             self.config.get("tts", "local_api_url", default="http://127.0.0.1:9880"),
             self.config.get("tts", "cpu_threads", default=4),
-            reference_path,
-            char.voice.get("reference_text", "") if char else "",
+            assets.reference_audio,
+            assets.reference_text,
+            self.config.get("tts", "local_device", default="cuda"),
         )
 
     def _project_path(self, value: str) -> str:
@@ -145,6 +150,27 @@ class PetManager:
             return ""
         path = Path(value)
         return str(path if path.is_absolute() else self.base_dir / path)
+
+    def _local_reference_path(self, char) -> Path:
+        """Prefer an explicit setup-wizard reference audio over character defaults."""
+        configured = self.config.get("tts", "local_reference_audio", default="")
+        if configured:
+            return Path(self._project_path(configured))
+        reference = char.voice.get("reference_audio", "") if char else ""
+        return char.base_dir / "voice" / reference if char and reference else Path()
+
+    def _local_reference_text(self, char) -> str:
+        return (self.config.get("tts", "local_reference_text", default="")
+                or (char.voice.get("reference_text", "") if char else ""))
+
+    def _local_tts_runtime(self):
+        bundle = inspect_local_tts_bundle(
+            self._project_path(self.config.get("tts", "model_path", default="")),
+            self._project_path(self.config.get("tts", "local_config", default="")))
+        assets = inspect_noir_voice_assets(self.base_dir)
+        config = make_noir_inference_config(
+            bundle, assets, self.config.get("tts", "local_device", default="cuda"))
+        return bundle, assets, config
 
     # ─── LLM ──────────────────────────────────
 
@@ -1246,16 +1272,22 @@ class PetManager:
             self._tts_epoch = None
             self._on_tts_error("未找到当前角色")
             return
-        provider = self.config.get("tts", "provider", default="gpt_sovits_local")
-        is_local = provider == "gpt_sovits_local"
-        reference = char.voice.get("reference_audio", "") if is_local else (
+        provider = self.config.get("tts", "provider", default="gpt_sovits_cpu")
+        is_local = provider in {"gpt_sovits_cpu", "gpt_sovits_gpu", "gpt_sovits_local"}
+        reference = self.config.get("tts", "local_reference_audio", default="") if is_local else (
             self.config.get("tts", "remote_reference_audio", default="")
             or char.voice.get("remote_reference_audio", ""))
         if not reference:
             self._tts_epoch = None
             self._on_tts_error("GPT-SoVITS 需要角色的授权参考音频")
             return
-        reference_path = char.base_dir / "voice" / reference if is_local else reference
+        try:
+            bundle, assets, generated_config = self._local_tts_runtime() if is_local else (None, None, None)
+        except RuntimeError as exc:
+            self._tts_epoch = None
+            self._on_tts_error(str(exc))
+            return
+        reference_path = assets.reference_audio if is_local else reference
         output = Path(tempfile.gettempdir()) / "moepet-tts.wav"
         base_url = (self.config.get("tts", "local_api_url", default="http://127.0.0.1:9880")
                     if is_local else self.config.get("tts", "base_url", default=""))
@@ -1266,14 +1298,15 @@ class PetManager:
         started = self._tts.synthesize_gpt_sovits(
             japanese_text, base_url,
             "" if is_local else (self.config.get_secret("tts") or self.config.get("tts", "api_key", default="")),
-            reference_path, char.voice.get("reference_text", ""), output,
+            reference_path, self._local_reference_text(char), output,
             self.config.get("tts", "speed", default=1.0),
-            local_project=self._project_path(self.config.get("tts", "model_path", default="")) if is_local else "",
-            local_python=self._project_path(self.config.get("tts", "local_python", default="")),
-            local_config=self._project_path(self.config.get("tts", "local_config", default="")),
+            local_project=str(bundle.root) if is_local else "",
+            local_python=str(bundle.python) if is_local else "",
+            local_config=str(generated_config) if is_local else "",
             cpu_threads=self.config.get("tts", "cpu_threads", default=4),
             streaming_mode=self.config.get("tts", "streaming_mode", default=3),
             fragment_interval=self.config.get("tts", "fragment_interval", default=0.12),
+            device=self.config.get("tts", "local_device", default="cuda"),
         )
         if started:
             signals.tts_state_changed.emit(True)
