@@ -212,7 +212,7 @@ class PetManager:
         if bilingual_speech:
             full_prompt += (
                 "\n\n本地语音协议：严格按此顺序输出，且不要输出任何其他内容："
-                "<jp>一条自然、简短的日文语音（不超过18个日文字符）</jp>"
+                "<jp>一条自然、极短的日文语音（不超过10个日文字符）</jp>"
                 "<zh>对应的简短中文回复</zh>。"
                 "日文先输出；中文必须保留原意。")
         if full_prompt:
@@ -1301,7 +1301,7 @@ class PetManager:
         if (not getattr(self, "_llm_bilingual_speech_expected", False)
                 or self._role_epoch != getattr(self, "_llm_bilingual_speech_epoch", None)):
             return
-        japanese_text = JapaneseTranslationService._short_speech_translation(japanese_text)
+        japanese_text = JapaneseTranslationService._short_speech_translation(japanese_text, limit=10)
         if not japanese_text:
             return
         self._llm_bilingual_speech_received = True
@@ -1412,6 +1412,10 @@ class PetManager:
         output = Path(tempfile.gettempdir()) / "moepet-tts.wav"
         base_url = (self.config.get("tts", "local_api_url", default="http://127.0.0.1:9880")
                     if is_local else self.config.get("tts", "base_url", default=""))
+        speed = self.config.get("tts", "speed", default=1.0)
+        if is_local and getattr(self, "_llm_bilingual_speech_received", False):
+            speed = max(float(speed), float(self.config.get(
+                "tts", "low_latency_speed", default=1.15)))
         # The translation is ready and synthesis is about to begin. Reveal
         # the reply now, rather than waiting for the finished WAV, so text
         # naturally leads speech without the raw-stream flash.
@@ -1420,7 +1424,7 @@ class PetManager:
             japanese_text, base_url,
             "" if is_local else (self.config.get_secret("tts") or self.config.get("tts", "api_key", default="")),
             reference_path, self._local_reference_text(char), output,
-            self.config.get("tts", "speed", default=1.0),
+            speed,
             local_project=str(bundle.root) if is_local else "",
             local_python=str(bundle.python) if is_local else "",
             local_config=str(generated_config) if is_local else "",

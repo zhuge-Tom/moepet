@@ -431,6 +431,11 @@ def test_audio_sync_is_opt_in_so_streaming_text_is_immediate(tmp_path):
     assert not PetManager._should_sync_text_to_audio(manager)
 
 
+def test_low_latency_local_tts_uses_a_moderately_faster_default(tmp_path):
+    config = Config(tmp_path / "config.json")
+    assert config.get("tts", "low_latency_speed") == 1.2
+
+
 def test_remote_audio_services_require_a_key_without_starting_work(tmp_path):
     from core.asr_service import ASRService
     from core.tts_service import TTSService
