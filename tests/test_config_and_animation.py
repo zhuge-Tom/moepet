@@ -323,6 +323,27 @@ def test_llm_stream_keeps_a_final_sse_frame_without_a_newline(qapp):
     assert replies == ["ok"]
 
 
+def test_llm_bilingual_stream_routes_japanese_to_speech_and_chinese_to_chat():
+    from core.llm_service import LLMService
+
+    service = LLMService()
+    service._speech_protocol_active = True
+    service._speech_stage = "await_jp"
+    service._speech_buffer = ""
+    service._speech_sent = False
+    service._buffer_out = ""
+    speech, visible = [], []
+    service.speech_ready.connect(speech.append)
+    service.chunk_received.connect(visible.append)
+
+    service._accept_stream_content("<jp>大丈夫だよ。</jp><zh>没")
+    service._accept_stream_content("关系。</zh>")
+
+    assert speech == ["大丈夫だよ。"]
+    assert "".join(visible) == "没关系。"
+    assert service._buffer_out == "没关系。"
+
+
 def test_tts_error_is_logged_without_writing_to_chat(caplog):
     manager = type("Manager", (), {})()
     manager._tts_epoch = 0
@@ -452,6 +473,15 @@ def test_japanese_tts_default_first_fragment_is_short_for_cpu_latency():
     parts = TTSService._split_japanese_for_streaming("あ、い、う、え、お、")
 
     assert parts[0] == "あ、い、う、"
+
+
+def test_japanese_translation_is_trimmed_for_low_latency_speech():
+    from core.tts_service import JapaneseTranslationService
+
+    text = JapaneseTranslationService._short_speech_translation(
+        "<think>reasoning</think>「私はあなたのそばにいるから、安心してね。」追加の説明です。")
+
+    assert text == "私はあなたのそばにいるから、安心して。"
 
 
 def test_local_tts_prewarm_passes_the_reference_cache_inputs():

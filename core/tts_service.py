@@ -306,6 +306,19 @@ class TTSService(BackgroundService):
 class JapaneseTranslationService(BackgroundService):
     """Translate a visible Chinese reply into speech-only Japanese."""
 
+    @staticmethod
+    def _short_speech_translation(text: str, limit: int = 18) -> str:
+        """Keep speech translation to one compact sentence for CPU latency."""
+        text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
+        text = text.strip(" \t\r\n\"'「」『』")
+        if not text:
+            return ""
+        sentence = re.match(r".*?[。！？!?](?:[」』\"']|\s|$)", text)
+        text = sentence.group(0).strip(" \t\r\n\"'「」『』") if sentence else text
+        if len(text) <= limit:
+            return text
+        return text[:limit].rstrip("、。！？!?") + "。"
+
     def translate(self, text, base_url, api_key, model):
         if not text.strip() or not base_url or not model:
             self.failed.emit("日文语音翻译缺少聊天模型配置")
@@ -320,9 +333,9 @@ class JapaneseTranslationService(BackgroundService):
                 "stream": False,
                 "messages": [
                     {"role": "system", "content": (
-                        "将用户给出的中文角色回复忠实翻译成自然、简短的日语。"
-                        "保持原意、语气、称呼和句数，不增删信息。只输出日文译文，"
-                        "不要解释、不要引号、不要中文、不要罗马音。")},
+                        "将用户给出的中文角色回复翻译成自然、简短的日语。"
+                        "为低延迟本地语音，只保留一个最核心的句子，尽量不超过 18 个日文字符。"
+                        "只输出日文译文；不要思考过程、解释、引号、中文或罗马音。")},
                     {"role": "user", "content": text.strip()},
                 ],
             }
@@ -332,7 +345,8 @@ class JapaneseTranslationService(BackgroundService):
             )
             with urlopen(request, timeout=90) as response:
                 data = json.loads(response.read().decode("utf-8"))
-            translated = data.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
+            translated = self._short_speech_translation(
+                data.get("choices", [{}])[0].get("message", {}).get("content", ""))
             if not translated:
                 raise RuntimeError("聊天模型没有返回日文译文")
             return translated

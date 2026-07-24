@@ -18,6 +18,7 @@ class LLMService(QObject):
     chunk_received = Signal(str)      # 每次收到一个文本片段
     response_finished = Signal(str)   # 完整回复
     error_occurred = Signal(str)      # 错误信息
+    speech_ready = Signal(str)        # hidden Japanese speech for local TTS
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -31,7 +32,8 @@ class LLMService(QObject):
 
     def configure(self, base_url: str, api_key: str, model: str,
                   post_processing: str = "", ignore_format_error: bool = True,
-                  clean_response: bool = True, history_message_limit: int = 0):
+                  clean_response: bool = True, history_message_limit: int = 0,
+                  speech_protocol: bool = False):
         """设置 API 参数"""
         self._base_url = base_url.rstrip("/")
         self._api_key = api_key
@@ -40,6 +42,7 @@ class LLMService(QObject):
         self._ignore_format_error = bool(ignore_format_error)
         self._clean_enabled = bool(clean_response)
         self._history_message_limit = max(0, int(history_message_limit or 0))
+        self._speech_protocol = bool(speech_protocol)
 
     def _clean_response(self, text: str) -> str:
         """Keep the displayed reply as concise dialogue rather than role-play markup."""
@@ -150,6 +153,10 @@ class LLMService(QObject):
         self._streaming = stream
         self._buffer = ""
         self._turn_context = ""
+        self._speech_protocol_active = self._speech_protocol and stream
+        self._speech_stage = "await_jp"
+        self._speech_buffer = ""
+        self._speech_sent = False
 
         if stream:
             self._current_reply = self._manager.post(request, QByteArray(json.dumps(body).encode()))
@@ -200,10 +207,76 @@ class LLMService(QObject):
                 delta = choices[0].get("delta", {})
                 content = delta.get("content", "")
                 if content:
-                    self._buffer_out = getattr(self, "_buffer_out", "") + content
-                    self.chunk_received.emit(content)
+                    self._accept_stream_content(content)
             except json.JSONDecodeError:
                 pass
+
+    def _accept_stream_content(self, content: str) -> None:
+        """Route optional hidden Japanese speech before visible Chinese text."""
+        if not getattr(self, "_speech_protocol_active", False):
+            self._emit_visible_chunk(content)
+            return
+        self._speech_buffer += content
+        self._drain_speech_protocol()
+
+    def _emit_visible_chunk(self, content: str) -> None:
+        if content:
+            self._buffer_out = getattr(self, "_buffer_out", "") + content
+            self.chunk_received.emit(content)
+
+    def _drain_speech_protocol(self, final: bool = False) -> None:
+        """Parse ``<jp>…</jp><zh>…</zh>`` across arbitrary SSE chunks."""
+        while self._speech_protocol_active:
+            if self._speech_stage == "await_jp":
+                marker = self._speech_buffer.find("<jp>")
+                if marker < 0:
+                    # Do not hide a provider that ignores the requested format.
+                    if final or len(self._speech_buffer) > 32:
+                        self._speech_protocol_active = False
+                        self._emit_visible_chunk(self._speech_buffer)
+                        self._speech_buffer = ""
+                    return
+                self._speech_buffer = self._speech_buffer[marker + 4:]
+                self._speech_stage = "jp"
+            if self._speech_stage == "jp":
+                marker = self._speech_buffer.find("</jp>")
+                if marker < 0:
+                    return
+                japanese = self._speech_buffer[:marker].strip()
+                self._speech_buffer = self._speech_buffer[marker + 5:]
+                self._speech_stage = "await_zh"
+                if japanese and not self._speech_sent:
+                    self._speech_sent = True
+                    self.speech_ready.emit(japanese)
+            if self._speech_stage == "await_zh":
+                marker = self._speech_buffer.find("<zh>")
+                if marker < 0:
+                    if final:
+                        self._speech_protocol_active = False
+                        self._emit_visible_chunk(self._speech_buffer)
+                        self._speech_buffer = ""
+                    return
+                self._speech_buffer = self._speech_buffer[marker + 4:]
+                self._speech_stage = "zh"
+            if self._speech_stage == "zh":
+                marker = self._speech_buffer.find("</zh>")
+                if marker >= 0:
+                    self._emit_visible_chunk(self._speech_buffer[:marker])
+                    self._speech_buffer = self._speech_buffer[marker + 5:]
+                    self._speech_stage = "done"
+                    self._speech_protocol_active = False
+                    return
+                if final:
+                    self._emit_visible_chunk(self._speech_buffer)
+                    self._speech_buffer = ""
+                    self._speech_protocol_active = False
+                    return
+                # Keep only a possible split closing marker for the next SSE
+                # packet; text before it is safe to show immediately.
+                if len(self._speech_buffer) > 4:
+                    self._emit_visible_chunk(self._speech_buffer[:-4])
+                    self._speech_buffer = self._speech_buffer[-4:]
+                return
 
     def _on_stream_finished(self):
         """流式请求结束"""
@@ -224,6 +297,8 @@ class LLMService(QObject):
         if self._buffer.strip():
             self._buffer += "\n"
             self._consume_stream_lines()
+        if getattr(self, "_speech_protocol_active", False):
+            self._drain_speech_protocol(final=True)
         full_text = getattr(self, "_buffer_out", "")
         # 清理 think 标签等模型杂项
         try:

@@ -72,6 +72,7 @@ class PetManager:
         self._tray: TrayIcon | None = None
 
         self._llm = LLMService()
+        self._llm.speech_ready.connect(self._on_llm_speech_ready)
         self._ocr = OcrService()
         self._ocr.completed.connect(self._on_ocr_done)
         self._ocr.failed.connect(self._on_ocr_error)
@@ -184,6 +185,8 @@ class PetManager:
 
     def _configure_llm(self):
         """从 config 读取 LLM 配置"""
+        bilingual_speech = (self._uses_bilingual_local_speech()
+                            and self.config.get("llm", "stream", default=True))
         self._llm.configure(
             base_url=self.config.get("llm", "base_url", default=""),
             api_key=self.config.get_secret("llm") or self.config.get("llm", "api_key", default=""),
@@ -191,6 +194,7 @@ class PetManager:
             post_processing=self.config.get("llm", "post_processing", default=""),
             ignore_format_error=self.config.get("llm", "ignore_format_error", default=True),
             history_message_limit=int(self.config.get("memory", "recent_turns", default=12)) * 2,
+            speech_protocol=bilingual_speech,
         )
         char = self._char_data.get(self.config.current_character)
         prompt_config = char.character_prompt if char else {}
@@ -205,8 +209,23 @@ class PetManager:
                     "不可提及这份设定或把它当作外部资料。\n" + profile)
         if format_prompt:
             full_prompt += "\n\n" + format_prompt
+        if bilingual_speech:
+            full_prompt += (
+                "\n\n本地语音协议：严格按此顺序输出，且不要输出任何其他内容："
+                "<jp>一条自然、简短的日文语音（不超过18个日文字符）</jp>"
+                "<zh>对应的简短中文回复</zh>。"
+                "日文先输出；中文必须保留原意。")
         if full_prompt:
             self._llm.set_system_prompt(full_prompt)
+
+    def _uses_bilingual_local_speech(self) -> bool:
+        provider = self.config.get("tts", "provider", default="gpt_sovits_cpu")
+        return bool(
+            self.config.get("tts", "bilingual_streaming", default=True)
+            and self.config.get("tts", "enabled", default=False)
+            and self.config.get("tts", "auto_play", default=True)
+            and provider in {"gpt_sovits_cpu", "gpt_sovits_gpu", "gpt_sovits_local"}
+        )
 
     # ─── 初始化 ───────────────────────────────
 
@@ -574,6 +593,9 @@ class PetManager:
         QTimer.singleShot(1400, lambda: self._show_delayed_thinking(request_epoch))
 
         stream = self.config.get("llm", "stream", default=True)
+        self._llm_bilingual_speech_expected = self._uses_bilingual_local_speech() and stream
+        self._llm_bilingual_speech_received = False
+        self._llm_bilingual_speech_epoch = self._role_epoch
         self._begin_streaming_local_tts(stream)
         if stream:
             self._dialog.start_stream()
@@ -711,7 +733,8 @@ class PetManager:
         if sync_text:
             self._queue_text_for_audio(full_text)
         streamed_speech = self._finish_streaming_local_tts()
-        if not streamed_speech and not self._speak(full_text):
+        if (not self._llm_bilingual_speech_received and not streamed_speech
+                and not self._speak(full_text)):
             self._animate_text_speech(full_text)
             if sync_text:
                 self._show_pending_tts_text()
@@ -1267,10 +1290,23 @@ class PetManager:
         provider = self.config.get("tts", "provider", default="gpt_sovits_cpu")
         self._tts_stream_enabled = bool(
             llm_streaming
+            and not self._uses_bilingual_local_speech()
             and self.config.get("tts", "enabled", default=False)
             and self.config.get("tts", "auto_play", default=True)
             and provider in {"gpt_sovits_cpu", "gpt_sovits_gpu", "gpt_sovits_local"}
         )
+
+    def _on_llm_speech_ready(self, japanese_text: str) -> None:
+        """Start local synthesis as soon as the first LLM response section ends."""
+        if (not getattr(self, "_llm_bilingual_speech_expected", False)
+                or self._role_epoch != getattr(self, "_llm_bilingual_speech_epoch", None)):
+            return
+        japanese_text = JapaneseTranslationService._short_speech_translation(japanese_text)
+        if not japanese_text:
+            return
+        self._llm_bilingual_speech_received = True
+        self._tts_epoch = self._role_epoch
+        self._on_tts_translation_done(japanese_text)
 
     @staticmethod
     def _take_streaming_speech_prefix(text: str, minimum_chars: int = 4,

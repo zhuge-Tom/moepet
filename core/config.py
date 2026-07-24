@@ -55,6 +55,7 @@ DEFAULTS = {
         "preset": "custom", "model": "", "voice": "", "response_format": "wav",
         "cpu_threads": 4, "streaming_mode": 3, "fragment_interval": 0.12,
         "sync_text_to_audio": False,
+        "bilingual_streaming": True,
     },
     "screen_capture": {
         "hotkey": "Ctrl+Alt+O", "ocr_model_path": "", "keep_captures": False,
