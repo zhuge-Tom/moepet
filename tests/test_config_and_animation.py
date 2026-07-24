@@ -433,7 +433,7 @@ def test_audio_sync_is_opt_in_so_streaming_text_is_immediate(tmp_path):
 
 def test_low_latency_local_tts_uses_a_moderately_faster_default(tmp_path):
     config = Config(tmp_path / "config.json")
-    assert config.get("tts", "low_latency_speed") == 1.2
+    assert config.get("tts", "low_latency_speed") == 1.01
 
 
 def test_remote_audio_services_require_a_key_without_starting_work(tmp_path):
@@ -461,6 +461,30 @@ def test_gpt_sovits_resolves_integrated_runtime_and_cpu_environment(tmp_path):
     assert env["OMP_NUM_THREADS"] == "3"
     assert env["MKL_NUM_THREADS"] == "3"
     assert env["CUDA_VISIBLE_DEVICES"] == "-1"
+
+
+def test_cpu_gpt_sovits_speed_is_capped_before_it_can_produce_silence():
+    from core.tts_service import TTSService
+
+    assert TTSService._safe_local_speed(1.2) == 1.01
+    assert TTSService._safe_local_speed(1.0) == 1.0
+
+
+def test_live2d_lipsync_skips_a_silent_wav(tmp_path):
+    import wave
+    from ui.live2d_window import _wav_has_signal
+
+    silent = tmp_path / "silent.wav"
+    voiced = tmp_path / "voiced.wav"
+    for path, samples in ((silent, b"\0" * 32), (voiced, b"\1\0" * 16)):
+        with wave.open(str(path), "wb") as wav:
+            wav.setnchannels(1)
+            wav.setsampwidth(2)
+            wav.setframerate(32000)
+            wav.writeframes(samples)
+
+    assert not _wav_has_signal(silent)
+    assert _wav_has_signal(voiced)
 
 
 def test_japanese_tts_streaming_split_preserves_text_and_natural_boundaries():

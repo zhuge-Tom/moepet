@@ -1413,9 +1413,11 @@ class PetManager:
         base_url = (self.config.get("tts", "local_api_url", default="http://127.0.0.1:9880")
                     if is_local else self.config.get("tts", "base_url", default=""))
         speed = self.config.get("tts", "speed", default=1.0)
-        if is_local and getattr(self, "_llm_bilingual_speech_received", False):
-            speed = max(float(speed), float(self.config.get(
-                "tts", "low_latency_speed", default=1.15)))
+        if is_local:
+            speed = TTSService._safe_local_speed(speed)
+            if getattr(self, "_llm_bilingual_speech_received", False):
+                speed = max(speed, TTSService._safe_local_speed(self.config.get(
+                    "tts", "low_latency_speed", default=1.01)))
         # The translation is ready and synthesis is about to begin. Reveal
         # the reply now, rather than waiting for the finished WAV, so text
         # naturally leads speech without the raw-stream flash.

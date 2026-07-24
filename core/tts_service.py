@@ -100,6 +100,11 @@ class TTSService(BackgroundService):
         return endpoint if endpoint.endswith("/tts") else endpoint + "/tts"
 
     @staticmethod
+    def _safe_local_speed(speed: float) -> float:
+        """Avoid a CPU GPT-SoVITS bug that emits all-zero WAV above 1.01."""
+        return max(0.5, min(float(speed or 1.0), 1.01))
+
+    @staticmethod
     def _service_ready(base_url: str) -> bool:
         try:
             with urlopen(base_url.rstrip("/") + "/docs", timeout=2) as response:

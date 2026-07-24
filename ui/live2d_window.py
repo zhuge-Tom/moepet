@@ -5,6 +5,7 @@ import math
 import random
 import sys
 import time
+import wave
 
 from PySide6.QtCore import QPoint, Qt, Signal, QTimer
 from PySide6.QtGui import QCursor, QSurfaceFormat
@@ -21,6 +22,16 @@ _HTTRANSPARENT = -1
 _HTCLIENT = 1
 _GWL_EXSTYLE = -20
 _WS_EX_TRANSPARENT = 0x00000020
+
+
+def _wav_has_signal(audio_path: str) -> bool:
+    """Avoid sending silent PCM to live2d-py's divide-by-zero normalizer."""
+    try:
+        with wave.open(str(audio_path), "rb") as wav:
+            raw = wav.readframes(wav.getnframes())
+        return bool(raw) and any(raw)
+    except (OSError, wave.Error):
+        return False
 
 
 def _set_native_mouse_transparent(hwnd: int, enabled: bool) -> None:
@@ -239,6 +250,11 @@ class Live2DCanvas(QOpenGLWidget):
     def start_lipsync(self, audio_path: str) -> None:
         """Drive the mouth from the generated WAV while Qt plays it."""
         self.set_speaking(True)
+        if not _wav_has_signal(audio_path):
+            # Keep the procedural mouth movement but do not let the optional
+            # third-party handler normalize an all-zero array into NaN.
+            self._lipsync = None
+            return
         try:
             from live2d.utils.lipsync import WavHandler
 
