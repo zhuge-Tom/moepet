@@ -7,6 +7,7 @@ import json
 import logging
 import sqlite3
 import tempfile
+from collections import deque
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -15,10 +16,11 @@ from PySide6.QtCore import Qt, QTimer
 
 from core.config import Config
 from core.character import CharacterLoader, CharacterData
+from core.character_scaffold import find_live2d_model
 from core.signals import signals
 from core.llm_service import LLMService
 from core.ocr_service import OcrService
-from core.tts_service import JapaneseTranslationService, TTSService
+from core.tts_service import AudioPlaybackService, JapaneseTranslationService, TTSService
 from core.vision_service import VisionService
 from core.openai_compat import is_local_endpoint
 from core.screen_observer import ScreenObserver
@@ -72,7 +74,11 @@ class PetManager:
         self._ocr.failed.connect(self._on_ocr_error)
         self._tts = TTSService()
         self._tts.completed.connect(self._on_tts_done)
+        self._tts.fragment_ready.connect(self._on_tts_done)
         self._tts.failed.connect(self._on_tts_error)
+        self._audio_player = AudioPlaybackService()
+        self._audio_player.completed.connect(self._on_audio_playback_done)
+        self._audio_player.failed.connect(self._on_audio_playback_error)
         self._tts_translator = JapaneseTranslationService()
         self._tts_translator.completed.connect(self._on_tts_translation_done)
         self._tts_translator.failed.connect(self._on_tts_error)
@@ -99,6 +105,8 @@ class PetManager:
         # Audio sync is opt-in at runtime: a fresh or failed remote service
         # must never hold the chat reply behind a synthesis timeout.
         self._tts_available = False
+        self._tts_audio_queue = deque()
+        self._tts_audio_playing = False
         self._screen_observer = ScreenObserver()
         self._screen_observer.observation_requested.connect(self._observe_screen)
         self._configure_llm()
@@ -106,11 +114,37 @@ class PetManager:
         self._load_chat_history()
 
         self._load_characters()
+        self._prewarm_local_tts()
         self._load_knowledge_base()
         self._connect_signals()
         self._register_screen_hotkey()
         self._register_asr_hotkey()
         self._configure_screen_observer()
+
+    def _prewarm_local_tts(self) -> None:
+        if not self.config.get("tts", "enabled", default=False):
+            return
+        if self.config.get("tts", "provider", default="gpt_sovits_local") != "gpt_sovits_local":
+            return
+        char = self._char_data.get(self.config.current_character)
+        reference = char.voice.get("reference_audio", "") if char else ""
+        reference_path = char.base_dir / "voice" / reference if char and reference else ""
+        self._tts.prewarm_local(
+            self._project_path(self.config.get("tts", "model_path", default="")),
+            self._project_path(self.config.get("tts", "local_python", default="")),
+            self._project_path(self.config.get("tts", "local_config", default="")),
+            self.config.get("tts", "local_api_url", default="http://127.0.0.1:9880"),
+            self.config.get("tts", "cpu_threads", default=4),
+            reference_path,
+            char.voice.get("reference_text", "") if char else "",
+        )
+
+    def _project_path(self, value: str) -> str:
+        """Resolve portable configuration paths against the Moepet root."""
+        if not value:
+            return ""
+        path = Path(value)
+        return str(path if path.is_absolute() else self.base_dir / path)
 
     # ─── LLM ──────────────────────────────────
 
@@ -156,17 +190,14 @@ class PetManager:
         for win in self._windows.values():
             win.set_character_menu(names, current, self._switch_character)
 
-    def _live2d_model_path(self, name: str) -> Path:
-        return (
-            self.base_dir / "characters" / name / "sprites" / "live2d"
-            / "NOIR" / "noir.model3.json"
-        )
+    def _live2d_model_path(self, name: str) -> Path | None:
+        return find_live2d_model(self.base_dir / "characters" / name)
 
     def _create_pet_window(self, name: str, char_data: CharacterData):
         scale = self.config.get("window", "scale", default=char_data.scale)
         renderer = self.config.get("window", "renderer", default="live2d")
         model_path = self._live2d_model_path(name)
-        if (renderer == "live2d" and model_path.exists()
+        if (renderer == "live2d" and model_path is not None and model_path.is_file()
                 and name not in self._live2d_session_fallbacks):
             win = Live2DWindow(char_data, model_path, scale_override=scale)
             win.live2d_failed.connect(
@@ -385,6 +416,18 @@ class PetManager:
         player = getattr(self, "_player", None)
         if player is not None:
             player.stop()
+        audio_player = getattr(self, "_audio_player", None)
+        if audio_player is not None:
+            audio_player.stop()
+        active_tts = getattr(self, "_active_tts_audio_path", "")
+        if active_tts:
+            Path(active_tts).unlink(missing_ok=True)
+        self._active_tts_audio_path = ""
+        queue = getattr(self, "_tts_audio_queue", None)
+        if queue is not None:
+            while queue:
+                Path(queue.popleft()).unlink(missing_ok=True)
+        self._tts_audio_playing = False
         self._player_epoch = None
         self._tts_epoch = None
         self._observation_epoch = None
@@ -428,9 +471,34 @@ class PetManager:
         if win:
             self._dialog.show()
             offset_x, offset_y = self._dialog_offset_for(win)
-            self._dialog.move(win.x() + offset_x, win.y() + offset_y)
+            desired_x = win.x() + offset_x
+            desired_y = win.y() + offset_y
+            screen = QApplication.screenAt(win.frameGeometry().center()) or QApplication.primaryScreen()
+            if screen is not None:
+                dialog_x, dialog_y = self._clamp_dialog_position(
+                    desired_x,
+                    desired_y,
+                    self._dialog.width(),
+                    self._dialog.height(),
+                    screen.availableGeometry(),
+                )
+            else:
+                dialog_x, dialog_y = desired_x, desired_y
+            self._dialog.move(dialog_x, dialog_y)
+            if (dialog_x, dialog_y) != (desired_x, desired_y):
+                self._save_dialog_offset(dialog_x, dialog_y)
         self.config.set("dialog", "visible", True)
         self.config.save()
+
+    @staticmethod
+    def _clamp_dialog_position(x: int, y: int, width: int, height: int, available) -> tuple[int, int]:
+        """Keep a restored dialog fully visible on its pet's current screen."""
+        max_x = max(available.left(), available.right() - max(1, width) + 1)
+        max_y = max(available.top(), available.bottom() - max(1, height) + 1)
+        return (
+            max(available.left(), min(int(x), max_x)),
+            max(available.top(), min(int(y), max_y)),
+        )
 
     def _on_dialog_text(self, text: str):
         """用户发送消息 → 发给 LLM"""
@@ -459,7 +527,7 @@ class PetManager:
         self._last_user_text = text
         if self._start_memory_screen(text):
             self._dialog.start_stream()
-            self._dialog.append_stream("正在回忆…")
+            self._dialog.append_stream("正在回应...")
             return
         self._dispatch_chat_request(text, self._combined_turn_context(text))
 
@@ -1118,6 +1186,24 @@ class PetManager:
         if not self.config.get("tts", "auto_play", default=True):
             return False
         self._tts_epoch = self._role_epoch
+        if self.config.get("tts", "provider", default="gpt_sovits_local") == "openai_compatible":
+            output_format = self.config.get("tts", "response_format", default="wav") or "wav"
+            output = Path(tempfile.gettempdir()) / f"moepet-tts.{output_format}"
+            self._show_pending_tts_text()
+            started = self._tts.synthesize_cloud(
+                text,
+                self.config.get("tts", "base_url", default=""),
+                self.config.get_secret("tts") or self.config.get("tts", "api_key", default=""),
+                self.config.get("tts", "model", default=""),
+                self.config.get("tts", "voice", default=""),
+                output,
+                self.config.get("tts", "speed", default=1.0),
+                output_format,
+            )
+            if started:
+                self._set_pet_state("think")
+                signals.tts_state_changed.emit(True)
+            return started
         started = self._tts_translator.translate(
             text,
             self.config.get("llm", "base_url", default=""),
@@ -1182,51 +1268,72 @@ class PetManager:
             "" if is_local else (self.config.get_secret("tts") or self.config.get("tts", "api_key", default="")),
             reference_path, char.voice.get("reference_text", ""), output,
             self.config.get("tts", "speed", default=1.0),
-            local_project=self.config.get("tts", "model_path", default="") if is_local else "",
-            local_python=self.config.get("tts", "local_python", default=""),
-            local_config=self.config.get("tts", "local_config", default=""),
+            local_project=self._project_path(self.config.get("tts", "model_path", default="")) if is_local else "",
+            local_python=self._project_path(self.config.get("tts", "local_python", default="")),
+            local_config=self._project_path(self.config.get("tts", "local_config", default="")),
+            cpu_threads=self.config.get("tts", "cpu_threads", default=4),
+            streaming_mode=self.config.get("tts", "streaming_mode", default=3),
+            fragment_interval=self.config.get("tts", "fragment_interval", default=0.12),
         )
         if started:
             signals.tts_state_changed.emit(True)
 
-    def _on_tts_done(self, audio_path: str):
+    def _on_tts_done(self, audio_path):
+        if not audio_path:
+            return
         if getattr(self, "_tts_epoch", None) != self._role_epoch:
             Path(audio_path).unlink(missing_ok=True)
             return
-        # Qt Multimedia avoids an additional playback dependency.
-        from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput
-        from PySide6.QtCore import QUrl
-        # PetManager is a coordinator, not a QObject. Keep these objects as
-        # attributes for their lifetime instead of passing an invalid Qt parent.
-        self._audio_output = QAudioOutput()
-        self._audio_output.setVolume(float(self.config.get("tts", "volume", default=1.0)))
-        self._player = QMediaPlayer()
-        self._player.setAudioOutput(self._audio_output)
-        self._player.setSource(QUrl.fromLocalFile(audio_path))
-        self._player.mediaStatusChanged.connect(self._on_audio_status)
+        self._tts_audio_queue.append(str(audio_path))
+        if self._tts_audio_playing:
+            return
+        self._play_next_tts_fragment()
+
+    def _play_next_tts_fragment(self):
+        if not self._tts_audio_queue:
+            self._tts_audio_playing = False
+            expression = getattr(self, "_last_live2d_expression", "")
+            self._set_pet_state(expression or "idle")
+            signals.tts_state_changed.emit(False)
+            return
+        audio_path = self._tts_audio_queue.popleft()
+        self._tts_audio_playing = True
         self._player_epoch = self._role_epoch
+        self._active_tts_audio_path = str(audio_path)
         self._tts_available = True
         self._set_pet_state("speak")
         win = self._windows.get(self.config.current_character)
         if isinstance(win, Live2DWindow):
             win.start_lipsync(audio_path)
-        self._player.play()
+        if not self._audio_player.play(audio_path):
+            self._on_audio_playback_error("Windows 音频播放启动失败")
 
-    def _on_audio_status(self, status):
-        from PySide6.QtMultimedia import QMediaPlayer
-        if status == QMediaPlayer.EndOfMedia and getattr(self, "_player_epoch", None) == self._role_epoch:
-            expression = getattr(self, "_last_live2d_expression", "")
-            if expression:
-                self._set_pet_state(expression)
-            else:
-                self._set_pet_state("idle")
-            signals.tts_state_changed.emit(False)
+    def _on_audio_playback_done(self, audio_path: str):
+        Path(audio_path).unlink(missing_ok=True)
+        if getattr(self, "_player_epoch", None) != self._role_epoch:
+            return
+        self._active_tts_audio_path = ""
+        self._tts_audio_playing = False
+        self._play_next_tts_fragment()
+
+    def _on_audio_playback_error(self, error: str):
+        active_path = getattr(self, "_active_tts_audio_path", "")
+        if active_path:
+            Path(active_path).unlink(missing_ok=True)
+        self._active_tts_audio_path = ""
+        self._tts_audio_playing = False
+        LOGGER.error("Audio playback failed: %s", error)
+        self._play_next_tts_fragment()
 
     def _on_tts_error(self, error: str):
         if getattr(self, "_tts_epoch", None) not in (None, self._role_epoch):
             return
         self._tts_epoch = None
         self._tts_available = False
+        queue = getattr(self, "_tts_audio_queue", None)
+        if queue is not None:
+            while queue:
+                Path(queue.popleft()).unlink(missing_ok=True)
         # The coordinator can be exercised without the optional audio queue.
         if hasattr(self, "_show_pending_tts_text"):
             self._show_pending_tts_text()
@@ -1278,8 +1385,8 @@ class PetManager:
         """Return a saved chat position relative to the active pet window."""
         # Match the initial placement beside/above Noir from the reference
         # layout. A user drag persists a different relative offset below.
-        default_x = -61
-        default_y = -104
+        default_x = -66
+        default_y = -96
         return (
             self.config.get("dialog", "offset_x", default=default_x),
             self.config.get("dialog", "offset_y", default=default_y),
@@ -1424,6 +1531,7 @@ class PetManager:
     def _quit(self):
         self._screen_observer.stop()
         self._cancel_role_async_work()
+        self._tts.shutdown_local()
         self._screen_hotkey.close()
         self._asr_hotkey.close()
         self._save_chat_history()

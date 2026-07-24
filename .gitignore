@@ -3,9 +3,25 @@ config.json
 __pycache__/
 *.pyc
 *.pyo
-venv/
 .venv/
+venv/
 tools/.cubism_external_token.json
+
+# 可重建的本地 CPU 语音运行环境（不提交仓库）
+vendor/gpt_sovits_cpu/.venv/
+vendor/gpt_sovits_cpu/python-runtime/
+vendor/gpt_sovits_cpu/GPT_SoVITS/pretrained_models/*
+!vendor/gpt_sovits_cpu/GPT_SoVITS/pretrained_models/.gitignore
+
+# 本地角色音色权重与参考音频（单文件超过 GitHub 100 MB 限制）
+characters/*/voice/models/
+characters/*/voice/*.wav
+characters/*/voice/*.mp3
+characters/*/voice/*.flac
+characters/*/voice/*.ogg
+
+# 临时基准、诊断输出
+work/
 
 # IDE
 .vscode/
@@ -13,13 +29,6 @@ tools/.cubism_external_token.json
 
 # 角色资源（自己下载）
 # characters/*/sprites/*.png
-
-# 音色模型
-voice/models/
-characters/*/voice/*.wav
-characters/*/voice/*.mp3
-characters/*/voice/*.flac
-characters/*/voice/*.ogg
 
 # 打包产物
 dist/

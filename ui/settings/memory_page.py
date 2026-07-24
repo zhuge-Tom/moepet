@@ -158,7 +158,17 @@ class MemorySettingsPage(QWidget):
         self.tabs.addTab(self._build_archive_tab(), "日记归档")
         self.tabs.addTab(self._build_summary_tab(), "近期摘要")
         self.tabs.addTab(self._build_facts_tab(), "长期记忆")
+        self._tab_routes = (
+            "memory_overview", "memory_timeline", "memory_diary",
+            "memory_recent", "memory_facts",
+        )
+        self.tabs.currentChanged.connect(self._route_tab_selection)
         root.addWidget(self.tabs, 1)
+
+    def _route_tab_selection(self, index: int) -> None:
+        """Keep the settings tree selected item aligned with the visible tab."""
+        if 0 <= index < len(self._tab_routes):
+            self.section_requested.emit(self._tab_routes[index])
 
     def _build_overview_tab(self) -> QWidget:
         page = QWidget()

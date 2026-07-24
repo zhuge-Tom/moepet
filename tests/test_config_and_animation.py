@@ -226,13 +226,30 @@ def test_live2d_failure_keeps_the_saved_live2d_preference(monkeypatch):
 def test_config_has_multimodal_defaults(tmp_path):
     config = Config(tmp_path / "config.json")
     assert config.get("window", "renderer") == "live2d"
-    assert config.get("dialog", "offset_x") == -61
-    assert config.get("dialog", "offset_y") == -104
+    assert config.get("dialog", "offset_x") == -66
+    assert config.get("dialog", "offset_y") == -96
     assert config.get("asr", "compute_type") == "int8"
     assert config.get("screen_capture", "keep_captures") is False
     assert config.get("screen_capture", "auto_observe") is False
     assert config.get("screen_capture", "observe_min_interval") == 300
     assert config.get("screen_capture", "vision_max_dimension") == 1280
+    assert config.get("tts", "enabled") is True
+    assert config.get("tts", "auto_play") is True
+
+
+def test_previous_pet_start_position_migrates_to_final_placement(tmp_path):
+    path = tmp_path / "config.json"
+    path.write_text(json.dumps({"position": {"pet_x": 1136, "pet_y": 458}}), encoding="utf-8")
+
+    config = Config(path)
+
+    assert config.get_position("pet") == (1144, 472)
+    assert json.loads(path.read_text(encoding="utf-8"))["position"] == {
+        "pet_x": 1144,
+        "pet_y": 472,
+        "dialog_x": -1,
+        "dialog_y": -1,
+    }
 
 
 def test_cloud_asr_endpoint_is_completed(tmp_path):
@@ -333,10 +350,127 @@ def test_gpt_sovits_endpoint_uses_service_root_not_openai_v2_path():
     assert TTSService._tts_url("https://tts.example:8443") == "https://tts.example:8443/tts"
 
 
-def test_tts_player_uses_qt_objects_without_a_non_qt_parent():
+def test_gpt_sovits_resolves_integrated_runtime_and_cpu_environment(tmp_path):
+    from core.tts_service import TTSService
+    runtime = tmp_path / "runtime" / "python.exe"
+    runtime.parent.mkdir()
+    runtime.touch()
+    assert TTSService._resolve_local_python(tmp_path, "") == runtime
+    env = TTSService._cpu_environment(3)
+    assert env["OMP_NUM_THREADS"] == "3"
+    assert env["MKL_NUM_THREADS"] == "3"
+    assert env["CUDA_VISIBLE_DEVICES"] == "-1"
+
+
+def test_japanese_tts_streaming_split_preserves_text_and_natural_boundaries():
+    from core.tts_service import TTSService
+    text = "今日は一緒にいられて、うれしいです。少し休みましょう。"
+    parts = TTSService._split_japanese_for_streaming(text, target_chars=14)
+    assert "".join(parts) == text
+    assert len(parts) >= 2
+    assert all(part.endswith(("、", "。", "！", "？", "!", "?")) for part in parts)
+
+
+def test_segmented_gpt_sovits_requests_complete_wav_files(qapp, tmp_path, monkeypatch):
+    import json as json_module
+    import time
+    import core.tts_service as tts_module
+    from core.tts_service import TTSService
+
+    payloads = []
+
+    class Response:
+        status = 200
+        def __enter__(self): return self
+        def __exit__(self, *_args): return False
+        def read(self): return b"RIFF" + b"\0" * 44
+
+    def fake_urlopen(request, timeout=0):
+        payloads.append(json_module.loads(request.data.decode("utf-8")))
+        return Response()
+
+    monkeypatch.setattr(tts_module, "urlopen", fake_urlopen)
+    service = TTSService()
+    assert service.synthesize_gpt_sovits(
+        "おはようございます。今日も一緒です。",
+        "http://127.0.0.1:9880", "", "ref.wav", "prompt",
+        tmp_path / "speech.wav", streaming_mode=3,
+    )
+    deadline = time.monotonic() + 2
+    while service.is_busy() and time.monotonic() < deadline:
+        qapp.processEvents()
+        time.sleep(0.01)
+
+    assert len(payloads) >= 2
+    assert all(payload["streaming_mode"] == 0 for payload in payloads)
+
+
+def test_openai_tts_endpoint_accepts_api_root_or_full_speech_path():
+    from core.tts_service import TTSService
+    assert TTSService._speech_url("https://api.openai.com/v1") == (
+        "https://api.openai.com/v1/audio/speech")
+    assert TTSService._speech_url("https://example.test/v1/audio/speech") == (
+        "https://example.test/v1/audio/speech")
+
+
+def test_openai_compatible_tts_skips_japanese_translation(tmp_path):
+    manager = type("Manager", (), {})()
+    manager.config = Config(tmp_path / "config.json")
+    for key, value in {
+        "enabled": True, "auto_play": True, "provider": "openai_compatible",
+        "base_url": "http://127.0.0.1:8080/v1", "model": "tts-model",
+        "voice": "noir", "response_format": "wav", "speed": 1.25,
+    }.items():
+        manager.config.set("tts", key, value)
+    manager._role_epoch = 7
+    manager._show_pending_tts_text = lambda: None
+    manager._set_pet_state = lambda _state: None
+    manager._tts_translator = type("Translator", (), {
+        "translate": lambda *_args: (_ for _ in ()).throw(AssertionError("不应翻译")),
+    })()
+    calls = []
+    manager._tts = type("TTS", (), {
+        "synthesize_cloud": lambda _self, *args: calls.append(args) or True,
+    })()
+    assert PetManager._speak(manager, "直接朗读中文")
+    assert calls[0][0] == "直接朗读中文"
+    assert calls[0][1:5] == ("http://127.0.0.1:8080/v1", "", "tts-model", "noir")
+
+
+def test_windows_audio_player_does_not_require_qt_multimedia(qapp, tmp_path, monkeypatch):
+    import sys
+    import time
+    import types
+    from core.tts_service import AudioPlaybackService
+
+    calls = []
+    fake_winsound = types.SimpleNamespace(
+        SND_FILENAME=0x20000,
+        SND_ASYNC=0x0001,
+        PlaySound=lambda path, flags: calls.append((path, flags)),
+    )
+    monkeypatch.setitem(sys.modules, "winsound", fake_winsound)
+    audio = tmp_path / "voice.wav"
+    import wave
+    with wave.open(str(audio), "wb") as wav:
+        wav.setnchannels(1)
+        wav.setsampwidth(2)
+        wav.setframerate(32000)
+        wav.writeframes(b"\0\0" * 320)
+    player = AudioPlaybackService()
+    assert player.play(audio)
+    deadline = time.monotonic() + 2
+    while player.is_busy() and time.monotonic() < deadline:
+        qapp.processEvents()
+        time.sleep(0.01)
+
+    assert calls == [(str(audio), fake_winsound.SND_FILENAME | fake_winsound.SND_ASYNC)]
+
+
+def test_memory_screen_uses_responding_copy():
     source = Path("pet_manager.py").read_text(encoding="utf-8")
-    assert "QAudioOutput()" in source
-    assert "QMediaPlayer()" in source
+    assert 'append_stream("正在回应...")' in source
+    assert "正在回忆" not in source
 
 
 def test_live2d_receives_speak_state_while_static_portraits_keep_their_frame(tmp_path, monkeypatch):
@@ -572,6 +706,17 @@ def test_dragged_dialog_offset_overrides_the_default_distance(tmp_path):
     assert PetManager._dialog_offset_for(manager, pet) == (12, -245)
 
 
+def test_dialog_position_is_clamped_inside_available_screen():
+    from PySide6.QtCore import QRect
+
+    assert PetManager._clamp_dialog_position(
+        961, 1017, 460, 240, QRect(0, 0, 1536, 864)
+    ) == (961, 624)
+    assert PetManager._clamp_dialog_position(
+        -900, -500, 460, 240, QRect(0, 0, 1536, 864)
+    ) == (0, 0)
+
+
 def test_dragging_pet_does_not_move_an_open_dialog(tmp_path):
     class Dialog:
         def isVisible(self): return True
@@ -581,7 +726,7 @@ def test_dragging_pet_does_not_move_an_open_dialog(tmp_path):
     manager._windows = {}
     manager._dialog = Dialog()
     PetManager._on_position_changed(manager, 608, 80)
-    assert manager.config.get_position("pet") == (1105, 364)
+    assert manager.config.get_position("pet") == (1144, 472)
 
 
 def test_start_keeps_settings_closed_even_when_chat_is_unconfigured(tmp_path):
@@ -1007,7 +1152,7 @@ def test_start_places_portrait_bottom_right_and_closes_dialog(tmp_path, monkeypa
     manager._needs_initial_setup = lambda: False
     monkeypatch.setattr("pet_manager.QApplication.primaryScreen", lambda: Screen())
     PetManager.start(manager)
-    assert manager._windows["noir"].moves == [(1105, 364)]
+    assert manager._windows["noir"].moves == [(1144, 472)]
     assert manager.config.get("dialog", "visible") is False
 
 
@@ -1407,6 +1552,8 @@ def test_voice_page_factories_switch_provider_rows(qapp, tmp_path):
     _, tts, tts_rows = make_tts_page(config, lambda _layout, _key, _text: None)
     _, asr, asr_rows = make_asr_page(config, lambda _layout, _key, _text: None)
     assert {"tts_model", "tts_api_url"}.issubset(tts_rows)
+    assert "tts_enabled" not in tts
+    assert "tts_auto_play" not in tts
     assert "tts_sync_text" not in tts
     assert "tts_translate" not in tts
     assert {"asr_model", "asr_api_url"}.issubset(asr_rows)
@@ -1414,9 +1561,23 @@ def test_voice_page_factories_switch_provider_rows(qapp, tmp_path):
     window._tts_provider.setCurrentIndex(window._tts_provider.findData("gpt_sovits_remote"))
     window._asr_provider.setCurrentIndex(window._asr_provider.findData("cloud"))
     assert window._tts_rows["tts_model"].isHidden()
+    assert window._tts_local_section.isHidden()
+    assert not window._tts_remote_section.isHidden()
+    assert window._tts_remote_section.text() == "远端 GPT-SoVITS API"
     assert not window._tts_rows["tts_api_url"].isHidden()
     assert window._asr_rows["asr_model"].isHidden()
     assert not window._asr_rows["asr_api_url"].isHidden()
+
+    window._tts_provider.setCurrentIndex(window._tts_provider.findData("openai_compatible"))
+    assert window._tts_remote_section.text() == "OpenAI 兼容 TTS API"
+    assert window._tts_rows["tts_remote_reference"].isHidden()
+    assert not window._tts_rows["tts_api_model"].isHidden()
+    assert not window._tts_rows["tts_api_voice"].isHidden()
+    window._tts_provider_preset.setCurrentIndex(
+        window._tts_provider_preset.findData("openai"))
+    assert window._tts_api_url.text() == "https://api.openai.com/v1"
+    assert window._tts_api_model.text() == "gpt-4o-mini-tts"
+    assert window._tts_api_voice.text() == "alloy"
 
 
 def test_ai_page_factory_exposes_connection_and_format_controls(qapp, tmp_path):

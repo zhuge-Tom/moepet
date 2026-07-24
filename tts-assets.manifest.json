@@ -1,0 +1,14 @@
+{
+  "release_tag": "tts-assets-v1",
+  "asset_name": "moepet-tts-cpu-v1.zip",
+  "asset_sha256": "bae78cc029eea4dbe830758d0206d2df82f49ff6f7eb5acd958d835c60bf9ce0",
+  "files": [
+    {"path": "characters/noir/voice/models/noir-e15.ckpt", "size": 155312594, "sha256": "4337ecea2dbfab8eb15a073b16418e8124c450378460590adefc51f09d2c5e6d"},
+    {"path": "characters/noir/voice/models/noir_e8_s968.pth", "size": 172764966, "sha256": "10f1f21d56a8ca17d7ce3115d8c087fa345454ef4cf445ddaadc5df4fceb30a3"},
+    {"path": "characters/noir/voice/noi0287.wav", "size": 995386, "sha256": "d3722d5d612c15c4146ef72db1dfe41f0209a62a59242472d44b973909a006ea"},
+    {"path": "vendor/gpt_sovits_cpu/GPT_SoVITS/pretrained_models/chinese-hubert-base/pytorch_model.bin", "size": 188811417, "sha256": "24164f129c66499d1346e2aa55f183250c223161ec2770c0da3d3b08cf432d3c"},
+    {"path": "vendor/gpt_sovits_cpu/GPT_SoVITS/pretrained_models/chinese-hubert-base/config.json", "size": 1449, "sha256": "c3e5060a1277e0f078cc6be9da4528a605dba6ece93018981fe2c820e5c7b103"},
+    {"path": "vendor/gpt_sovits_cpu/GPT_SoVITS/pretrained_models/chinese-hubert-base/preprocessor_config.json", "size": 212, "sha256": "dcd684124d06722947939d41ea6ae58dbf10968c60a11a29f23ddc602c64a29b"},
+    {"path": "vendor/gpt_sovits_cpu/GPT_SoVITS/pretrained_models/sv/pretrained_eres2netv2w24s4ep4.ckpt", "size": 107528697, "sha256": "4f5a0bf73c61eb41b174e1bb54e7ee3c83233892be8e0af1f187024e8e581a35"}
+  ]
+}

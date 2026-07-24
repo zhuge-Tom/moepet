@@ -1,6 +1,7 @@
 import json
 import zipfile
 from datetime import datetime
+from pathlib import Path
 
 import pytest
 from PySide6.QtWidgets import QApplication
@@ -275,6 +276,20 @@ def test_memory_navigation_children_and_clickable_cards(qapp, tmp_path):
     window._memory_page.shutdown(); window.close()
 
 
+def test_memory_top_tabs_keep_left_navigation_selected(qapp, tmp_path):
+    from PySide6.QtCore import Qt
+    from ui.settings_window import SettingsWindow
+    window = SettingsWindow(Config(tmp_path / "config.json"), ["noir"], "noir", tmp_path)
+    window.open_page("memory_overview")
+    window._memory_page.tabs.setCurrentIndex(4)
+    qapp.processEvents()
+    assert window._tree.currentItem().data(0, Qt.UserRole) == "memory_facts"
+    window._memory_page.tabs.setCurrentIndex(1)
+    qapp.processEvents()
+    assert window._tree.currentItem().data(0, Qt.UserRole) == "memory_timeline"
+    window._memory_page.shutdown(); window.close()
+
+
 def test_memory_navigation_has_no_scrollbar_and_high_contrast_tabs(qapp, tmp_path):
     from PySide6.QtCore import Qt
     from ui.settings_window import SettingsWindow
@@ -323,6 +338,48 @@ def test_settings_window_minimizes_is_not_forced_on_top_and_uses_noir_icon(qapp,
     window.showNormal(); qapp.processEvents()
     assert not window.isMaximized()
     assert window.size() == normal_size
+    window._memory_page.shutdown(); window.close()
+
+
+def test_character_scaffold_isolates_roles_and_discovers_own_live2d(tmp_path):
+    from core.character import CharacterLoader
+    from core.character_scaffold import create_character_scaffold, find_live2d_model
+    characters = tmp_path / "characters"
+    alice = create_character_scaffold(characters, "alice", "Alice", "static")
+    bob = create_character_scaffold(characters, "bob", "Bob", "live2d")
+    default_role = create_character_scaffold(characters, "default_role", "Default")
+    (alice / "chat_history.json").write_text("[]", encoding="utf-8")
+    model = bob / "sprites" / "live2d" / "custom" / "avatar.model3.json"
+    model.parent.mkdir(parents=True); model.write_text("{}", encoding="utf-8")
+    assert CharacterLoader(characters).list_names() == ["alice", "bob", "default_role"]
+    assert find_live2d_model(alice) is None
+    assert find_live2d_model(bob) == model
+    assert not (bob / "chat_history.json").exists()
+    assert (alice / "memory").resolve() != (bob / "memory").resolve()
+    assert json.loads((alice / "config.json").read_text(encoding="utf-8"))["name"] == "Alice"
+    assert json.loads((bob / "config.json").read_text(encoding="utf-8"))["name"] == "Bob"
+    assert json.loads((default_role / "config.json").read_text(encoding="utf-8"))["preferred_renderer"] == "live2d"
+    guide = (alice / "角色配置指南.md").read_text(encoding="utf-8")
+    assert "## 配置角色" in guide and "## 1. 配置角色" not in guide
+
+
+def test_general_settings_exposes_add_character_entry(qapp, tmp_path, monkeypatch):
+    from PySide6.QtWidgets import QInputDialog, QMessageBox
+    from ui.settings_window import SettingsWindow
+    answers = iter([("luna", True), ("露娜", True)])
+    monkeypatch.setattr(QInputDialog, "getText", lambda *_args, **_kwargs: next(answers))
+    monkeypatch.setattr(QInputDialog, "getItem", lambda *_args, **_kwargs: ("Live2D 动态模型", True))
+    opened = []
+    monkeypatch.setattr("ui.settings_window.QDesktopServices.openUrl", lambda url: opened.append(url.toLocalFile()) or True)
+    monkeypatch.setattr(QMessageBox, "information", lambda *_args, **_kwargs: QMessageBox.Ok)
+    window = SettingsWindow(Config(tmp_path / "config.json"), ["noir"], "noir", tmp_path)
+    window.open_page("general")
+    assert window._add_character_btn.text() == "＋ 增加角色"
+    window._add_character_btn.click()
+    role = tmp_path / "characters" / "luna"
+    assert len(opened) == 1 and Path(opened[0]).resolve() == role.resolve()
+    assert (role / "角色配置指南.md").exists()
+    assert json.loads((role / "config.json").read_text(encoding="utf-8"))["preferred_renderer"] == "live2d"
     window._memory_page.shutdown(); window.close()
 
 

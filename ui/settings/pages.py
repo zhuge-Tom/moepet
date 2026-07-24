@@ -16,7 +16,7 @@ from ui.theme import (
     STAR_TEXT, STAR_TEXT_MUTED, STAR_TEXT_SUBTLE,
 )
 from ui.settings.provider_presets import (
-    CHAT_PRESETS, VISION_PRESETS, preset_key_for_url,
+    CHAT_PRESETS, TTS_PRESETS, VISION_PRESETS, preset_key_for_url,
 )
 from ui.settings.service_status import vision_ready
 
@@ -29,10 +29,11 @@ def _page_layout() -> tuple[QWidget, QVBoxLayout]:
     return page, layout
 
 
-def _section(layout: QVBoxLayout, title: str) -> None:
+def _section(layout: QVBoxLayout, title: str) -> QLabel:
     label = QLabel(title)
     label.setStyleSheet(f"font-weight: bold; font-size: 14px; color: {STAR_TEXT};")
     layout.addWidget(label)
+    return label
 
 
 def _hint(layout: QVBoxLayout, text: str) -> None:
@@ -114,16 +115,14 @@ def make_tts_page(config, add_probe) -> tuple[QWidget, dict[str, QWidget], dict[
     page, layout = _page_layout()
     card = ServiceStatusCard("语音输出", "中文回复会在后台翻译为日文，再由 Noir 的 GPT-SoVITS 朗读。")
     layout.addWidget(card)
-    enabled = QCheckBox("LLM 回复后自动朗读")
-    enabled.setChecked(config.get("tts", "enabled", default=False))
-    layout.addWidget(enabled)
     provider = QComboBox()
     provider.addItem("本地 GPT-SoVITS v2ProPlus", "gpt_sovits_local")
     provider.addItem("远端 GPT-SoVITS API（推荐 GPU）", "gpt_sovits_remote")
+    provider.addItem("OpenAI 兼容 TTS API", "openai_compatible")
     provider.setCurrentIndex(max(provider.findData(config.get("tts", "provider", default="gpt_sovits_local")), 0))
     _row(layout, "语音后端", provider)
 
-    _section(layout, "本地 GPT-SoVITS")
+    local_section = _section(layout, "本地 GPT-SoVITS")
     model_path = _line_edit(r"G:\GPT-SoVITS")
     model_path.setText(config.get("tts", "model_path", default=""))
     local_row = _field_row(layout, "项目目录", model_path)
@@ -133,16 +132,7 @@ def make_tts_page(config, add_probe) -> tuple[QWidget, dict[str, QWidget], dict[
     local_config = _line_edit("GPT_SoVITS/configs/noir_v2proplus.yaml")
     local_config.setText(config.get("tts", "local_config", default="GPT_SoVITS/configs/noir_v2proplus.yaml"))
     local_config_row = _field_row(layout, "推理配置", local_config)
-    speed = QSpinBox()
-    speed.setRange(50, 200)
-    speed.setSuffix(" %")
-    speed.setValue(int(config.get("tts", "speed", default=1.0) * 100))
-    _row(layout, "语速", speed)
-    auto_play = QCheckBox("生成后自动播放语音")
-    auto_play.setChecked(config.get("tts", "auto_play", default=True))
-    layout.addWidget(auto_play)
-
-    _section(layout, "远端 GPT-SoVITS API")
+    remote_section = _section(layout, "远端 GPT-SoVITS API")
     api_url = _line_edit("https://tts.example.com")
     api_url.setText(config.get("tts", "base_url", default=""))
     api_key = _line_edit("sk-xxxx", password=True)
@@ -154,18 +144,53 @@ def make_tts_page(config, add_probe) -> tuple[QWidget, dict[str, QWidget], dict[
         "tts_api_key": _field_row(layout, "API Key", api_key),
         "tts_remote_reference": _field_row(layout, "参考音频", remote_reference),
     }
+    preset = QComboBox()
+    for item in TTS_PRESETS:
+        preset.addItem(item.label, item.key)
+    preset.setCurrentIndex(max(preset.findData(
+        preset_key_for_url(api_url.text(), TTS_PRESETS)), 0))
+    preset_container = _field_row(layout, "服务预设", preset)
+    api_model = _line_edit("例如 gpt-4o-mini-tts")
+    api_model.setText(config.get("tts", "model", default=""))
+    api_voice = _line_edit("例如 alloy")
+    api_voice.setText(config.get("tts", "voice", default=""))
+    response_format = QComboBox()
+    for label, value in (("WAV（推荐）", "wav"), ("MP3", "mp3"), ("Opus", "opus"),
+                         ("AAC", "aac"), ("FLAC", "flac"), ("PCM", "pcm")):
+        response_format.addItem(label, value)
+    response_format.setCurrentIndex(max(response_format.findData(
+        config.get("tts", "response_format", default="wav")), 0))
+    preset_note = QLabel("选择预设会自动填写服务地址、模型和音色，仍可手动修改。")
+    preset_note.setWordWrap(True)
+    preset_note.setStyleSheet(f"color: {STAR_TEXT_SUBTLE}; font-size: 11px;")
+    layout.addWidget(preset_note)
+    cloud_rows.update({
+        "tts_provider_preset": preset_container,
+        "tts_api_model": _field_row(layout, "语音模型", api_model),
+        "tts_api_voice": _field_row(layout, "音色", api_voice),
+        "tts_response_format": _field_row(layout, "音频格式", response_format),
+        "tts_preset_note": preset_note,
+    })
     discover_button, discover_picker, discover_status = _model_discovery_controls(layout)
+    speed = QSpinBox()
+    speed.setRange(50, 200)
+    speed.setSuffix(" %")
+    speed.setValue(int(config.get("tts", "speed", default=1.0) * 100))
+    speed_row = _field_row(layout, "语速", speed)
     add_probe(layout, "tts", "测试语音引擎")
     layout.addStretch()
-    fields = {"tts_status_card": card, "tts_enabled": enabled, "tts_provider": provider,
+    fields = {"tts_status_card": card, "tts_provider": provider,
               "tts_model": model_path, "tts_local_url": local_url,
               "tts_local_config": local_config, "tts_speed": speed,
-              "tts_auto_play": auto_play,
+              "tts_local_section": local_section, "tts_remote_section": remote_section,
               "tts_api_url": api_url, "tts_api_key": api_key,
               "tts_remote_reference": remote_reference, "tts_discover_button": discover_button,
-              "tts_model_picker": discover_picker, "tts_discover_status": discover_status}
+              "tts_model_picker": discover_picker, "tts_discover_status": discover_status,
+              "tts_provider_preset": preset, "tts_api_model": api_model,
+              "tts_api_voice": api_voice, "tts_response_format": response_format,
+              "tts_preset_note": preset_note}
     rows = {"tts_model": local_row, "tts_local_url": local_url_row,
-            "tts_local_config": local_config_row, **cloud_rows}
+            "tts_local_config": local_config_row, "tts_speed": speed_row, **cloud_rows}
     return page, fields, rows
 
 

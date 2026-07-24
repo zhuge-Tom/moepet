@@ -32,10 +32,7 @@
 ```powershell
 git clone https://github.com/zhuge-Tom/moepet.git
 cd moepet
-
-python -m venv .venv
-.\.venv\Scripts\python.exe -m pip install --upgrade pip
-.\.venv\Scripts\python.exe -m pip install PySide6 keyring jieba live2d-py==0.7.0.4
+powershell -ExecutionPolicy Bypass -File .\setup.ps1
 .\.venv\Scripts\python.exe main.py
 ```
 
@@ -58,6 +55,19 @@ API Key 优先写入 Windows 凭据管理器，不会明文提交到仓库。`co
 | Ollama | `http://localhost:11434/v1` | `qwen3:8b` |
 
 地址不包含 `/chat/completions` 时，Moepet 会自动补全标准接口路径。
+
+## Noir 本地 CPU 语音
+
+仓库包含精简的 GPT-SoVITS CPU 推理源码，但不提交可重建的虚拟环境、Python 运行时和大模型文件，因此不使用 Git LFS，也不会消耗仓库的 LFS 配额。本机配置完成后的目录如下：
+
+```text
+vendor/gpt_sovits_cpu/                 # 精简 CPU 推理源码
+characters/noir/voice/models/          # Noir GPT / SoVITS 权重
+characters/noir/voice/noi0287.wav      # 授权参考音频
+characters/noir/voice/noir_cpu.yaml    # CPU 模型配置
+```
+
+运行根目录的 `setup.ps1` 会从项目的 GitHub Release 下载经过 SHA-256 校验的 Noir 权重、参考音频、共享预训练模型和便携 Python，并安装纯 CPU 推理依赖。大模型不进入 Git 历史、不使用 Git LFS；配置始终使用项目相对路径。在“设置 → 语音合成”选择“本地 GPT-SoVITS v2ProPlus”即可。程序启动后会后台预热并固定使用 CPU；较长日文会拆成短句连续生成和播放。
 
 ## 桌宠交互
 
@@ -125,6 +135,8 @@ cd native\memory_core
 云端屏幕理解必须在设置中明确授权。截图默认在处理完成后删除；随机观察默认关闭。
 
 ## 添加角色
+
+在“通用设置 → 角色选择”下点击“＋ 增加角色”，依次填写角色目录名、显示名称和立绘类型。Moepet 会创建独立目录、自动打开文件夹，并生成《角色配置指南.md》。完成素材配置后重启程序，新角色会出现在角色选择列表中。
 
 角色目录的最小结构：
 

@@ -13,13 +13,14 @@ from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QWidget,
     QLabel, QSlider, QCheckBox, QComboBox, QPushButton,
     QScrollArea, QFrame, QLineEdit, QTreeWidget, QTreeWidgetItem,
-    QSizePolicy, QTextEdit, QSpinBox, QStackedWidget,
+    QSizePolicy, QTextEdit, QSpinBox, QStackedWidget, QInputDialog,
 )
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QDesktopServices, QIcon
 from PySide6.QtCore import QUrl
 from PySide6.QtWidgets import QFileDialog, QMessageBox
 from core.knowledge_base import KnowledgeBase
+from core.character_scaffold import create_character_scaffold, find_live2d_model
 from core.openai_compat import chat_completions_url, is_local_endpoint
 from ui.settings_components import IntegrationOverview, StarfieldBackground
 from ui.theme import (
@@ -42,7 +43,7 @@ from ui.settings.pages import (
     make_tts_page, make_vision_page, make_ai_page,
 )
 from ui.settings.provider_presets import (
-    CHAT_PRESETS, VISION_PRESETS, preset_by_key, preset_key_for_url,
+    CHAT_PRESETS, TTS_PRESETS, VISION_PRESETS, preset_by_key, preset_key_for_url,
 )
 
 from core.config import Config
@@ -578,6 +579,17 @@ class SettingsWindow(QDialog):
         provider = self._tts_provider.currentData()
         url = self._tts_api_url.text().strip()
         key = self._tts_api_key.text().strip()
+        if provider == "openai_compatible":
+            from core.tts_service import TTSService
+            endpoint = TTSService._speech_url(url)
+            payload = {
+                "model": self._tts_api_model.text().strip(),
+                "input": "你好，这是 Moepet 语音测试。",
+                "voice": self._tts_api_voice.text().strip(),
+                "response_format": self._tts_response_format.currentData() or "wav",
+                "speed": self._tts_speed.value() / 100.0,
+            }
+            return lambda: probe_http_endpoint(endpoint, key, payload)
         if provider == "gpt_sovits_remote":
             if url and not url.rstrip("/").endswith("/tts"):
                 url = url.rstrip("/") + "/tts"
@@ -663,12 +675,15 @@ class SettingsWindow(QDialog):
         self._tts_local_fields = (self._tts_model, self._tts_local_url, self._tts_local_config)
         self._tts_cloud_fields = (self._tts_api_url, self._tts_api_key, self._tts_remote_reference)
         self._tts_provider.currentIndexChanged.connect(self._sync_tts_provider_fields)
+        self._tts_provider_preset.currentIndexChanged.connect(self._apply_tts_preset)
+        self._tts_api_url.textEdited.connect(lambda text: self._sync_preset_from_url(
+            text, self._tts_provider_preset, TTS_PRESETS))
         self._tts_discover_button.setVisible(False)
         self._tts_model_picker.setVisible(False)
         self._tts_discover_status.setVisible(False)
-        self._tts_enabled.stateChanged.connect(self._refresh_service_status_cards)
         for field in (self._tts_model, self._tts_local_url, self._tts_local_config,
-                      self._tts_api_url, self._tts_api_key, self._tts_remote_reference):
+                      self._tts_api_url, self._tts_api_key, self._tts_remote_reference,
+                      self._tts_api_model, self._tts_api_voice):
             field.textChanged.connect(self._refresh_service_status_cards)
         self._sync_tts_provider_fields()
         return page
@@ -772,6 +787,12 @@ class SettingsWindow(QDialog):
         open_folder_btn.setFixedHeight(28)
         open_folder_btn.clicked.connect(self._open_characters_folder)
         lay.addWidget(open_folder_btn)
+
+        self._add_character_btn = QPushButton("＋ 增加角色")
+        self._add_character_btn.setObjectName("settings_primary_button")
+        self._add_character_btn.setFixedHeight(30)
+        self._add_character_btn.clicked.connect(self._create_character_guide)
+        lay.addWidget(self._add_character_btn)
 
         self._auto_start_cb = QCheckBox("开机自启")
         self._auto_start_cb.setChecked(
@@ -899,6 +920,34 @@ class SettingsWindow(QDialog):
         if folder.exists():
             QDesktopServices.openUrl(QUrl.fromLocalFile(str(folder)))
 
+    def _create_character_guide(self):
+        character_id, ok = QInputDialog.getText(
+            self, "增加角色 · 第 1/3 步", "角色目录名（建议英文，例如 luna）：")
+        if not ok:
+            return
+        display_name, ok = QInputDialog.getText(
+            self, "增加角色 · 第 2/3 步", "角色显示名称：", text=character_id.strip())
+        if not ok:
+            return
+        renderer_title, ok = QInputDialog.getItem(
+            self, "增加角色 · 第 3/3 步", "准备使用的立绘类型：",
+            ["Live2D 动态模型（推荐）", "静态 PNG"], 0, False)
+        if not ok:
+            return
+        try:
+            target = create_character_scaffold(
+                self._base_dir / "characters", character_id, display_name,
+                "live2d" if renderer_title.startswith("Live2D") else "static")
+        except (ValueError, FileExistsError, OSError) as exc:
+            QMessageBox.warning(self, "无法增加角色", str(exc))
+            return
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(target.resolve())))
+        QMessageBox.information(
+            self, "角色目录已创建",
+            f"已为 {display_name.strip()} 创建完全独立的角色目录。\n\n"
+            "文件夹内的《角色配置指南.md》会带你完成立绘和角色设定。"
+            "配置完成后重启 Moepet，新角色就会出现在角色选择中。")
+
     # ═══════════════════════════════════
     # 角色设置 > 接口设置
     # ═══════════════════════════════════
@@ -991,12 +1040,10 @@ class SettingsWindow(QDialog):
     def _make_renderer_combo(self) -> QComboBox:
         combo = QComboBox()
         combo.addItem("静态立绘（PNG）", "static")
-        live2d_model = (
-            self._base_dir / "characters" / self._current_char / "sprites"
-            / "live2d" / "NOIR" / "noir.model3.json"
-        )
-        if live2d_model.exists():
-            combo.addItem("Live2D 动态模型（Noir）", "live2d")
+        live2d_model = find_live2d_model(
+            self._base_dir / "characters" / self._current_char)
+        if live2d_model:
+            combo.addItem(f"Live2D 动态模型（{self._current_char}）", "live2d")
         renderer_index = combo.findData(
             self.config.get("window", "renderer", default="live2d"))
         combo.setCurrentIndex(max(renderer_index, 0))
@@ -1174,12 +1221,33 @@ class SettingsWindow(QDialog):
 
     def _sync_tts_provider_fields(self, *_args):
         """Switch TTS forms without clearing local or cloud settings."""
-        is_cloud = self._tts_provider.currentData() == "gpt_sovits_remote"
+        provider = self._tts_provider.currentData()
+        is_local = provider == "gpt_sovits_local"
+        is_gpt_remote = provider == "gpt_sovits_remote"
+        is_openai = provider == "openai_compatible"
+        self._tts_local_section.setVisible(is_local)
+        self._tts_remote_section.setVisible(not is_local)
+        self._tts_remote_section.setText(
+            "OpenAI 兼容 TTS API" if is_openai else "远端 GPT-SoVITS API")
         for name in ("tts_model", "tts_local_url", "tts_local_config"):
-            self._tts_rows[name].setVisible(not is_cloud)
-        for name in ("tts_api_url", "tts_api_key", "tts_remote_reference"):
-            self._tts_rows[name].setVisible(is_cloud)
+            self._tts_rows[name].setVisible(is_local)
+        for name in ("tts_api_url", "tts_api_key"):
+            self._tts_rows[name].setVisible(not is_local)
+        self._tts_rows["tts_remote_reference"].setVisible(is_gpt_remote)
+        for name in ("tts_provider_preset", "tts_api_model", "tts_api_voice",
+                     "tts_response_format", "tts_preset_note"):
+            self._tts_rows[name].setVisible(is_openai)
         self._refresh_service_status_cards()
+
+    def _apply_tts_preset(self, *_args):
+        preset = preset_by_key(self._tts_provider_preset.currentData(), TTS_PRESETS)
+        if preset.key == "custom":
+            self._tts_preset_note.setText("填写任意兼容 POST /v1/audio/speech 的服务。")
+            return
+        self._tts_api_url.setText(preset.base_url)
+        self._tts_api_model.setText(preset.default_model)
+        self._tts_api_voice.setText(preset.default_voice)
+        self._tts_preset_note.setText(preset.note or "已填入厂商推荐默认值，可继续手动修改。")
 
     def _sync_asr_provider_fields(self, *_args):
         """Switch ASR forms without mutating either backend's draft values."""
@@ -1206,13 +1274,20 @@ class SettingsWindow(QDialog):
                 and self._ai_model.text().strip()
             ))
         if hasattr(self, "_tts_status_card"):
-            cloud = self._tts_provider.currentData() == "gpt_sovits_remote"
-            ready = self._tts_enabled.isChecked() and (
-                bool(self._tts_model.text().strip()) if not cloud else bool(
-                    self._tts_api_url.text().strip()
-                    and self._tts_remote_reference.text().strip()
-                )
-            )
+            provider = self._tts_provider.currentData()
+            if provider == "gpt_sovits_local":
+                configured = bool(self._tts_model.text().strip())
+            elif provider == "gpt_sovits_remote":
+                configured = bool(self._tts_api_url.text().strip()
+                                  and self._tts_remote_reference.text().strip())
+            else:
+                url = self._tts_api_url.text().strip()
+                configured = bool(url and self._tts_api_model.text().strip()
+                                  and self._tts_api_voice.text().strip()
+                                  and (is_local_endpoint(url)
+                                       or self._tts_api_key.text().strip()
+                                       or self.config.get_secret("tts")))
+            ready = configured
             self._tts_status_card.set_state(ready)
         if hasattr(self, "_asr_status_card"):
             cloud = self._asr_provider.currentData() == "cloud"
@@ -1383,17 +1458,20 @@ class SettingsWindow(QDialog):
         sys_prompt = safe(getattr(self, "_system_prompt", None))
         fmt_prompt = safe(getattr(self, "_format_prompt", None))
 
-        s["tts"] = {"enabled": safe(getattr(self, "_tts_enabled", None)).isChecked() if safe(getattr(self, "_tts_enabled", None)) else False,
+        s["tts"] = {"enabled": True,
                     "model_path": safe(getattr(self, "_tts_model", None)).text().strip() if safe(getattr(self, "_tts_model", None)) else "",
                     "local_api_url": safe(getattr(self, "_tts_local_url", None)).text().strip() if safe(getattr(self, "_tts_local_url", None)) else "http://127.0.0.1:9880",
                     "local_config": safe(getattr(self, "_tts_local_config", None)).text().strip() if safe(getattr(self, "_tts_local_config", None)) else "GPT_SoVITS/configs/noir_v2proplus.yaml",
                     "remote_reference_audio": safe(getattr(self, "_tts_remote_reference", None)).text().strip() if safe(getattr(self, "_tts_remote_reference", None)) else "",
                     "speed": safe(getattr(self, "_tts_speed", None)).value() / 100.0 if safe(getattr(self, "_tts_speed", None)) else 1.0,
-                    "auto_play": safe(getattr(self, "_tts_auto_play", None)).isChecked() if safe(getattr(self, "_tts_auto_play", None)) else True,
+                    "auto_play": True,
                     "provider": safe(getattr(self, "_tts_provider", None)).currentData() if safe(getattr(self, "_tts_provider", None)) else "gpt_sovits_local",
                     "base_url": safe(getattr(self, "_tts_api_url", None)).text().strip() if safe(getattr(self, "_tts_api_url", None)) else "",
                     "api_key": safe(getattr(self, "_tts_api_key", None)).text().strip() if safe(getattr(self, "_tts_api_key", None)) else "",
-                    "model": "", "voice": ""}
+                    "preset": safe(getattr(self, "_tts_provider_preset", None)).currentData() if safe(getattr(self, "_tts_provider_preset", None)) else "custom",
+                    "model": safe(getattr(self, "_tts_api_model", None)).text().strip() if safe(getattr(self, "_tts_api_model", None)) else "",
+                    "voice": safe(getattr(self, "_tts_api_voice", None)).text().strip() if safe(getattr(self, "_tts_api_voice", None)) else "",
+                    "response_format": safe(getattr(self, "_tts_response_format", None)).currentData() if safe(getattr(self, "_tts_response_format", None)) else "wav"}
         s["asr"] = {"enabled": safe(getattr(self, "_asr_enabled", None)).isChecked() if safe(getattr(self, "_asr_enabled", None)) else False,
                     "model_path": safe(getattr(self, "_asr_model", None)).text().strip() if safe(getattr(self, "_asr_model", None)) else "",
                     "hotkey": safe(getattr(self, "_asr_hotkey", None)).text().strip() if safe(getattr(self, "_asr_hotkey", None)) else "Ctrl+Alt+Space",

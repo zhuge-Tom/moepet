@@ -22,7 +22,15 @@ def tts_ready(config) -> bool:
         return False
     if config.get("tts", "provider", default="gpt_sovits_local") == "gpt_sovits_local":
         return bool(config.get("tts", "model_path", default=""))
+    provider = config.get("tts", "provider", default="gpt_sovits_local")
     base_url = config.get("tts", "base_url", default="")
+    if provider == "openai_compatible":
+        return bool(
+            base_url
+            and config.get("tts", "model", default="")
+            and config.get("tts", "voice", default="")
+            and (is_local_endpoint(base_url) or has_secret(config, "tts"))
+        )
     return bool(
         base_url
         and config.get("tts", "remote_reference_audio", default="")

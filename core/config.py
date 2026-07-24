@@ -42,13 +42,15 @@ DEFAULTS = {
         "model": "whisper-1", "language": "",
     },
     "tts": {
-        "enabled": False, "model_path": "", "auto_play": True,
+        "enabled": True, "model_path": "vendor/gpt_sovits_cpu", "auto_play": True,
         "speed": 1.0, "volume": 1.0,
         "provider": "gpt_sovits_local", "base_url": "", "api_key": "",
         "local_api_url": "http://127.0.0.1:9880",
-        "local_python": "", "local_config": "GPT_SoVITS/configs/noir_v2proplus.yaml",
+        "local_python": "vendor/gpt_sovits_cpu/.venv/Scripts/python.exe",
+        "local_config": "characters/noir/voice/noir_cpu.yaml",
         "remote_reference_audio": "",
-        "model": "", "voice": "",
+        "preset": "custom", "model": "", "voice": "", "response_format": "wav",
+        "cpu_threads": 4, "streaming_mode": 3, "fragment_interval": 0.12,
     },
     "screen_capture": {
         "hotkey": "Ctrl+Alt+O", "ocr_model_path": "", "keep_captures": False,
@@ -83,8 +85,9 @@ DEFAULTS = {
         "format_prompt": "",
     },
     "position": {
-        "pet_x": 1105,
-        "pet_y": 364,
+        # Screenshot-matched startup location selected by the user.
+        "pet_x": 1144,
+        "pet_y": 472,
         "dialog_x": -1,
         "dialog_y": -1,
     },
@@ -94,8 +97,8 @@ DEFAULTS = {
         "height": 240,
         # Screenshot-matched initial placement above Noir. Once the user
         # drags the dialog, the saved relative offset overrides these values.
-        "offset_x": -61,
-        "offset_y": -104,
+        "offset_x": -66,
+        "offset_y": -96,
     },
 }
 
@@ -120,6 +123,19 @@ class Config:
                     if self._data.get("memory", {}).get(key) is not True:
                         self._data.setdefault("memory", {})[key] = True
                         migrated = True
+                # One-time upgrade from the previous screenshot-matched pet
+                # location to the user's final on-screen placement.
+                position = self._data.setdefault("position", {})
+                if (position.get("pet_x"), position.get("pet_y")) == (1136, 458):
+                    position["pet_x"], position["pet_y"] = 1144, 472
+                    migrated = True
+                # Speech playback is a built-in behavior now; the settings
+                # page no longer exposes switches that could leave it off.
+                tts = self._data.setdefault("tts", {})
+                if tts.get("enabled") is not True or tts.get("auto_play") is not True:
+                    tts["enabled"] = True
+                    tts["auto_play"] = True
+                    migrated = True
                 for section in ("llm", "vision", "asr", "tts"):
                     migrated = self._migrate_secret(section, stored) or migrated
                 # A pasted document must never be treated as an API credential.

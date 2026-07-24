@@ -1,0 +1,22 @@
+# Minimal runtime used by Moepet's Japanese-only local TTS service.
+numpy<2.0
+av
+tqdm
+pypinyin
+pyopenjtalk>=0.4.1
+g2p_en
+tokenizers
+einops
+PyYAML
+psutil
+jieba_fast
+split-lang
+fast_langdetect>=0.3.1
+wordsegment
+ToJyutping
+g2pk2
+ko_pron
+fastapi>=0.115.2
+uvicorn[standard]
+pydantic<=2.10.6
+python-multipart
