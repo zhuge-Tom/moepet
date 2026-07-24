@@ -296,6 +296,21 @@ class TTSService(BackgroundService):
         return parts or [text.strip()]
 
     @staticmethod
+    def _split_japanese_for_low_latency(text: str, target_chars: int = 8) -> list[str]:
+        """Bound every CPU segment while preserving the complete Japanese text."""
+        remaining = text.strip()
+        parts = []
+        while len(remaining) > target_chars:
+            window = remaining[:target_chars]
+            boundary = max(*(window.rfind(mark) for mark in "、。！？!?"))
+            cut = boundary + 1 if boundary >= max(3, target_chars // 2) else target_chars
+            parts.append(remaining[:cut])
+            remaining = remaining[cut:]
+        if remaining:
+            parts.append(remaining)
+        return parts
+
+    @staticmethod
     def _speech_url(base_url: str) -> str:
         endpoint = base_url.rstrip("/")
         return endpoint if endpoint.endswith("/audio/speech") else endpoint + "/audio/speech"
@@ -340,6 +355,12 @@ class JapaneseTranslationService(BackgroundService):
     """Translate a visible Chinese reply into speech-only Japanese."""
 
     @staticmethod
+    def _clean_speech_translation(text: str) -> str:
+        """Remove reasoning wrappers while preserving the complete translation."""
+        text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
+        return text.strip(" \t\r\n\"'「」『』")
+
+    @staticmethod
     def _short_speech_translation(text: str, limit: int = 18) -> str:
         """Keep speech translation to one compact sentence for CPU latency."""
         text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
@@ -366,8 +387,8 @@ class JapaneseTranslationService(BackgroundService):
                 "stream": False,
                 "messages": [
                     {"role": "system", "content": (
-                        "将用户给出的中文角色回复翻译成自然、简短的日语。"
-                        "为低延迟本地语音，只保留一个最核心的句子，尽量不超过 18 个日文字符。"
+                        "将用户给出的中文角色回复完整翻译成自然、简短的日语。"
+                        "保留全部句子和信息，不得总结、删减或截断。"
                         "只输出日文译文；不要思考过程、解释、引号、中文或罗马音。")},
                     {"role": "user", "content": text.strip()},
                 ],
@@ -378,7 +399,7 @@ class JapaneseTranslationService(BackgroundService):
             )
             with urlopen(request, timeout=90) as response:
                 data = json.loads(response.read().decode("utf-8"))
-            translated = self._short_speech_translation(
+            translated = self._clean_speech_translation(
                 data.get("choices", [{}])[0].get("message", {}).get("content", ""))
             if not translated:
                 raise RuntimeError("聊天模型没有返回日文译文")

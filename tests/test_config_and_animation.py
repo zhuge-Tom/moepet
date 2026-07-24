@@ -323,12 +323,12 @@ def test_llm_stream_keeps_a_final_sse_frame_without_a_newline(qapp):
     assert replies == ["ok"]
 
 
-def test_llm_bilingual_stream_routes_japanese_to_speech_and_chinese_to_chat():
+def test_llm_bilingual_stream_routes_every_chinese_clause_to_matching_speech():
     from core.llm_service import LLMService
 
     service = LLMService()
     service._speech_protocol_active = True
-    service._speech_stage = "await_jp"
+    service._speech_stage = "await_zh"
     service._speech_buffer = ""
     service._speech_sent = False
     service._buffer_out = ""
@@ -336,12 +336,12 @@ def test_llm_bilingual_stream_routes_japanese_to_speech_and_chinese_to_chat():
     service.speech_ready.connect(speech.append)
     service.chunk_received.connect(visible.append)
 
-    service._accept_stream_content("<jp>大丈夫だよ。</jp><zh>没")
-    service._accept_stream_content("关系。</zh>")
+    service._accept_stream_content("<zh>没关系。</zh><jp>大丈夫だよ。</jp>")
+    service._accept_stream_content("<zh>我会陪着你。</zh><jp>そばにいるよ。</jp>")
 
-    assert speech == ["大丈夫だよ。"]
-    assert "".join(visible) == "没关系。"
-    assert service._buffer_out == "没关系。"
+    assert speech == ["大丈夫だよ。", "そばにいるよ。"]
+    assert "".join(visible) == "没关系。我会陪着你。"
+    assert service._buffer_out == "没关系。我会陪着你。"
 
 
 def test_tts_error_is_logged_without_writing_to_chat(caplog):
@@ -545,6 +545,16 @@ def test_japanese_tts_default_first_fragment_is_short_for_cpu_latency():
     assert parts[0] == "あ、い、う、"
 
 
+def test_low_latency_japanese_split_is_complete_and_strictly_bounded():
+    from core.tts_service import TTSService
+
+    text = "私はいつでもあなたのそばにいるから、安心して休んでね。"
+    parts = TTSService._split_japanese_for_low_latency(text)
+
+    assert "".join(parts) == text
+    assert all(1 <= len(part) <= 8 for part in parts)
+
+
 def test_japanese_translation_is_trimmed_for_low_latency_speech():
     from core.tts_service import JapaneseTranslationService
 
@@ -552,6 +562,32 @@ def test_japanese_translation_is_trimmed_for_low_latency_speech():
         "<think>reasoning</think>「私はあなたのそばにいるから、安心してね。」追加の説明です。")
 
     assert text == "私はあなたのそばにいるから、安心して。"
+
+
+def test_japanese_translation_fallback_preserves_all_sentences():
+    from core.tts_service import JapaneseTranslationService
+
+    text = JapaneseTranslationService._clean_speech_translation(
+        "<think>reasoning</think>「大丈夫だよ。ずっとそばにいるよ。」")
+
+    assert text == "大丈夫だよ。ずっとそばにいるよ。"
+
+
+def test_bilingual_speech_queues_every_complete_japanese_segment():
+    from collections import deque
+
+    manager = type("Manager", (), {})()
+    manager._llm_bilingual_speech_expected = True
+    manager._llm_bilingual_speech_epoch = manager._role_epoch = 2
+    manager._tts_direct_japanese_queue = deque()
+    manager._start_next_bilingual_speech = lambda: None
+
+    PetManager._on_llm_speech_ready(manager, "最初の文です。")
+    PetManager._on_llm_speech_ready(manager, "次の文も読みます。")
+
+    queued = list(manager._tts_direct_japanese_queue)
+    assert "".join(queued) == "最初の文です。次の文も読みます。"
+    assert all(1 <= len(part) <= 8 for part in queued)
 
 
 def test_local_tts_prewarm_passes_the_reference_cache_inputs():
@@ -660,10 +696,10 @@ def test_windows_audio_player_does_not_require_qt_multimedia(qapp, tmp_path, mon
     assert calls == [(str(audio), fake_winsound.SND_FILENAME | fake_winsound.SND_ASYNC)]
 
 
-def test_memory_screen_uses_responding_copy():
+def test_chat_dispatch_skips_blocking_memory_screen_request():
     source = Path("pet_manager.py").read_text(encoding="utf-8")
-    assert 'append_stream("正在回应...")' in source
-    assert "正在回忆" not in source
+    assert "self._dispatch_chat_request(text, self._combined_turn_context(text))" in source
+    assert "if self._start_memory_screen(text):" not in source
 
 
 def test_live2d_receives_speak_state_while_static_portraits_keep_their_frame(tmp_path, monkeypatch):

@@ -154,7 +154,7 @@ class LLMService(QObject):
         self._buffer = ""
         self._turn_context = ""
         self._speech_protocol_active = self._speech_protocol and stream
-        self._speech_stage = "await_jp"
+        self._speech_stage = "await_zh"
         self._speech_buffer = ""
         self._speech_sent = False
 
@@ -225,33 +225,13 @@ class LLMService(QObject):
             self.chunk_received.emit(content)
 
     def _drain_speech_protocol(self, final: bool = False) -> None:
-        """Parse ``<jp>…</jp><zh>…</zh>`` across arbitrary SSE chunks."""
+        """Parse repeated ``<zh>…</zh><jp>…</jp>`` streaming pairs."""
         while self._speech_protocol_active:
-            if self._speech_stage == "await_jp":
-                marker = self._speech_buffer.find("<jp>")
-                if marker < 0:
-                    # Do not hide a provider that ignores the requested format.
-                    if final or len(self._speech_buffer) > 32:
-                        self._speech_protocol_active = False
-                        self._emit_visible_chunk(self._speech_buffer)
-                        self._speech_buffer = ""
-                    return
-                self._speech_buffer = self._speech_buffer[marker + 4:]
-                self._speech_stage = "jp"
-            if self._speech_stage == "jp":
-                marker = self._speech_buffer.find("</jp>")
-                if marker < 0:
-                    return
-                japanese = self._speech_buffer[:marker].strip()
-                self._speech_buffer = self._speech_buffer[marker + 5:]
-                self._speech_stage = "await_zh"
-                if japanese and not self._speech_sent:
-                    self._speech_sent = True
-                    self.speech_ready.emit(japanese)
             if self._speech_stage == "await_zh":
                 marker = self._speech_buffer.find("<zh>")
                 if marker < 0:
-                    if final:
+                    # Do not hide a provider that ignores the requested format.
+                    if final or len(self._speech_buffer) > 32:
                         self._speech_protocol_active = False
                         self._emit_visible_chunk(self._speech_buffer)
                         self._speech_buffer = ""
@@ -263,19 +243,44 @@ class LLMService(QObject):
                 if marker >= 0:
                     self._emit_visible_chunk(self._speech_buffer[:marker])
                     self._speech_buffer = self._speech_buffer[marker + 5:]
-                    self._speech_stage = "done"
-                    self._speech_protocol_active = False
-                    return
+                    self._speech_stage = "await_jp"
+                    continue
                 if final:
                     self._emit_visible_chunk(self._speech_buffer)
                     self._speech_buffer = ""
                     self._speech_protocol_active = False
                     return
-                # Keep only a possible split closing marker for the next SSE
-                # packet; text before it is safe to show immediately.
                 if len(self._speech_buffer) > 4:
                     self._emit_visible_chunk(self._speech_buffer[:-4])
                     self._speech_buffer = self._speech_buffer[-4:]
+                return
+            if self._speech_stage == "await_jp":
+                marker = self._speech_buffer.find("<jp>")
+                if marker < 0:
+                    if final:
+                        self._speech_protocol_active = False
+                        self._speech_buffer = ""
+                    return
+                self._speech_buffer = self._speech_buffer[marker + 4:]
+                self._speech_stage = "jp"
+            if self._speech_stage == "jp":
+                marker = self._speech_buffer.find("</jp>")
+                if marker >= 0:
+                    japanese = self._speech_buffer[:marker].strip()
+                    self._speech_buffer = self._speech_buffer[marker + 5:]
+                    self._speech_stage = "await_zh"
+                    if japanese:
+                        self._speech_sent = True
+                        self.speech_ready.emit(japanese)
+                    continue
+                if final:
+                    japanese = self._speech_buffer.strip()
+                    if japanese:
+                        self._speech_sent = True
+                        self.speech_ready.emit(japanese)
+                    self._speech_buffer = ""
+                    self._speech_protocol_active = False
+                    return
                 return
 
     def _on_stream_finished(self):

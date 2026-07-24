@@ -116,6 +116,7 @@ class PetManager:
         # then translate it, then synthesize it.  Keep a small ordered queue
         # so the first natural streaming clause can start that work early.
         self._tts_text_queue = deque()
+        self._tts_direct_japanese_queue = deque()
         self._tts_segment_inflight = False
         self._tts_stream_buffer = ""
         self._tts_stream_started = False
@@ -212,10 +213,11 @@ class PetManager:
             full_prompt += "\n\n" + format_prompt
         if bilingual_speech:
             full_prompt += (
-                "\n\n本地语音协议：严格按此顺序输出，且不要输出任何其他内容："
-                "<jp>一条自然、极短的日文语音（不超过10个日文字符）</jp>"
-                "<zh>对应的简短中文回复</zh>。"
-                "日文先输出；中文必须保留原意。")
+                "\n\n本地语音分段协议：只输出一个或多个连续片段："
+                "<zh>一小句中文</zh><jp>完整对应的自然日文</jp>。"
+                "中文必须先输出；每段中文尽量为 4 到 14 个汉字并在自然标点处结束；"
+                "所有回答内容必须放入 zh 片段，且每个 zh 都必须紧跟对应 jp，不得省略、总结或截断。"
+                "尽量减少片段数量，不要输出协议外文字。")
         if full_prompt:
             self._llm.set_system_prompt(full_prompt)
 
@@ -579,10 +581,9 @@ class PetManager:
             return
 
         self._last_user_text = text
-        if self._start_memory_screen(text):
-            self._dialog.start_stream()
-            self._dialog.append_stream("正在回应...")
-            return
+        # Relevant memories are already retrieved locally by
+        # ``_combined_turn_context``. A second non-streaming LLM screening
+        # request here used to delay every real response by several seconds.
         self._dispatch_chat_request(text, self._combined_turn_context(text))
 
     def _dispatch_chat_request(self, text: str, turn_context: str) -> None:
@@ -1287,6 +1288,7 @@ class PetManager:
     def _begin_streaming_local_tts(self, llm_streaming: bool) -> None:
         """Allow the first local-TTS clause to overlap LLM streaming."""
         self._tts_text_queue.clear()
+        self._tts_direct_japanese_queue.clear()
         self._tts_segment_inflight = False
         self._tts_stream_buffer = ""
         self._tts_stream_started = False
@@ -1300,16 +1302,36 @@ class PetManager:
         )
 
     def _on_llm_speech_ready(self, japanese_text: str) -> None:
-        """Start local synthesis as soon as the first LLM response section ends."""
+        """Queue every translated segment without truncating the spoken reply."""
         if (not getattr(self, "_llm_bilingual_speech_expected", False)
                 or self._role_epoch != getattr(self, "_llm_bilingual_speech_epoch", None)):
             return
-        japanese_text = JapaneseTranslationService._short_speech_translation(japanese_text, limit=10)
+        japanese_text = JapaneseTranslationService._clean_speech_translation(japanese_text)
         if not japanese_text:
             return
         self._llm_bilingual_speech_received = True
+        self._tts_direct_japanese_queue.extend(
+            TTSService._split_japanese_for_low_latency(japanese_text, target_chars=8))
+        self._start_next_bilingual_speech()
+
+    def _start_next_bilingual_speech(self) -> None:
+        if (getattr(self, "_tts_segment_inflight", False)
+                or not getattr(self, "_tts_direct_japanese_queue", ())):
+            return
+        tts = getattr(self, "_tts", None)
+        if tts and getattr(tts, "is_busy", lambda: False)():
+            QTimer.singleShot(20, self._start_next_bilingual_speech)
+            return
+        japanese_text = self._tts_direct_japanese_queue.popleft()
+        self._tts_segment_inflight = True
         self._tts_epoch = self._role_epoch
-        self._on_tts_translation_done(japanese_text)
+        started = self._on_tts_translation_done(japanese_text)
+        if started is False:
+            self._tts_segment_inflight = False
+            self._tts_direct_japanese_queue.appendleft(japanese_text)
+            QTimer.singleShot(20, self._start_next_bilingual_speech)
+        elif started is None:
+            self._tts_segment_inflight = False
 
     @staticmethod
     def _take_streaming_speech_prefix(text: str, minimum_chars: int = 4,
@@ -1390,12 +1412,12 @@ class PetManager:
 
     def _on_tts_translation_done(self, japanese_text: str):
         if getattr(self, "_tts_epoch", None) != self._role_epoch:
-            return
+            return None
         char = self._char_data.get(self.config.current_character)
         if not char:
             self._tts_epoch = None
             self._on_tts_error("未找到当前角色")
-            return
+            return None
         provider = self.config.get("tts", "provider", default="gpt_sovits_cpu")
         is_local = provider in {"gpt_sovits_cpu", "gpt_sovits_gpu", "gpt_sovits_local"}
         reference = self.config.get("tts", "local_reference_audio", default="") if is_local else (
@@ -1404,15 +1426,18 @@ class PetManager:
         if not reference:
             self._tts_epoch = None
             self._on_tts_error("GPT-SoVITS 需要角色的授权参考音频")
-            return
+            return None
         try:
             bundle, assets, generated_config = self._local_tts_runtime() if is_local else (None, None, None)
         except RuntimeError as exc:
             self._tts_epoch = None
             self._on_tts_error(str(exc))
-            return
+            return None
         reference_path = assets.reference_audio if is_local else reference
-        output = Path(tempfile.gettempdir()) / "moepet-tts.wav"
+        handle = tempfile.NamedTemporaryFile(
+            prefix="moepet-tts-", suffix=".wav", delete=False)
+        output = Path(handle.name)
+        handle.close()
         base_url = (self.config.get("tts", "local_api_url", default="http://127.0.0.1:9880")
                     if is_local else self.config.get("tts", "base_url", default=""))
         speed = self.config.get("tts", "speed", default=1.0)
@@ -1444,6 +1469,9 @@ class PetManager:
         )
         if started:
             signals.tts_state_changed.emit(True)
+        else:
+            output.unlink(missing_ok=True)
+        return bool(started)
 
     def _on_tts_done(self, audio_path):
         if not audio_path:
@@ -1458,6 +1486,7 @@ class PetManager:
             self._play_next_tts_fragment()
         if getattr(self, "_tts_segment_inflight", False):
             self._tts_segment_inflight = False
+            QTimer.singleShot(0, self._start_next_bilingual_speech)
             QTimer.singleShot(0, self._start_next_streaming_speech)
 
     def _play_next_tts_fragment(self):
@@ -1500,11 +1529,18 @@ class PetManager:
         if getattr(self, "_tts_epoch", None) not in (None, self._role_epoch):
             return
         self._tts_epoch = None
+        self._tts_segment_inflight = False
         self._tts_available = False
         queue = getattr(self, "_tts_audio_queue", None)
         if queue is not None:
             while queue:
                 Path(queue.popleft()).unlink(missing_ok=True)
+        direct_queue = getattr(self, "_tts_direct_japanese_queue", None)
+        if direct_queue is not None:
+            direct_queue.clear()
+        text_queue = getattr(self, "_tts_text_queue", None)
+        if text_queue is not None:
+            text_queue.clear()
         # The coordinator can be exercised without the optional audio queue.
         if hasattr(self, "_show_pending_tts_text"):
             self._show_pending_tts_text()
