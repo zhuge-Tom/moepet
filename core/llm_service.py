@@ -31,7 +31,8 @@ class LLMService(QObject):
 
     def configure(self, base_url: str, api_key: str, model: str,
                   post_processing: str = "", ignore_format_error: bool = True,
-                  clean_response: bool = True, history_message_limit: int = 0):
+                  clean_response: bool = True, history_message_limit: int = 0,
+                  max_tokens: int = 0):
         """设置 API 参数"""
         self._base_url = base_url.rstrip("/")
         self._api_key = api_key
@@ -40,6 +41,7 @@ class LLMService(QObject):
         self._ignore_format_error = bool(ignore_format_error)
         self._clean_enabled = bool(clean_response)
         self._history_message_limit = max(0, int(history_message_limit or 0))
+        self._max_tokens = max(0, int(max_tokens or 0))
 
     def _clean_response(self, text: str) -> str:
         """Keep the displayed reply as concise dialogue rather than role-play markup."""
@@ -138,6 +140,8 @@ class LLMService(QObject):
             "messages": messages,
             "stream": stream,
         }
+        if getattr(self, "_max_tokens", 0):
+            body["max_tokens"] = self._max_tokens
         # Transient turns are only request instructions, never conversation
         # state for subsequent requests or history persistence.
         self._messages = [item for item in self._messages if not item.get("transient", False)]

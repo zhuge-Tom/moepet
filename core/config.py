@@ -32,6 +32,7 @@ DEFAULTS = {
         "api_key": "",
         "model": "deepseek-chat",
         "stream": True,
+        "max_tokens": 48,
         "post_processing": "",
         "ignore_format_error": True,
     },

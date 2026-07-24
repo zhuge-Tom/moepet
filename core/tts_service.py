@@ -131,11 +131,16 @@ class TTSService(BackgroundService):
             "TOKENIZERS_PARALLELISM": "false",
             "MOEPET_JA_ONLY": "1",
         }
+        # api_v2.py consumes these at startup to calculate and retain the
+        # fixed Noir reference cache.  Without them, merely opening /docs
+        # preloads weights but the first real reply still pays reference-audio
+        # analysis and decoder warm-up costs.
+        if reference_audio:
+            env["MOEPET_TTS_REFERENCE"] = str(reference_audio)
+        if prompt_text:
+            env["MOEPET_TTS_PROMPT"] = str(prompt_text)
         if device == "cpu":
             env["CUDA_VISIBLE_DEVICES"] = "-1"
-        # The selected package is an external, stock GPT-SoVITS distribution.
-        # Do not rely on Moepet-specific environment hooks that only existed in
-        # the removed bundled fork; every request carries its own reference.
         return env
 
     @staticmethod

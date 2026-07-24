@@ -183,6 +183,7 @@ class PetManager:
             post_processing=self.config.get("llm", "post_processing", default=""),
             ignore_format_error=self.config.get("llm", "ignore_format_error", default=True),
             history_message_limit=int(self.config.get("memory", "recent_turns", default=12)) * 2,
+            max_tokens=self.config.get("llm", "max_tokens", default=48),
         )
         char = self._char_data.get(self.config.current_character)
         prompt_config = char.character_prompt if char else {}

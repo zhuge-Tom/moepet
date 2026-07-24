@@ -405,6 +405,16 @@ def test_japanese_tts_default_first_fragment_is_short_for_cpu_latency():
     assert parts[0] == "あ、い、う、"
 
 
+def test_local_tts_prewarm_passes_the_reference_cache_inputs():
+    from core.tts_service import TTSService
+
+    env = TTSService._local_environment(
+        "cpu", 4, "voice_assets/noir/reference.wav", "こんにちは。")
+
+    assert env["MOEPET_TTS_REFERENCE"] == "voice_assets/noir/reference.wav"
+    assert env["MOEPET_TTS_PROMPT"] == "こんにちは。"
+
+
 def test_segmented_gpt_sovits_requests_complete_wav_files(qapp, tmp_path, monkeypatch):
     import json as json_module
     import time
