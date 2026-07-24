@@ -301,6 +301,28 @@ def test_llm_response_cleaning_removes_stage_directions_and_markup():
     assert service._clean_response(text) == "你好呀。"
 
 
+def test_llm_stream_keeps_a_final_sse_frame_without_a_newline(qapp):
+    from PySide6.QtNetwork import QNetworkReply
+    from core.llm_service import LLMService
+
+    class Reply:
+        def error(self): return QNetworkReply.NoError
+        def errorString(self): return ""
+        def readAll(self): return type("Bytes", (), {"data": lambda _self: b""})()
+        def deleteLater(self): pass
+
+    service = LLMService()
+    service.configure("http://localhost:1", "", "test")
+    replies = []
+    service.response_finished.connect(replies.append)
+    service._current_reply = Reply()
+    service._buffer = 'data: {"choices":[{"delta":{"content":"ok"}}]}'
+
+    service._on_stream_finished()
+
+    assert replies == ["ok"]
+
+
 def test_tts_error_is_logged_without_writing_to_chat(caplog):
     manager = type("Manager", (), {})()
     manager._tts_epoch = 0

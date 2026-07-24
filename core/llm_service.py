@@ -31,8 +31,7 @@ class LLMService(QObject):
 
     def configure(self, base_url: str, api_key: str, model: str,
                   post_processing: str = "", ignore_format_error: bool = True,
-                  clean_response: bool = True, history_message_limit: int = 0,
-                  max_tokens: int = 0):
+                  clean_response: bool = True, history_message_limit: int = 0):
         """设置 API 参数"""
         self._base_url = base_url.rstrip("/")
         self._api_key = api_key
@@ -41,7 +40,6 @@ class LLMService(QObject):
         self._ignore_format_error = bool(ignore_format_error)
         self._clean_enabled = bool(clean_response)
         self._history_message_limit = max(0, int(history_message_limit or 0))
-        self._max_tokens = max(0, int(max_tokens or 0))
 
     def _clean_response(self, text: str) -> str:
         """Keep the displayed reply as concise dialogue rather than role-play markup."""
@@ -140,8 +138,6 @@ class LLMService(QObject):
             "messages": messages,
             "stream": stream,
         }
-        if getattr(self, "_max_tokens", 0):
-            body["max_tokens"] = self._max_tokens
         # Transient turns are only request instructions, never conversation
         # state for subsequent requests or history persistence.
         self._messages = [item for item in self._messages if not item.get("transient", False)]
@@ -181,7 +177,10 @@ class LLMService(QObject):
             return
         data = self._current_reply.readAll().data().decode("utf-8", errors="replace")
         self._buffer += data
+        self._consume_stream_lines()
 
+    def _consume_stream_lines(self):
+        """Consume complete SSE lines already buffered from the active reply."""
         while "\n" in self._buffer:
             line, self._buffer = self._buffer.split("\n", 1)
             line = line.strip()
@@ -219,6 +218,12 @@ class LLMService(QObject):
             reply.deleteLater()
             return
 
+        # A few OpenAI-compatible gateways close their final SSE data frame
+        # without a trailing newline. Parse that valid final frame before
+        # deciding the model returned no content.
+        if self._buffer.strip():
+            self._buffer += "\n"
+            self._consume_stream_lines()
         full_text = getattr(self, "_buffer_out", "")
         # 清理 think 标签等模型杂项
         try:
