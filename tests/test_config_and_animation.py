@@ -361,6 +361,33 @@ def test_audio_sync_does_not_display_stream_chunks():
     assert received == []
 
 
+def test_streaming_speech_prefix_prefers_a_short_natural_clause():
+    prefix, remaining = PetManager._take_streaming_speech_prefix("我会陪着你，别担心。")
+    assert prefix == "我会陪着你，"
+    assert remaining == "别担心。"
+
+    prefix, remaining = PetManager._take_streaming_speech_prefix("我会一直陪着你呀")
+    assert prefix == "我会一直陪着你呀"
+    assert remaining == ""
+
+
+def test_llm_chunk_starts_local_speech_before_the_full_reply_arrives():
+    manager = type("Manager", (), {})()
+    manager._dialog = None
+    manager._tts_stream_enabled = True
+    manager._tts_stream_buffer = ""
+    manager._tts_stream_started = False
+    manager._should_sync_text_to_audio = lambda: False
+    manager._take_streaming_speech_prefix = PetManager._take_streaming_speech_prefix
+    spoken = []
+    manager._enqueue_streaming_speech = spoken.append
+
+    PetManager._on_llm_chunk(manager, "我会陪着你，")
+
+    assert spoken == ["我会陪着你，"]
+    assert manager._tts_stream_started is True
+
+
 def test_audio_sync_requires_a_successful_tts_request(tmp_path):
     manager = type("Manager", (), {})()
     manager.config = Config(tmp_path / "config.json")

@@ -110,6 +110,14 @@ class PetManager:
         self._tts_available = False
         self._tts_audio_queue = deque()
         self._tts_audio_playing = False
+        # Local Japanese speech used to wait for the entire Chinese response,
+        # then translate it, then synthesize it.  Keep a small ordered queue
+        # so the first natural streaming clause can start that work early.
+        self._tts_text_queue = deque()
+        self._tts_segment_inflight = False
+        self._tts_stream_buffer = ""
+        self._tts_stream_started = False
+        self._tts_stream_enabled = False
         self._screen_observer = ScreenObserver()
         self._screen_observer.observation_requested.connect(self._observe_screen)
         self._configure_llm()
@@ -566,6 +574,7 @@ class PetManager:
         QTimer.singleShot(1400, lambda: self._show_delayed_thinking(request_epoch))
 
         stream = self.config.get("llm", "stream", default=True)
+        self._begin_streaming_local_tts(stream)
         if stream:
             self._dialog.start_stream()
             self._llm.chunk_received.connect(self._on_llm_chunk)
@@ -680,6 +689,13 @@ class PetManager:
         # them here would flash the reply before the WAV is ready.
         if self._dialog and not self._should_sync_text_to_audio():
             self._dialog.append_stream(chunk)
+        if getattr(self, "_tts_stream_enabled", False):
+            self._tts_stream_buffer += chunk
+            segment, remaining = self._take_streaming_speech_prefix(self._tts_stream_buffer)
+            if segment:
+                self._tts_stream_buffer = remaining
+                self._tts_stream_started = True
+                self._enqueue_streaming_speech(segment)
 
     def _on_llm_done(self, full_text: str):
         """流式完成"""
@@ -694,7 +710,8 @@ class PetManager:
         self._show_reply_expression(full_text)
         if sync_text:
             self._queue_text_for_audio(full_text)
-        if not self._speak(full_text):
+        streamed_speech = self._finish_streaming_local_tts()
+        if not streamed_speech and not self._speak(full_text):
             self._animate_text_speech(full_text)
             if sync_text:
                 self._show_pending_tts_text()
@@ -1241,6 +1258,73 @@ class PetManager:
             signals.tts_state_changed.emit(True)
         return started
 
+    def _begin_streaming_local_tts(self, llm_streaming: bool) -> None:
+        """Allow the first local-TTS clause to overlap LLM streaming."""
+        self._tts_text_queue.clear()
+        self._tts_segment_inflight = False
+        self._tts_stream_buffer = ""
+        self._tts_stream_started = False
+        provider = self.config.get("tts", "provider", default="gpt_sovits_cpu")
+        self._tts_stream_enabled = bool(
+            llm_streaming
+            and self.config.get("tts", "enabled", default=False)
+            and self.config.get("tts", "auto_play", default=True)
+            and provider in {"gpt_sovits_cpu", "gpt_sovits_gpu", "gpt_sovits_local"}
+        )
+
+    @staticmethod
+    def _take_streaming_speech_prefix(text: str, minimum_chars: int = 4,
+                                      target_chars: int = 8) -> tuple[str, str]:
+        """Return an early, speakable Chinese clause without waiting for EOS."""
+        if len(text) < minimum_chars:
+            return "", text
+        for index, char in enumerate(text):
+            if char in "，、。！？!?" and index + 1 >= minimum_chars:
+                return text[:index + 1], text[index + 1:]
+        if len(text) >= target_chars:
+            return text[:target_chars], text[target_chars:]
+        return "", text
+
+    def _enqueue_streaming_speech(self, text: str) -> None:
+        if text.strip():
+            self._tts_text_queue.append(text.strip())
+        self._start_next_streaming_speech()
+
+    def _start_next_streaming_speech(self) -> None:
+        if (not getattr(self, "_tts_stream_enabled", False)
+                or getattr(self, "_tts_segment_inflight", False)
+                or not getattr(self, "_tts_text_queue", ())):
+            return
+        # ``completed`` is emitted just before BackgroundService clears its
+        # worker flag. Yield one event-loop turn instead of discarding the
+        # next clause during that tiny hand-off window.
+        translator = getattr(self, "_tts_translator", None)
+        tts = getattr(self, "_tts", None)
+        if ((translator and getattr(translator, "is_busy", lambda: False)())
+                or (tts and getattr(tts, "is_busy", lambda: False)())):
+            QTimer.singleShot(20, self._start_next_streaming_speech)
+            return
+        text = self._tts_text_queue.popleft()
+        self._tts_segment_inflight = True
+        if not self._speak(text):
+            self._tts_segment_inflight = False
+
+    def _finish_streaming_local_tts(self) -> bool:
+        if not getattr(self, "_tts_stream_enabled", False):
+            return False
+        self._tts_stream_enabled = False
+        if not getattr(self, "_tts_stream_started", False):
+            return False
+        remaining = getattr(self, "_tts_stream_buffer", "").strip()
+        self._tts_stream_buffer = ""
+        if remaining:
+            self._tts_text_queue.append(remaining)
+        # Keep the queue live after the LLM finishes; only new stream chunks
+        # are disabled above.
+        self._tts_stream_enabled = True
+        self._start_next_streaming_speech()
+        return True
+
     def _should_sync_text_to_audio(self) -> bool:
         return bool(self.config.get("tts", "enabled", default=False)
                     and self.config.get("tts", "auto_play", default=True)
@@ -1305,7 +1389,11 @@ class PetManager:
             local_python=str(bundle.python) if is_local else "",
             local_config=str(generated_config) if is_local else "",
             cpu_threads=self.config.get("tts", "cpu_threads", default=4),
-            streaming_mode=self.config.get("tts", "streaming_mode", default=3),
+            # Each early clause is already deliberately short. One finalized
+            # WAV avoids another internal split and lets the next clause begin
+            # as soon as this request completes.
+            streaming_mode=(0 if getattr(self, "_tts_segment_inflight", False)
+                            else self.config.get("tts", "streaming_mode", default=3)),
             fragment_interval=self.config.get("tts", "fragment_interval", default=0.12),
             device=self.config.get("tts", "local_device", default="cuda"),
         )
@@ -1320,8 +1408,12 @@ class PetManager:
             return
         self._tts_audio_queue.append(str(audio_path))
         if self._tts_audio_playing:
-            return
-        self._play_next_tts_fragment()
+            pass
+        else:
+            self._play_next_tts_fragment()
+        if getattr(self, "_tts_segment_inflight", False):
+            self._tts_segment_inflight = False
+            QTimer.singleShot(0, self._start_next_streaming_speech)
 
     def _play_next_tts_fragment(self):
         if not self._tts_audio_queue:
