@@ -54,6 +54,7 @@ DEFAULTS = {
         "remote_reference_audio": "",
         "preset": "custom", "model": "", "voice": "", "response_format": "wav",
         "cpu_threads": 4, "streaming_mode": 3, "fragment_interval": 0.12,
+        "sync_text_to_audio": False,
     },
     "screen_capture": {
         "hotkey": "Ctrl+Alt+O", "ocr_model_path": "", "keep_captures": False,
@@ -149,6 +150,12 @@ class Config:
                     if str(tts.get("local_config", "")).replace("\\", "/").endswith(
                             "characters/noir/voice/noir_cpu.yaml"):
                         tts["local_config"] = ""
+                    migrated = True
+                # Earlier builds enabled synchronization without exposing a
+                # user control.  Prefer immediate text streaming; speech is
+                # still synthesized concurrently in short CPU-friendly parts.
+                if tts.get("sync_text_to_audio") is True:
+                    tts["sync_text_to_audio"] = False
                     migrated = True
                 for section in ("llm", "vision", "asr", "tts"):
                     migrated = self._migrate_secret(section, stored) or migrated

@@ -240,7 +240,7 @@ class TTSService(BackgroundService):
         return self.run(work)
 
     @staticmethod
-    def _split_japanese_for_streaming(text: str, target_chars: int = 10) -> list[str]:
+    def _split_japanese_for_streaming(text: str, target_chars: int = 6) -> list[str]:
         """Create natural, bounded clauses so playback can overlap synthesis."""
         clauses = [item.strip() for item in re.findall(r".+?[、。！？!?]|.+$", text.strip())
                    if item.strip()]

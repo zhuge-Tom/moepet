@@ -1244,6 +1244,7 @@ class PetManager:
     def _should_sync_text_to_audio(self) -> bool:
         return bool(self.config.get("tts", "enabled", default=False)
                     and self.config.get("tts", "auto_play", default=True)
+                    and self.config.get("tts", "sync_text_to_audio", default=False)
                     and self._tts_available)
 
     def _queue_text_for_audio(self, text: str) -> None:
@@ -1525,6 +1526,10 @@ class PetManager:
         self._register_screen_hotkey()
         self._register_asr_hotkey()
         self._configure_screen_observer()
+        # Settings may have just passed a local-TTS test. Keep (or start) the
+        # service in the background now, instead of making the first chat turn
+        # pay the model-load cost.
+        self._prewarm_local_tts()
         if self._tray:
             self._tray.set_observation_enabled(
                 self.config.get("screen_capture", "auto_observe", default=False))

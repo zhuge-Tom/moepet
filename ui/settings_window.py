@@ -731,7 +731,8 @@ class SettingsWindow(QDialog):
         if not audio_path:
             return
         if self._tts_preview_audio.play(audio_path):
-            self._tts_preview_status.setText("测试成功，正在播放声音。保存设置后聊天会自动朗读。")
+            self._tts_preview_status.setText(
+                "测试成功，模型已在后台保持预热。保存设置后，聊天可直接开始合成。")
             self._tts_preview_status.setStyleSheet("color: #71d6bb; font-size: 12px;")
         else:
             self._on_tts_preview_failed("音频已生成，但 Windows 无法播放该文件")

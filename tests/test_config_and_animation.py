@@ -344,10 +344,21 @@ def test_audio_sync_requires_a_successful_tts_request(tmp_path):
     manager.config = Config(tmp_path / "config.json")
     manager.config.set("tts", "enabled", True)
     manager.config.set("tts", "auto_play", True)
+    manager.config.set("tts", "sync_text_to_audio", True)
     manager._tts_available = False
     assert not PetManager._should_sync_text_to_audio(manager)
     manager._tts_available = True
     assert PetManager._should_sync_text_to_audio(manager)
+
+
+def test_audio_sync_is_opt_in_so_streaming_text_is_immediate(tmp_path):
+    manager = type("Manager", (), {})()
+    manager.config = Config(tmp_path / "config.json")
+    manager.config.set("tts", "enabled", True)
+    manager.config.set("tts", "auto_play", True)
+    manager._tts_available = True
+
+    assert not PetManager._should_sync_text_to_audio(manager)
 
 
 def test_remote_audio_services_require_a_key_without_starting_work(tmp_path):
@@ -384,6 +395,14 @@ def test_japanese_tts_streaming_split_preserves_text_and_natural_boundaries():
     assert "".join(parts) == text
     assert len(parts) >= 2
     assert all(part.endswith(("、", "。", "！", "？", "!", "?")) for part in parts)
+
+
+def test_japanese_tts_default_first_fragment_is_short_for_cpu_latency():
+    from core.tts_service import TTSService
+
+    parts = TTSService._split_japanese_for_streaming("あ、い、う、え、お、")
+
+    assert parts[0] == "あ、い、う、"
 
 
 def test_segmented_gpt_sovits_requests_complete_wav_files(qapp, tmp_path, monkeypatch):
