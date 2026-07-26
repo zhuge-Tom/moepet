@@ -453,10 +453,15 @@ class TTSService(BackgroundService):
             server_script = sbv2_root / "server_moepet.py"
             if not server_script.is_file():
                 raise RuntimeError(f"SBV2 服务器脚本未找到: {server_script}")
-            python = sbv2_root / "venv_cpu" / "Scripts" / "python.exe"
-            if not python.is_file():
+            # 开发环境使用 venv_cpu；发行包（Release 资产/EXE 版）内置
+            # 免安装的便携运行时 runtime/python.exe。
+            candidates = (sbv2_root / "venv_cpu" / "Scripts" / "python.exe",
+                          sbv2_root / "runtime" / "python.exe")
+            python = next((item for item in candidates if item.is_file()), None)
+            if python is None:
                 raise RuntimeError(
-                    f"SBV2 venv 未找到。请先在 {sbv2_root} 创建 venv_cpu")
+                    f"SBV2 Python 运行时未找到。请在 {sbv2_root} 准备 venv_cpu "
+                    "或解压包含 runtime 的语音资产包")
             env = {
                 **os.environ,
                 "OMP_NUM_THREADS": "4",

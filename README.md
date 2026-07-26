@@ -36,6 +36,17 @@
 
 ## 安装
 
+### 方式一：免安装 EXE（推荐，无需 Python）
+
+1. 到 [Releases](https://github.com/zhuge-Tom/moepet/releases) 下载
+   `Moepet-windows-x64.zip`，解压到任意目录。
+2. 需要本地语音时，再下载 `moepet-sbv2-noir-v1.zip`（约 1 GB，
+   自带便携 Python 运行时与全部模型），**解压到同一个目录**
+   （解压后应出现 `vendor\style_bert_vits2\` 子目录）。
+3. 双击 `Moepet.exe` 启动。
+
+### 方式二：源码运行
+
 在 PowerShell 中运行：
 
 ```powershell
@@ -47,19 +58,20 @@ powershell -ExecutionPolicy Bypass -File .\setup.ps1
 
 也可以直接双击 `启动桌宠.bat`。它会在首次运行时检测主环境，缺失时调用 `setup.ps1`，随后启动桌宠。
 
-`setup.ps1` 只会自动：
-
-1. 创建主程序的 `.venv` 并安装运行依赖。
-
-默认不会下载 GPT-SoVITS 整合包、模型权重或参考音频。这样克隆仓库保持轻量；需要 CPU 本地声音时，从“设置 → 语音合成”打开安装引导，或执行以下命令：
+`setup.ps1` 默认只创建主程序的 `.venv` 并安装运行依赖，不下载任何模型，
+克隆保持轻量、也没有 Git LFS 配额问题。语音资产按需一键安装：
 
 ```powershell
+# 默认语音：Style-Bert-VITS2 本地日语（约 1 GB，含便携运行时，推荐）
+powershell -ExecutionPolicy Bypass -File .\setup.ps1 -InstallSbv2
+
+# 备选语音：GPT-SoVITS CPU 兼容包
 powershell -ExecutionPolicy Bypass -File .\setup.ps1 -InstallCpuTts
 ```
 
-安装器会校验 Release 下载包，并将 CPU 兼容包放到 `vendor/gpt_sovits_cpu`，同时安装 Noir 权重、参考音频和参考文本。设置页会自动使用该路径，但仍允许手动选择其他兼容包目录。
-
-因此普通 `git clone` 不会遇到 Git LFS 配额问题。GPU 整合包由用户自行选择下载位置，Moepet 不会占用或复制它。
+安装器会从 Release 下载、SHA-256 校验并解压到 `vendor/` 对应目录；
+SBV2 包解压即用，无需再配置 Python 环境。GPU 整合包由用户自行选择
+下载位置，Moepet 不会占用或复制它。
 
 再次启动只需：
 
@@ -105,16 +117,24 @@ API Key 会优先保存到 Windows 凭据管理器，不应写入仓库、截图
 
 ### 本地 Style-Bert-VITS2 ONNX（默认）
 
-新配置默认选择本地 Style-Bert-VITS2 ONNX。由于源码、Python 环境和模型文件体积较大，普通 GitHub 克隆只包含 Moepet 的集成服务，不包含这些运行资产。
+新配置默认选择本地 Style-Bert-VITS2 ONNX。模型与运行时体积较大，
+不随仓库分发，推荐从 Release 一键安装：
 
-打开“设置 → 语音合成”，保持“本地 Style-Bert-VITS2 ONNX”，点击“配置引导”。向导会逐项检测：
+```powershell
+powershell -ExecutionPolicy Bypass -File .\setup.ps1 -InstallSbv2
+```
 
-- [Style-Bert-VITS2 上游源码](https://github.com/litagin02/Style-Bert-VITS2)
-- `vendor/style_bert_vits2/venv_cpu/Scripts/python.exe`
-- `bert/deberta-v2-large-japanese-char-wwm-onnx/model_fp16.onnx` 及 tokenizer/config 文件
-- `model_assets/noir/noir.onnx`、`config.json` 和 `style_vectors.npy`
+或手动从 [Releases](https://github.com/zhuge-Tom/moepet/releases) 下载
+`moepet-sbv2-noir-v1.zip` 解压到项目根目录。资产包内含：
 
-按照向导补齐红色项目后，点击“测试并播放语音”。测试通过后应用会后台预热模型；聊天回复使用日文优先的短片段协议，尽早开始日语朗读。
+- [Style-Bert-VITS2 上游推理源码](https://github.com/litagin02/Style-Bert-VITS2)（LGPL，随包附许可证）
+- `runtime/`：便携 Python 3.11 运行时，推理依赖已预装，解压即用
+- `bert/deberta-v2-large-japanese-char-wwm-onnx/`：日文 BERT ONNX 与 tokenizer
+- `model_assets/noir/`：Noir 声学模型、配置与风格向量
+
+安装完成后打开“设置 → 语音合成”，点击“测试并播放语音”确认即可；
+应用会在后台预热模型，聊天回复使用日文优先的短片段协议，约一秒开始朗读。
+空闲时服务几乎不占物理内存，合成时约占 1.2～1.7 GB。
 
 ### 本地 GPT-SoVITS 语音
 

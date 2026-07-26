@@ -1,10 +1,28 @@
 param(
     [switch]$SkipAppDependencies,
-    [switch]$InstallCpuTts
+    [switch]$InstallCpuTts,
+    [switch]$InstallSbv2
 )
 
 $ErrorActionPreference = "Stop"
 $ProjectRoot = $PSScriptRoot
+
+function Test-Sbv2Package {
+    $required = @(
+        "vendor\style_bert_vits2\server_moepet.py",
+        "vendor\style_bert_vits2\style_bert_vits2\tts_model.py",
+        "vendor\style_bert_vits2\runtime\python.exe",
+        "vendor\style_bert_vits2\model_assets\noir\noir.onnx",
+        "vendor\style_bert_vits2\model_assets\noir\config.json",
+        "vendor\style_bert_vits2\model_assets\noir\style_vectors.npy",
+        "vendor\style_bert_vits2\bert\deberta-v2-large-japanese-char-wwm-onnx\model_fp16.onnx",
+        "vendor\style_bert_vits2\bert\deberta-v2-large-japanese-char-wwm-onnx\tokenizer.json"
+    )
+    foreach ($relativePath in $required) {
+        if (-not (Test-Path -LiteralPath (Join-Path $ProjectRoot $relativePath))) { return $false }
+    }
+    return $true
+}
 
 function Test-CpuTtsPackage {
     $required = @(
@@ -66,5 +84,30 @@ if ($InstallCpuTts) {
     Write-Host "GPT-SoVITS CPU compatibility package is ready."
 }
 
+if ($InstallSbv2) {
+    $assetUrl = "https://github.com/zhuge-Tom/moepet/releases/download/sbv2-assets-v1/moepet-sbv2-noir-v1.zip"
+    $expectedHash = "a8fc8bdb4a7b25d6b3175717f945de246d2d3fa23c4041d3ece7fc0e7f3f6ccf"
+    $archive = Join-Path ([System.IO.Path]::GetTempPath()) "moepet-sbv2-noir-v1.zip"
+    if (-not (Test-Sbv2Package)) {
+        Write-Host "Downloading Style-Bert-VITS2 Noir assets (about 800 MB)..."
+        Invoke-WebRequest -Uri $assetUrl -OutFile $archive
+        $actualHash = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+        if ($actualHash -ne $expectedHash) {
+            Remove-Item -LiteralPath $archive -Force
+            throw "Downloaded SBV2 package checksum mismatch."
+        }
+        Expand-Archive -LiteralPath $archive -DestinationPath $ProjectRoot -Force
+        Remove-Item -LiteralPath $archive -Force
+        if (-not (Test-Sbv2Package)) {
+            throw "SBV2 package extraction is incomplete."
+        }
+    } else {
+        Write-Host "Style-Bert-VITS2 assets are already installed."
+    }
+    # The package bundles a portable Python runtime with all inference
+    # dependencies preinstalled; nothing else to build.
+    Write-Host "Style-Bert-VITS2 local voice is ready."
+}
+
 Write-Host "Moepet setup completed. Run: .\.venv\Scripts\python.exe main.py"
-Write-Host "Local TTS is optional. Open Settings -> Speech synthesis and choose the CPU or GPU installation guide."
+Write-Host "Local voice: default Style-Bert-VITS2 assets install with -InstallSbv2; GPT-SoVITS remains available with -InstallCpuTts."
