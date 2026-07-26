@@ -145,6 +145,23 @@ class Live2DCanvas(QOpenGLWidget):
         import live2d.v3 as live2d
 
         self._canvas.Draw(lambda: (live2d.clearBuffer(), self._model.Draw()))
+        self._maybe_cache_framebuffer_alpha()
+
+    def _maybe_cache_framebuffer_alpha(self) -> None:
+        """Refresh the hit-test mask only when it can matter.
+
+        glReadPixels stalls the GL pipeline and copies the full framebuffer,
+        so doing it every frame dominates idle CPU. Hit tests only fire while
+        the pointer is over (or about to enter) the window, and the pose
+        changes slowly, so a throttled refresh near the cursor is enough.
+        """
+        self._frame_index = getattr(self, "_frame_index", 0) + 1
+        window = self.window()
+        frame = window.frameGeometry().adjusted(-24, -24, 24, 24)
+        if not frame.contains(QCursor.pos()):
+            return
+        if self._alpha_mask and self._frame_index % 3:
+            return
         self._cache_framebuffer_alpha()
 
     def _cache_framebuffer_alpha(self) -> None:
@@ -155,11 +172,14 @@ class Live2DCanvas(QOpenGLWidget):
             pixel_ratio = self.devicePixelRatioF()
             width = max(1, round(self.width() * pixel_ratio))
             height = max(1, round(self.height() * pixel_ratio))
-            rgba = (c_ubyte * (width * height * 4))()
+            buffer = getattr(self, "_rgba_buffer", None)
+            if buffer is None or len(buffer) != width * height * 4:
+                buffer = (c_ubyte * (width * height * 4))()
+                self._rgba_buffer = buffer
             functions = self.context().functions()
             # GL_RGBA / GL_UNSIGNED_BYTE; QOpenGLWidget's FBO is bound here.
-            functions.glReadPixels(0, 0, width, height, 0x1908, 0x1401, rgba)
-            self._alpha_mask = bytes(rgba)[3::4]
+            functions.glReadPixels(0, 0, width, height, 0x1908, 0x1401, buffer)
+            self._alpha_mask = bytes(buffer)[3::4]
             self._alpha_mask_size = (width, height)
         except (AttributeError, RuntimeError, TypeError, ValueError):
             # A missing frame is transparent and must not block the desktop.

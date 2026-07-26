@@ -234,6 +234,8 @@ def test_calendar_archives_timeline_and_portable_bundle(tmp_path):
     assert kinds == {"diary", "weekly", "monthly", "quarterly", "yearly"}
     diary = store.list_archives("diary")[0]
     assert "陪伴 1 天" in diary["content"]
+    # Markdown 文件由后台批量写入；flush/close/export 保证落盘。
+    store.flush_archive_files()
     assert (store.root / diary["file_path"]).exists()
     series = store.activity_series(2, "2026-07-24")
     assert series[-1] == {"date": "2026-07-24", "chats": 1, "messages": 2}
@@ -273,7 +275,10 @@ def test_memory_navigation_children_and_clickable_cards(qapp, tmp_path):
     assert message_card.styleSheet() != normal_style
     QTest.mouseClick(message_card, Qt.LeftButton); qapp.processEvents()
     assert window._memory_page.tabs.currentIndex() == 1
-    window._memory_page.shutdown(); window.close()
+    page = getattr(window, "_memory_page", None)
+    if page is not None:
+        page.shutdown()
+    window.close()
 
 
 def test_memory_top_tabs_keep_left_navigation_selected(qapp, tmp_path):
@@ -287,7 +292,10 @@ def test_memory_top_tabs_keep_left_navigation_selected(qapp, tmp_path):
     window._memory_page.tabs.setCurrentIndex(1)
     qapp.processEvents()
     assert window._tree.currentItem().data(0, Qt.UserRole) == "memory_timeline"
-    window._memory_page.shutdown(); window.close()
+    page = getattr(window, "_memory_page", None)
+    if page is not None:
+        page.shutdown()
+    window.close()
 
 
 def test_memory_navigation_has_no_scrollbar_and_high_contrast_tabs(qapp, tmp_path):
@@ -302,7 +310,10 @@ def test_memory_navigation_has_no_scrollbar_and_high_contrast_tabs(qapp, tmp_pat
     assert window._tree.verticalScrollBar().maximum() == 0
     assert window._memory_page.tabs.objectName() == "memory_sections"
     assert "QTabBar::tab" in window._memory_page.tabs.styleSheet()
-    window._memory_page.shutdown(); window.close()
+    page = getattr(window, "_memory_page", None)
+    if page is not None:
+        page.shutdown()
+    window.close()
 
 
 def test_about_page_uses_structured_high_contrast_cards(qapp, tmp_path):
@@ -315,7 +326,10 @@ def test_about_page_uses_structured_high_contrast_cards(qapp, tmp_path):
     assert len(page.findChildren(QFrame, "about_feature")) == 4
     texts = {label.text() for label in page.findChildren(QLabel)}
     assert "让角色真正住进你的桌面" in texts
-    window._memory_page.shutdown(); window.close()
+    page = getattr(window, "_memory_page", None)
+    if page is not None:
+        page.shutdown()
+    window.close()
 
 
 def test_settings_window_minimizes_is_not_forced_on_top_and_uses_noir_icon(qapp, tmp_path):
@@ -338,7 +352,10 @@ def test_settings_window_minimizes_is_not_forced_on_top_and_uses_noir_icon(qapp,
     window.showNormal(); qapp.processEvents()
     assert not window.isMaximized()
     assert window.size() == normal_size
-    window._memory_page.shutdown(); window.close()
+    page = getattr(window, "_memory_page", None)
+    if page is not None:
+        page.shutdown()
+    window.close()
 
 
 def test_character_scaffold_isolates_roles_and_discovers_own_live2d(tmp_path):
@@ -380,7 +397,10 @@ def test_general_settings_exposes_add_character_entry(qapp, tmp_path, monkeypatc
     assert len(opened) == 1 and Path(opened[0]).resolve() == role.resolve()
     assert (role / "角色配置指南.md").exists()
     assert json.loads((role / "config.json").read_text(encoding="utf-8"))["preferred_renderer"] == "live2d"
-    window._memory_page.shutdown(); window.close()
+    page = getattr(window, "_memory_page", None)
+    if page is not None:
+        page.shutdown()
+    window.close()
 
 
 @pytest.mark.parametrize("width", [760, 980, 1200])

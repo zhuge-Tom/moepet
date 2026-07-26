@@ -8,6 +8,7 @@ import logging
 import shutil
 import sqlite3
 import tempfile
+import threading
 from collections import deque
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -116,7 +117,11 @@ class PetManager:
         # then translate it, then synthesize it.  Keep a small ordered queue
         # so the first natural streaming clause can start that work early.
         self._tts_text_queue = deque()
-        self._tts_direct_japanese_queue = deque()
+        # Protocol-delivered Japanese accumulates here and is cut into
+        # adaptively sized synthesis segments: tiny first, longer afterwards.
+        self._tts_jp_buffer = ""
+        self._tts_jp_stream_done = False
+        self._tts_jp_segment_index = 0
         self._tts_segment_inflight = False
         self._tts_stream_buffer = ""
         self._tts_stream_started = False
@@ -334,6 +339,26 @@ class PetManager:
                 char_dir, MemorySettings.from_dict(self.config.get("memory", default={})))
         except (OSError, sqlite3.Error) as exc:
             LOGGER.warning("记忆数据库初始化失败：%s", exc)
+        self._prewarm_tokenizer()
+
+    def _prewarm_tokenizer(self) -> None:
+        """Load jieba's dictionary off the GUI thread.
+
+        The first memory search otherwise pays a 1-2 second dictionary build
+        inside the first chat turn.
+        """
+        if getattr(self, "_tokenizer_prewarmed", False):
+            return
+        self._tokenizer_prewarmed = True
+
+        def warm() -> None:
+            try:
+                import jieba
+                jieba.initialize()
+            except ImportError:
+                pass
+
+        threading.Thread(target=warm, name="moepet-jieba-prewarm", daemon=True).start()
 
     def _history_path(self, char_name: str = None) -> Path:
         """获取对话历史文件路径"""
@@ -375,7 +400,7 @@ class PetManager:
         name = char.name if char else "Moepet"
         self._tray = TrayIcon(
             char_name=name,
-            observe_enabled=self.config.get("screen_capture", "auto_observe", default=False),
+            observe_enabled=self.config.get("screen_capture", "auto_observe", default=True),
         )
         self._tray.show()
 
@@ -740,6 +765,11 @@ class PetManager:
         self._show_reply_expression(full_text)
         if sync_text:
             self._queue_text_for_audio(full_text)
+        # No more protocol segments are coming: release whatever Japanese is
+        # still buffered, even if it is shorter than the ladder minimum.
+        self._tts_jp_stream_done = True
+        if getattr(self, "_llm_bilingual_speech_received", False):
+            self._start_next_bilingual_speech()
         streamed_speech = self._finish_streaming_local_tts()
         if (not self._llm_bilingual_speech_received and not streamed_speech
                 and not self._speak(full_text)):
@@ -1008,16 +1038,19 @@ class PetManager:
         """Return whether screenshots may be sent to the configured vision API."""
         vision_url = self.config.get("vision", "base_url", default="")
         local_vision = any(host in vision_url.lower() for host in ("localhost", "127.0.0.1", "[::1]"))
+        # 预填的云端端点在用户粘贴 API Key 前不算就绪，随机识图不会空转报错。
+        has_key = bool(self.config.get_secret("vision")
+                       or self.config.get("vision", "api_key", default=""))
         return bool(
             self.config.get("vision", "enabled", default=False)
             and vision_url
             and self.config.get("vision", "model", default="")
-            and (local_vision or self.config.get("vision", "allow_cloud", default=False))
+            and (local_vision or (has_key and self.config.get("vision", "allow_cloud", default=False)))
         )
 
     def _configure_screen_observer(self):
         screen = self.config.get("screen_capture", default={})
-        enabled = bool(screen.get("auto_observe", False)) and self._vision_is_ready() and not self._needs_initial_setup()
+        enabled = bool(screen.get("auto_observe", True)) and self._vision_is_ready() and not self._needs_initial_setup()
         self._screen_observer.configure(
             enabled,
             screen.get("observe_min_interval", 300),
@@ -1293,7 +1326,9 @@ class PetManager:
     def _begin_streaming_local_tts(self, llm_streaming: bool) -> None:
         """Allow the first local-TTS clause to overlap LLM streaming."""
         self._tts_text_queue.clear()
-        self._tts_direct_japanese_queue.clear()
+        self._tts_jp_buffer = ""
+        self._tts_jp_stream_done = False
+        self._tts_jp_segment_index = 0
         self._tts_segment_inflight = False
         self._tts_stream_buffer = ""
         self._tts_stream_started = False
@@ -1307,7 +1342,7 @@ class PetManager:
         )
 
     def _on_llm_speech_ready(self, japanese_text: str) -> None:
-        """Queue every translated segment without truncating the spoken reply."""
+        """Buffer every protocol segment without truncating the spoken reply."""
         if (not getattr(self, "_llm_bilingual_speech_expected", False)
                 or self._role_epoch != getattr(self, "_llm_bilingual_speech_epoch", None)):
             return
@@ -1315,28 +1350,39 @@ class PetManager:
         if not japanese_text:
             return
         self._llm_bilingual_speech_received = True
-        self._tts_direct_japanese_queue.extend(
-            TTSService._split_japanese_for_low_latency(japanese_text, target_chars=6))
+        self._tts_jp_buffer = getattr(self, "_tts_jp_buffer", "") + japanese_text
         self._start_next_bilingual_speech()
 
     def _start_next_bilingual_speech(self) -> None:
         if (getattr(self, "_tts_segment_inflight", False)
-                or not getattr(self, "_tts_direct_japanese_queue", ())):
+                or not getattr(self, "_tts_jp_buffer", "").strip()):
             return
         tts = getattr(self, "_tts", None)
         if tts and getattr(tts, "is_busy", lambda: False)():
             QTimer.singleShot(20, self._start_next_bilingual_speech)
             return
-        japanese_text = self._tts_direct_japanese_queue.popleft()
+        # Cut a tiny first segment for the fastest first sound, then longer
+        # ones while earlier audio plays, so each fixed per-request model
+        # cost is amortized and playback never starves.
+        idle = not getattr(self, "_tts_audio_playing", False) and not getattr(
+            self, "_tts_audio_queue", ())
+        segment, remaining = TTSService._cut_japanese_segment(
+            self._tts_jp_buffer, getattr(self, "_tts_jp_segment_index", 0),
+            stream_done=getattr(self, "_tts_jp_stream_done", False), idle=idle)
+        if not segment:
+            return
+        self._tts_jp_buffer = remaining
         self._tts_segment_inflight = True
         self._tts_epoch = self._role_epoch
-        started = self._on_tts_translation_done(japanese_text)
+        started = self._on_tts_translation_done(segment)
         if started is False:
             self._tts_segment_inflight = False
-            self._tts_direct_japanese_queue.appendleft(japanese_text)
+            self._tts_jp_buffer = segment + self._tts_jp_buffer
             QTimer.singleShot(20, self._start_next_bilingual_speech)
         elif started is None:
             self._tts_segment_inflight = False
+        else:
+            self._tts_jp_segment_index = getattr(self, "_tts_jp_segment_index", 0) + 1
 
     @staticmethod
     def _take_streaming_speech_prefix(text: str, minimum_chars: int = 4,
@@ -1551,9 +1597,7 @@ class PetManager:
         if queue is not None:
             while queue:
                 Path(queue.popleft()).unlink(missing_ok=True)
-        direct_queue = getattr(self, "_tts_direct_japanese_queue", None)
-        if direct_queue is not None:
-            direct_queue.clear()
+        self._tts_jp_buffer = ""
         text_queue = getattr(self, "_tts_text_queue", None)
         if text_queue is not None:
             text_queue.clear()
@@ -1753,7 +1797,7 @@ class PetManager:
         self._prewarm_local_tts()
         if self._tray:
             self._tray.set_observation_enabled(
-                self.config.get("screen_capture", "auto_observe", default=False))
+                self.config.get("screen_capture", "auto_observe", default=True))
 
         new_char = settings.get("current_character")
         if new_char and new_char != self.config.current_character:

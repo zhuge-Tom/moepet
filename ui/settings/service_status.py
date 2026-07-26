@@ -55,8 +55,12 @@ def asr_ready(config) -> bool:
 
 
 def vision_ready(config) -> bool:
+    base_url = config.get("vision", "base_url", default="")
+    # 预填的云端端点在粘贴 API Key 前不算就绪。
+    if base_url and not is_local_endpoint(base_url) and not has_secret(config, "vision"):
+        return False
     return vision_connection_ready(
-        config.get("vision", "base_url", default=""),
+        base_url,
         config.get("vision", "model", default=""),
         config.get("vision", "allow_cloud", default=False),
         config.get("vision", "enabled", default=False),
@@ -73,7 +77,7 @@ def vision_connection_ready(base_url: str, model: str, allow_cloud: bool,
 
 def observation_ready(config) -> bool:
     return bool(
-        config.get("screen_capture", "auto_observe", default=False)
+        config.get("screen_capture", "auto_observe", default=True)
         and vision_ready(config)
         and llm_ready(config)
     )

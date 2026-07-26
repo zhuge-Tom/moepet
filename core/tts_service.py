@@ -50,7 +50,10 @@ class AudioPlaybackService(QObject):
         self._path = path
         self._busy = True
         self.busy_changed.emit(True)
-        self._timer.start(duration_ms + 120)
+        # The pad only needs to absorb device-open jitter before the first
+        # sample. Anything larger becomes an audible pause between queued
+        # clause fragments.
+        self._timer.start(duration_ms + 45)
         return True
 
     def stop(self) -> None:
@@ -80,11 +83,13 @@ class TTSService(BackgroundService):
         super().__init__(parent)
         self._local_process = None
         self._local_start_lock = threading.Lock()
+        self._sbv2_ready = False
 
     def shutdown_local(self):
         """Stop only the GPT-SoVITS process started by this application."""
         process = self._local_process
         self._local_process = None
+        self._sbv2_ready = False
         if process is not None and process.poll() is None:
             process.terminate()
             try:
@@ -123,9 +128,9 @@ class TTSService(BackgroundService):
             return False
 
     @staticmethod
-    def _service_ready(base_url: str) -> bool:
+    def _service_ready(base_url: str, path: str = "/docs") -> bool:
         try:
-            with urlopen(base_url.rstrip("/") + "/docs", timeout=2) as response:
+            with urlopen(base_url.rstrip("/") + path, timeout=2) as response:
                 return 200 <= response.status < 500
         except (OSError, URLError):
             return False
@@ -310,6 +315,61 @@ class TTSService(BackgroundService):
             parts.append(remaining)
         return parts
 
+    # Each CPU synthesis request pays roughly half a second of fixed model
+    # cost regardless of length, so the schedule below starts with a tiny
+    # first clause (fastest possible first sound) and grows every following
+    # segment while earlier audio is playing: (minimum_chars, target_chars).
+    _SEGMENT_LADDER = ((3, 9), (6, 14), (8, 22), (10, 30))
+    _JA_BREAKS = "、。！？!?…"
+
+    @staticmethod
+    def _cut_japanese_segment(buffer: str, index: int, stream_done: bool = False,
+                              idle: bool = False) -> tuple[str, str]:
+        """Cut one CPU-sized synthesis segment; an empty segment means wait.
+
+        ``index`` selects the ladder step, ``stream_done`` flushes everything
+        pending, and ``idle`` (no audio playing or queued) favors starting a
+        complete clause now over batching a bigger one later.
+        """
+        text = buffer.strip()
+        if not text:
+            return "", ""
+        ladder = TTSService._SEGMENT_LADDER
+        minimum, target = ladder[min(index, len(ladder) - 1)]
+        window = text[:target]
+        breaks = TTSService._JA_BREAKS
+        candidates = [i for i, ch in enumerate(window) if ch in breaks]
+        preferred = [i for i in candidates if i + 1 >= minimum]
+        if preferred:
+            # The first segment cuts at the earliest natural break so speech
+            # starts immediately; later segments cut at the latest one so the
+            # fixed per-request cost is amortized over a longer clause.
+            boundary = preferred[0] if index == 0 else preferred[-1]
+            return text[:boundary + 1], text[boundary + 1:]
+        if len(text) >= target:
+            return window, text[target:]
+        if stream_done:
+            return text, ""
+        if idle and candidates:
+            boundary = candidates[-1]
+            return text[:boundary + 1], text[boundary + 1:]
+        return "", buffer
+
+    @staticmethod
+    def _split_japanese_adaptive(text: str) -> list[str]:
+        """Split a full reply on the same small-first, larger-later schedule."""
+        parts = []
+        remaining = text.strip()
+        index = 0
+        while remaining:
+            segment, remaining = TTSService._cut_japanese_segment(
+                remaining, index, stream_done=True)
+            if not segment:
+                break
+            parts.append(segment)
+            index += 1
+        return parts or [text.strip()]
+
     @staticmethod
     def _speech_url(base_url: str) -> str:
         endpoint = base_url.rstrip("/")
@@ -327,7 +387,7 @@ class TTSService(BackgroundService):
         def work():
             self._ensure_sbv2_server(base_url, project_path)
 
-            parts = self._split_japanese_for_streaming(text) if streaming else [text.strip()]
+            parts = self._split_japanese_adaptive(text) if streaming else [text.strip()]
             output = Path(output_path)
             for index, part in enumerate(parts):
                 if not part.strip():
@@ -343,6 +403,7 @@ class TTSService(BackgroundService):
                     data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
                     headers={"Content-Type": "application/json; charset=utf-8"},
                 )
+                audio = b""
                 for attempt in range(2):
                     try:
                         with urlopen(request, timeout=180) as resp:
@@ -350,8 +411,11 @@ class TTSService(BackgroundService):
                         if audio and len(audio) > 100:
                             break
                     except (OSError, URLError):
+                        # The cached server may have died; restart it once
+                        # instead of blindly waiting.
+                        self._sbv2_ready = False
                         if attempt == 0:
-                            time.sleep(1)
+                            self._ensure_sbv2_server(base_url, project_path)
                             continue
                         raise
                 if not audio or len(audio) <= 100:
@@ -368,10 +432,16 @@ class TTSService(BackgroundService):
         return self.run(work)
 
     def _ensure_sbv2_server(self, base_url: str, project_path: str = "") -> None:
-        if self._service_ready(base_url):
+        # A per-request HTTP probe costs a round-trip before every clause;
+        # remember the first success and only re-probe after a failure.
+        if self._sbv2_ready:
+            return
+        if self._service_ready(base_url, "/health"):
+            self._sbv2_ready = True
             return
         with self._local_start_lock:
-            if self._service_ready(base_url):
+            if self._service_ready(base_url, "/health"):
+                self._sbv2_ready = True
                 return
             # Resolve project path: absolute, or relative to moepet base
             from pathlib import Path as _Path
@@ -401,7 +471,8 @@ class TTSService(BackgroundService):
                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
             )
             for _ in range(300):
-                if self._service_ready(base_url):
+                if self._service_ready(base_url, "/health"):
+                    self._sbv2_ready = True
                     return
                 if self._local_process.poll() is not None:
                     break

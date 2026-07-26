@@ -245,8 +245,14 @@ def test_config_has_multimodal_defaults(tmp_path):
     assert config.get("dialog", "offset_y") == -96
     assert config.get("asr", "compute_type") == "int8"
     assert config.get("screen_capture", "keep_captures") is False
-    assert config.get("screen_capture", "auto_observe") is False
+    # 随机识图默认开启；真正触发仍需图像理解服务就绪。
+    assert config.get("screen_capture", "auto_observe") is True
     assert config.get("screen_capture", "observe_min_interval") == 300
+    # 语音输入与图像理解预填免费云端端点，粘贴 API Key 即可使用。
+    assert config.get("asr", "provider") == "cloud"
+    assert config.get("asr", "model") == "FunAudioLLM/SenseVoiceSmall"
+    assert config.get("vision", "enabled") is True
+    assert config.get("vision", "model") == "glm-4v-flash"
     assert config.get("screen_capture", "vision_max_dimension") == 1280
     assert config.get("tts", "enabled") is True
     assert config.get("tts", "auto_play") is True
@@ -444,7 +450,9 @@ def test_sbv2_enables_low_latency_streaming_translation(tmp_path):
     manager.config.set("tts", "auto_play", True)
     manager.config.set("tts", "provider", "sbv2")
     manager._tts_text_queue = deque(["stale"])
-    manager._tts_direct_japanese_queue = deque(["古い"])
+    manager._tts_jp_buffer = "古い"
+    manager._tts_jp_stream_done = True
+    manager._tts_jp_segment_index = 3
     manager._tts_segment_inflight = True
     manager._tts_stream_buffer = "stale"
     manager._tts_stream_started = True
@@ -454,7 +462,9 @@ def test_sbv2_enables_low_latency_streaming_translation(tmp_path):
 
     assert manager._tts_stream_enabled is True
     assert not manager._tts_text_queue
-    assert not manager._tts_direct_japanese_queue
+    assert manager._tts_jp_buffer == ""
+    assert manager._tts_jp_stream_done is False
+    assert manager._tts_jp_segment_index == 0
 
 
 def test_audio_sync_requires_a_successful_tts_request(tmp_path):
@@ -598,21 +608,66 @@ def test_japanese_translation_fallback_preserves_all_sentences():
     assert text == "大丈夫だよ。ずっとそばにいるよ。"
 
 
-def test_bilingual_speech_queues_every_complete_japanese_segment():
-    from collections import deque
-
+def test_bilingual_speech_buffers_every_complete_japanese_segment():
     manager = type("Manager", (), {})()
     manager._llm_bilingual_speech_expected = True
     manager._llm_bilingual_speech_epoch = manager._role_epoch = 2
-    manager._tts_direct_japanese_queue = deque()
+    manager._tts_jp_buffer = ""
     manager._start_next_bilingual_speech = lambda: None
 
     PetManager._on_llm_speech_ready(manager, "最初の文です。")
     PetManager._on_llm_speech_ready(manager, "次の文も読みます。")
 
-    queued = list(manager._tts_direct_japanese_queue)
-    assert "".join(queued) == "最初の文です。次の文も読みます。"
-    assert all(1 <= len(part) <= 6 for part in queued)
+    assert manager._tts_jp_buffer == "最初の文です。次の文も読みます。"
+    assert manager._llm_bilingual_speech_received is True
+
+
+def test_adaptive_segment_cut_starts_tiny_and_grows():
+    from core.tts_service import TTSService
+
+    text = "うん。今日は一緒にいられて、うれしいです。少し休みましょう。また明日も話そうね。"
+    first, remaining = TTSService._cut_japanese_segment(text, 0)
+    assert first == "うん。"
+    assert len(first) <= 9
+
+    second, rest = TTSService._cut_japanese_segment(remaining, 1)
+    assert len(second) > len(first)
+    assert second.endswith(("、", "。", "！", "？", "!", "?"))
+    assert (first + second + rest) == text
+
+
+def test_adaptive_segment_cut_waits_for_more_text_while_streaming():
+    from core.tts_service import TTSService
+
+    # A later segment should not burn a full model request on a stub while
+    # more protocol text is still arriving and audio is already playing.
+    segment, remaining = TTSService._cut_japanese_segment(
+        "はい。", 2, stream_done=False, idle=False)
+    assert segment == ""
+    assert remaining == "はい。"
+
+    # Once the reply is complete the tail is flushed verbatim.
+    segment, remaining = TTSService._cut_japanese_segment(
+        "はい。", 2, stream_done=True, idle=False)
+    assert segment == "はい。"
+    assert remaining == ""
+
+    # With nothing playing, a complete clause starts immediately.
+    segment, remaining = TTSService._cut_japanese_segment(
+        "はい。", 2, stream_done=False, idle=True)
+    assert segment == "はい。"
+    assert remaining == ""
+
+
+def test_adaptive_split_preserves_text_with_small_first_fragment():
+    from core.tts_service import TTSService
+
+    text = "私はいつでもあなたのそばにいるから、安心して休んでね。また明日も一緒に頑張りましょう。"
+    parts = TTSService._split_japanese_adaptive(text)
+
+    assert "".join(parts) == text
+    assert len(parts[0]) <= 9
+    assert all(len(part) <= 30 for part in parts)
 
 
 def test_local_tts_prewarm_passes_the_reference_cache_inputs():
@@ -1832,6 +1887,8 @@ def test_voice_page_factories_switch_provider_rows(qapp, tmp_path):
     assert "tts_translate" not in tts
     assert {"asr_model", "asr_api_url"}.issubset(asr_rows)
     window = SettingsWindow(config, ["noir"], "noir", tmp_path)
+    window.open_page("tts")
+    window.open_page("asr")
     assert window._tts_provider.itemText(0).endswith("（效果好，推理慢）")
     assert window._tts_provider.itemText(1).endswith("（效果好，配置要求高）")
     assert window._tts_provider.itemText(2).endswith("（效果稍差，本地直接能用）")
@@ -1889,6 +1946,7 @@ def test_settings_window_applies_chat_provider_preset(qapp, tmp_path):
     from ui.settings_window import SettingsWindow
     config = Config(tmp_path / "config.json")
     window = SettingsWindow(config, ["noir"], "noir", tmp_path)
+    window.open_page("ai")
     window._ai_provider_preset.setCurrentIndex(window._ai_provider_preset.findData("ollama"))
     assert window._ai_url.text() == "http://localhost:11434/v1"
     assert window._ai_model.text() == "qwen3:8b"
@@ -1898,6 +1956,7 @@ def test_settings_window_marks_local_chat_service_ready(qapp, tmp_path):
     from ui.settings_window import SettingsWindow
     config = Config(tmp_path / "config.json")
     window = SettingsWindow(config, ["noir"], "noir", tmp_path)
+    window.open_page("ai")
     window._ai_url.setText("http://localhost:11434/v1")
     window._ai_key.clear()
     window._ai_model.setText("qwen3")
@@ -1909,6 +1968,7 @@ def test_settings_window_previews_sbv2_with_the_selected_engine(qapp, tmp_path):
     from ui.settings_window import SettingsWindow
 
     window = SettingsWindow(Config(tmp_path / "config.json"), ["noir"], "noir", tmp_path)
+    window.open_page("tts")
     window._tts_provider.setCurrentIndex(window._tts_provider.findData("sbv2"))
     calls = []
     window._tts_preview_service.synthesize_sbv2 = (
@@ -1925,6 +1985,9 @@ def test_settings_window_tracks_unsaved_form_changes(qapp, tmp_path):
     from ui.settings_window import SettingsWindow
     window = SettingsWindow(Config(tmp_path / "config.json"), ["noir"], "noir", tmp_path)
     assert not window._has_unsaved_changes()
+    # 懒加载：打开新页面本身不应产生“未保存更改”。
+    window.open_page("ai")
+    assert not window._has_unsaved_changes()
     window._ai_model.setText("changed-model")
     assert window._has_unsaved_changes()
     assert window._dirty_label.text() == "有未保存的更改"
@@ -1934,6 +1997,7 @@ def test_sbv2_is_the_default_local_tts(qapp, tmp_path):
     from ui.settings_window import SettingsWindow
 
     window = SettingsWindow(Config(tmp_path / "config.json"), ["noir"], "noir", tmp_path)
+    window.open_page("tts")
 
     assert window._tts_provider.currentData() == "sbv2"
     assert not window._tts_sbv2_section.isHidden()
@@ -1954,7 +2018,22 @@ def test_stream_finish_replaces_unprocessed_display(qapp):
     window.start_stream()
     window.append_stream("visible<think>hidden</think>")
     window.finish_stream("visible")
+    # 流式内容由打字机限速呈现；flush 后应显示清洗过的最终文本。
+    window.flush_typing()
     assert window._text_display.toPlainText() == "visible"
+
+
+def test_stream_shows_thinking_placeholder_until_first_char(qapp):
+    from ui.dialog_window import DialogWindow
+    window = DialogWindow("Noir")
+    window.start_stream()
+    assert window._text_display.placeholderText() == "Noir 正在思考…"
+    assert window._text_display.toPlainText() == ""
+    window.append_stream("嗯。")
+    window.finish_stream("嗯。")
+    window.flush_typing()
+    assert window._text_display.toPlainText() == "嗯。"
+    assert window._text_display.placeholderText() == ""
 
 
 def test_stream_hides_stage_directions_before_the_reply_is_finished(qapp):
@@ -1962,8 +2041,11 @@ def test_stream_hides_stage_directions_before_the_reply_is_finished(qapp):
     window = DialogWindow("Test")
     window.start_stream()
     window.append_stream("（轻轻点头）")
+    window.flush_typing()
     assert window._text_display.toPlainText() == ""
     window.append_stream("我明白了。")
+    window.finish_stream()
+    window.flush_typing()
     assert window._text_display.toPlainText() == "我明白了。"
 
 

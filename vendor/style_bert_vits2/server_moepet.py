@@ -11,6 +11,8 @@ import argparse
 import os
 import sys
 import time
+import wave
+from collections import OrderedDict
 from io import BytesIO
 from pathlib import Path
 from typing import Optional
@@ -20,7 +22,6 @@ import uvicorn
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
-from scipy.io import wavfile
 
 # ── Add parent to path so style_bert_vits2 imports work ──
 HERE = Path(__file__).resolve().parent
@@ -47,6 +48,46 @@ from style_bert_vits2.tts_model import TTSModel
 MODEL: Optional[TTSModel] = None
 MODEL_LOADED = False
 
+# Short interjections ("うん。", "そうだね。"…) repeat constantly in chat and
+# still pay ~1s of fixed model cost each. Cache finished WAVs for short texts;
+# longer sentences rarely repeat and keep their natural per-render variation.
+WAV_CACHE: "OrderedDict[tuple, bytes]" = OrderedDict()
+WAV_CACHE_LIMIT = 96
+WAV_CACHE_MAX_CHARS = 24
+
+ONNX_PROVIDERS = [("CPUExecutionProvider", {"arena_extend_strategy": "kSameAsRequested"})]
+
+
+def load_japanese_bert() -> None:
+    """Load the JP BERT session tuned for per-request latency.
+
+    The upstream loader targets low-memory machines: it disables the CPU
+    memory arena and all graph optimization, which costs roughly 150 ms per
+    request on this dedicated inference server. Build the session with both
+    enabled and register it in the upstream cache; fall back to the stock
+    loader if the private cache layout ever changes.
+    """
+    import onnxruntime
+
+    bert_dir = HERE / "bert" / "deberta-v2-large-japanese-char-wwm-onnx"
+    try:
+        registry = onnx_bert_models.__dict__["__loaded_models"]
+        sess_options = onnxruntime.SessionOptions()
+        sess_options.graph_optimization_level = (
+            onnxruntime.GraphOptimizationLevel.ORT_ENABLE_ALL)
+        sess_options.log_severity_level = 3
+        sess_options.enable_cpu_mem_arena = True
+        t0 = time.time()
+        registry[Languages.JP] = onnxruntime.InferenceSession(
+            str(bert_dir / "model_fp16.onnx"),
+            sess_options=sess_options,
+            providers=ONNX_PROVIDERS,
+        )
+        logger.info(f"JP BERT loaded (optimized) in {time.time() - t0:.1f}s")
+    except (KeyError, TypeError):
+        onnx_bert_models.load_model(Languages.JP, enable_cpu_mem_arena=True)
+    onnx_bert_models.load_tokenizer(Languages.JP)
+
 
 def load_noir_model(model_dir: Path, device: str = "cpu") -> TTSModel:
     """Load the Noir ONNX model."""
@@ -71,9 +112,26 @@ def load_noir_model(model_dir: Path, device: str = "cpu") -> TTSModel:
         config_path=config_path,
         style_vec_path=style_path,
         device=device,
-        onnx_providers=[("CPUExecutionProvider", {"arena_extend_strategy": "kSameAsRequested"})],
+        onnx_providers=ONNX_PROVIDERS,
     )
-    model.load()  # force load now
+    if device == "cpu":
+        # TTSModel.load() would disable graph optimization for CPU sessions.
+        # Build the acoustic session directly so short clauses shave off the
+        # optimization the stock loader skips.
+        import onnxruntime
+
+        sess_options = onnxruntime.SessionOptions()
+        sess_options.graph_optimization_level = (
+            onnxruntime.GraphOptimizationLevel.ORT_ENABLE_ALL)
+        sess_options.log_severity_level = 3
+        onnxruntime.set_default_logger_severity(3)
+        model.onnx_session = onnxruntime.InferenceSession(
+            str(onnx_path),
+            sess_options=sess_options,
+            providers=ONNX_PROVIDERS,
+        )
+    else:
+        model.load()
     logger.info(f"Model loaded in {time.time() - t0:.1f}s")
 
     MODEL = model
@@ -109,8 +167,7 @@ def create_app(model_dir: Path, port: int, device: str = "cpu") -> FastAPI:
         # ONNX acoustic inference also needs an ONNX Japanese BERT model.
         # Load both pieces before reporting healthy so the first speech request
         # is fast and a corrupt/missing BERT asset fails during startup.
-        onnx_bert_models.load_model(Languages.JP)
-        onnx_bert_models.load_tokenizer(Languages.JP)
+        load_japanese_bert()
         # Load TTS model
         model = load_noir_model(model_dir, device)
         # ONNX Runtime performs additional graph and memory setup on the first
@@ -158,6 +215,15 @@ def create_app(model_dir: Path, port: int, device: str = "cpu") -> FastAPI:
         style = body.get("style", "Neutral")
         style_weight = float(body.get("style_weight", 1.0))
 
+        cache_key = None
+        if len(text) <= WAV_CACHE_MAX_CHARS:
+            cache_key = (text, round(speed, 3), style, round(style_weight, 2))
+            cached = WAV_CACHE.get(cache_key)
+            if cached is not None:
+                WAV_CACHE.move_to_end(cache_key)
+                logger.info(f"TTS cache hit: {len(text)} chars")
+                return Response(content=cached, media_type="audio/wav")
+
         model = ensure_model()
 
         t0 = time.time()
@@ -177,9 +243,21 @@ def create_app(model_dir: Path, port: int, device: str = "cpu") -> FastAPI:
         audio_duration = len(audio) / sr
         logger.info(f"TTS: {len(text)} chars -> {audio_duration:.1f}s audio in {elapsed:.1f}s (RTF={elapsed/audio_duration:.2f})")
 
+        # TTSModel.infer already converts to int16; the stdlib writer keeps
+        # scipy out of the minimal inference environment.
+        pcm = np.asarray(audio, dtype=np.int16)
         with BytesIO() as buf:
-            wavfile.write(buf, sr, audio)
+            with wave.open(buf, "wb") as wav:
+                wav.setnchannels(1)
+                wav.setsampwidth(2)
+                wav.setframerate(int(sr))
+                wav.writeframes(pcm.tobytes())
             wav_bytes = buf.getvalue()
+
+        if cache_key is not None:
+            WAV_CACHE[cache_key] = wav_bytes
+            while len(WAV_CACHE) > WAV_CACHE_LIMIT:
+                WAV_CACHE.popitem(last=False)
 
         return Response(content=wav_bytes, media_type="audio/wav")
 

@@ -43,7 +43,8 @@ from ui.settings.pages import (
     make_tts_page, make_vision_page, make_ai_page,
 )
 from ui.settings.provider_presets import (
-    CHAT_PRESETS, TTS_PRESETS, VISION_PRESETS, preset_by_key, preset_key_for_url,
+    ASR_PRESETS, CHAT_PRESETS, TTS_PRESETS, VISION_PRESETS, preset_by_key,
+    preset_key_for_url,
 )
 
 from core.config import Config
@@ -118,7 +119,6 @@ class SettingsWindow(QDialog):
         self._model_runner.finished.connect(self._on_models_discovered)
         self._tree.setCurrentItem(self._tree.topLevelItem(0))
         self._settings_baseline = self._settings_snapshot()
-        self._watch_settings_changes()
         self._refresh_dirty_state()
 
     def _build_ui(self):
@@ -258,49 +258,24 @@ class SettingsWindow(QDialog):
         self._stack = QStackedWidget()
         self._stack.setStyleSheet("background: transparent;")
 
-        # 预构建所有页面（每个页面是独立的 Widget）
+        # 页面懒加载：只有首页立即构建，其余页面首次访问时才构建，
+        # 设置窗口从“构建 12 个页面”变成“构建 1 个页面”后即可显示。
         self._pages = {}
-        page_builders = [
-            ("general", self._page_general),
-            ("character", make_character_parent_page),
-            ("character_api", self._page_character_api),
-            ("character_sprites", self._page_character_sprites),
-            ("character_knowledge", self._page_character_knowledge),
-            ("ai", self._build_ai_page),
-            ("tts", self._build_tts_page),
-            ("asr", self._build_asr_page),
-            ("screen", self._build_screen_page),
-            ("vision", self._build_vision_page),
-            ("memory", self._build_memory_page),
-            ("about", make_about_page),
-        ]
-        for key, builder in page_builders:
-            page_widget = builder()
-            page_widget.setProperty("page_key", key)
-            self._stack.addWidget(page_widget)
-            self._pages[key] = page_widget
-
-        # Combo popups are separate Qt windows on some Windows themes, so the
-        # dialog stylesheet alone does not reliably reach their item views.
-        for combo in self._stack.findChildren(QComboBox):
-            combo.view().setStyleSheet("""
-                QAbstractItemView {
-                    background: #1b2450;
-                    color: #f4f5ff;
-                    border: 1px solid #38477a;
-                    selection-background-color: #f05c91;
-                    selection-color: #ffffff;
-                    outline: none;
-                }
-                QAbstractItemView::item {
-                    min-height: 28px;
-                    padding: 4px 8px;
-                }
-                QAbstractItemView::item:hover {
-                    background: #293765;
-                    color: #ffffff;
-                }
-            """)
+        self._page_builders = {
+            "general": self._page_general,
+            "character": make_character_parent_page,
+            "character_api": self._page_character_api,
+            "character_sprites": self._page_character_sprites,
+            "character_knowledge": self._page_character_knowledge,
+            "ai": self._build_ai_page,
+            "tts": self._build_tts_page,
+            "asr": self._build_asr_page,
+            "screen": self._build_screen_page,
+            "vision": self._build_vision_page,
+            "memory": self._build_memory_page,
+            "about": make_about_page,
+        }
+        self._ensure_page("general")
 
         scroll.setWidget(self._stack)
         card_layout.addWidget(scroll)
@@ -335,22 +310,23 @@ class SettingsWindow(QDialog):
         layout.addWidget(footer)
         return right
 
-    def _watch_settings_changes(self) -> None:
+    def _watch_settings_changes(self, root=None) -> None:
         """Track edits centrally so closing a long configuration form is safe."""
-        for field in self._stack.findChildren(QLineEdit):
+        root = root if root is not None else self._stack
+        for field in root.findChildren(QLineEdit):
             if not field.property("settings_ignore_dirty"):
                 field.textChanged.connect(self._refresh_dirty_state)
-        for field in self._stack.findChildren(QTextEdit):
+        for field in root.findChildren(QTextEdit):
             field.textChanged.connect(self._refresh_dirty_state)
-        for field in self._stack.findChildren(QCheckBox):
+        for field in root.findChildren(QCheckBox):
             field.stateChanged.connect(self._refresh_dirty_state)
-        for field in self._stack.findChildren(QComboBox):
+        for field in root.findChildren(QComboBox):
             if not field.property("settings_ignore_dirty"):
                 field.currentIndexChanged.connect(self._refresh_dirty_state)
-        for field in self._stack.findChildren(QSpinBox):
+        for field in root.findChildren(QSpinBox):
             if not field.property("settings_ignore_dirty"):
                 field.valueChanged.connect(self._refresh_dirty_state)
-        for field in self._stack.findChildren(QSlider):
+        for field in root.findChildren(QSlider):
             field.valueChanged.connect(self._refresh_dirty_state)
 
     def _settings_snapshot(self) -> str:
@@ -389,8 +365,76 @@ class SettingsWindow(QDialog):
             self._memory_page_closed = True
         super().closeEvent(event)
 
+    def _ensure_page(self, key: str):
+        """Build a settings page on first visit; opening the window stays fast."""
+        if key in self._pages:
+            return self._pages[key]
+        builder = self._page_builders.get(key)
+        if builder is None:
+            return None
+        was_clean = not self._has_unsaved_changes()
+        page_widget = builder()
+        page_widget.setProperty("page_key", key)
+        self._stack.addWidget(page_widget)
+        self._pages[key] = page_widget
+        self._style_combo_popups(page_widget)
+        self._watch_settings_changes(page_widget)
+        self._merge_baseline_for_new_page(was_clean)
+        return page_widget
+
+    def _style_combo_popups(self, root) -> None:
+        # Combo popups are separate Qt windows on some Windows themes, so the
+        # dialog stylesheet alone does not reliably reach their item views.
+        for combo in root.findChildren(QComboBox):
+            combo.view().setStyleSheet("""
+                QAbstractItemView {
+                    background: #1b2450;
+                    color: #f4f5ff;
+                    border: 1px solid #38477a;
+                    selection-background-color: #f05c91;
+                    selection-color: #ffffff;
+                    outline: none;
+                }
+                QAbstractItemView::item {
+                    min-height: 28px;
+                    padding: 4px 8px;
+                }
+                QAbstractItemView::item:hover {
+                    background: #293765;
+                    color: #ffffff;
+                }
+            """)
+
+    def _merge_baseline_for_new_page(self, was_clean: bool) -> None:
+        """Absorb a freshly built page's clean values into the dirty baseline.
+
+        Lazily built widgets load values straight from config, so without this
+        the enlarged snapshot would spuriously read as unsaved changes.
+        """
+        if not self._settings_baseline:
+            return
+        if was_clean:
+            # 没有未保存修改时直接重置基线；这同时覆盖“某些节在页面
+            # 构建前后表示不同”（例如记忆页 collect 与配置回退）的情况。
+            self._settings_baseline = self._settings_snapshot()
+            self._refresh_dirty_state()
+            return
+        try:
+            baseline = json.loads(self._settings_baseline)
+            fresh = json.loads(self._settings_snapshot())
+        except (json.JSONDecodeError, TypeError):
+            return
+        for section, value in fresh.get("settings", {}).items():
+            baseline.setdefault("settings", {}).setdefault(section, value)
+        for name, value in fresh.get("prompts", {}).items():
+            if not baseline.get("prompts", {}).get(name):
+                baseline.setdefault("prompts", {})[name] = value
+        self._settings_baseline = json.dumps(baseline, ensure_ascii=False, sort_keys=True)
+        self._refresh_dirty_state()
+
     def _switch_page(self, key):
-        """QStackedWidget 切换页面 — 旧页面自动隐藏，新页面自动显示"""
+        """QStackedWidget 切换页面 — 页面首次访问时构建"""
+        self._ensure_page("memory" if key.startswith("memory_") else key)
         if key.startswith("memory_"):
             self._stack.setCurrentWidget(self._pages["memory"])
             self._memory_page.open_section(key)
@@ -861,6 +905,7 @@ class SettingsWindow(QDialog):
         )
         for name, widget in fields.items():
             setattr(self, f"_{name}", widget)
+        self._screen_auto_observe.toggled.connect(self._sync_random_observe)
         return page
 
     def _build_vision_page(self):
@@ -886,9 +931,20 @@ class SettingsWindow(QDialog):
                 text, self._vision_provider_preset, VISION_PRESETS))
         self._vision_enabled.stateChanged.connect(self._refresh_service_status_cards)
         self._vision_allow_cloud.stateChanged.connect(self._refresh_service_status_cards)
+        self._vision_random_observe.toggled.connect(self._sync_random_observe)
         for field in (self._vision_url, self._vision_model, self._vision_key):
             field.textChanged.connect(self._refresh_service_status_cards)
         return page
+
+    def _sync_random_observe(self, checked: bool) -> None:
+        """Keep the random-observation switch consistent across all pages."""
+        for widget in (getattr(self, "_screen_auto_observe", None),
+                       getattr(self, "_vision_random_observe", None),
+                       getattr(self, "_general_random_observe", None)):
+            if widget is not None and widget.isChecked() != checked:
+                widget.blockSignals(True)
+                widget.setChecked(checked)
+                widget.blockSignals(False)
 
     def _build_memory_page(self):
         self._memory_page = MemorySettingsPage(
@@ -960,6 +1016,13 @@ class SettingsWindow(QDialog):
             self._asr_api_url, self._asr_api_key, self._asr_api_model, self._asr_api_language,
         )
         self._asr_provider.currentIndexChanged.connect(self._sync_asr_provider_fields)
+        self._asr_provider_preset.currentIndexChanged.connect(
+            lambda _index: self._apply_provider_preset(
+                self._asr_provider_preset.currentData(), ASR_PRESETS,
+                self._asr_api_url, self._asr_api_model))
+        self._asr_api_url.textEdited.connect(
+            lambda text: self._sync_preset_from_url(
+                text, self._asr_provider_preset, ASR_PRESETS))
         self._asr_discover_button.clicked.connect(
             lambda: self._discover_models(
                 "asr", self._asr_api_url, self._asr_api_key,
@@ -1140,33 +1203,16 @@ class SettingsWindow(QDialog):
         self._dialog_scale.setToolTip("应用后立即调整对话框大小和控件字体。")
         self._row("对话框缩放", self._dialog_scale, lay)
 
-        self._sec(lay, "行为")
+        self._sec(lay, "互动")
 
-        self._click_combo = QComboBox()
-        self._click_combo.addItem("切换下一张立绘", "switch_sprite")
-        self._click_combo.addItem("弹跳动画", "bounce")
-        self._click_combo.addItem("无反应", "none")
-        self._click_combo.setFixedHeight(30)
-        current = self.config.get("behavior", "click_action",
-                                  default="switch_sprite")
-        idx = self._click_combo.findData(current)
-        if idx >= 0:
-            self._click_combo.setCurrentIndex(idx)
-        self._row("点击立绘", self._click_combo, lay)
-
-        self._auto_idle_cb = QCheckBox("自动待机动画")
-        self._auto_idle_cb.setChecked(
-            self.config.get("behavior", "auto_idle", default=True))
-        lay.addWidget(self._auto_idle_cb)
-
-        self._idle_interval = QSpinBox()
-        self._idle_interval.setRange(5, 600)
-        self._idle_interval.setSuffix(" 秒")
-        self._idle_interval.setValue(
-            self.config.get("behavior", "idle_interval", default=30))
-        self._idle_interval.setFixedHeight(30)
-        self._idle_interval.setStyleSheet(_spin_qss)
-        self._row("恢复待机时间", self._idle_interval, lay)
+        self._general_random_observe = QCheckBox(
+            "随机识图：角色在随机间隔内观察屏幕并自然回应")
+        self._general_random_observe.setChecked(
+            self.config.get("screen_capture", "auto_observe", default=True))
+        self._general_random_observe.setToolTip(
+            "需要“图像理解”页配置可用的视觉服务；间隔与冷却在“屏幕识别”页调整。")
+        self._general_random_observe.toggled.connect(self._sync_random_observe)
+        lay.addWidget(self._general_random_observe)
 
         lay.addStretch()
         return page
@@ -1668,28 +1714,12 @@ class SettingsWindow(QDialog):
                 else self.config.get("window", "renderer", default="live2d")
             ),
         }
+        # 行为不再提供配置界面；保留配置文件中的既有值（或默认值）。
         s["behavior"] = {
-            "click_action": (
-                safe(getattr(self, "_click_combo", None),
-                     type("", (), {"currentData": lambda: "switch_sprite"})()
-                     ).currentData()
-                if safe(getattr(self, "_click_combo", None))
-                else "switch_sprite"
-            ),
-            "auto_idle": (
-                safe(getattr(self, "_auto_idle_cb", None),
-                     type("", (), {"isChecked": lambda: True})()
-                     ).isChecked()
-                if safe(getattr(self, "_auto_idle_cb", None))
-                else True
-            ),
-            "idle_interval": (
-                safe(getattr(self, "_idle_interval", None),
-                     type("", (), {"value": lambda: 30})()
-                     ).value()
-                if safe(getattr(self, "_idle_interval", None))
-                else 30
-            ),
+            "click_action": self.config.get("behavior", "click_action",
+                                            default="switch_sprite"),
+            "auto_idle": self.config.get("behavior", "auto_idle", default=True),
+            "idle_interval": self.config.get("behavior", "idle_interval", default=30),
         }
         s["general"] = {
             "typing_speed": (
@@ -1738,7 +1768,10 @@ class SettingsWindow(QDialog):
         sys_prompt = safe(getattr(self, "_system_prompt", None))
         fmt_prompt = safe(getattr(self, "_format_prompt", None))
 
-        s["tts"] = {"enabled": True,
+        # 懒加载：页面从未构建时不返回对应配置节，apply 不会触碰这些配置。
+        built = self._pages if hasattr(self, "_pages") else {}
+        if "tts" in built:
+            s["tts"] = {"enabled": True,
                     "model_path": safe(getattr(self, "_tts_model", None)).text().strip() if safe(getattr(self, "_tts_model", None)) else "",
                     "local_api_url": safe(getattr(self, "_tts_local_url", None)).text().strip() if safe(getattr(self, "_tts_local_url", None)) else "http://127.0.0.1:9880",
                     "local_config": safe(getattr(self, "_tts_local_config", None)).text().strip() if safe(getattr(self, "_tts_local_config", None)) else "GPT_SoVITS/configs/noir_v2proplus.yaml",
@@ -1756,7 +1789,8 @@ class SettingsWindow(QDialog):
                     "model": safe(getattr(self, "_tts_api_model", None)).text().strip() if safe(getattr(self, "_tts_api_model", None)) else "",
                     "voice": safe(getattr(self, "_tts_api_voice", None)).text().strip() if safe(getattr(self, "_tts_api_voice", None)) else "",
                     "response_format": safe(getattr(self, "_tts_response_format", None)).currentData() if safe(getattr(self, "_tts_response_format", None)) else "wav"}
-        s["asr"] = {"enabled": safe(getattr(self, "_asr_enabled", None)).isChecked() if safe(getattr(self, "_asr_enabled", None)) else False,
+        if "asr" in built:
+            s["asr"] = {"enabled": safe(getattr(self, "_asr_enabled", None)).isChecked() if safe(getattr(self, "_asr_enabled", None)) else False,
                     "model_path": safe(getattr(self, "_asr_model", None)).text().strip() if safe(getattr(self, "_asr_model", None)) else "",
                     "hotkey": safe(getattr(self, "_asr_hotkey", None)).text().strip() if safe(getattr(self, "_asr_hotkey", None)) else "Ctrl+Alt+Space",
                     "device": safe(getattr(self, "_asr_device", None)).currentData() if safe(getattr(self, "_asr_device", None)) else "cpu",
@@ -1767,22 +1801,33 @@ class SettingsWindow(QDialog):
                     "api_key": safe(getattr(self, "_asr_api_key", None)).text().strip() if safe(getattr(self, "_asr_api_key", None)) else "",
                     "model": safe(getattr(self, "_asr_api_model", None)).text().strip() if safe(getattr(self, "_asr_api_model", None)) else "whisper-1",
                     "language": safe(getattr(self, "_asr_api_language", None)).text().strip() if safe(getattr(self, "_asr_api_language", None)) else ""}
-        s["screen_capture"] = {"keep_captures": safe(getattr(self, "_screen_keep", None)).isChecked() if safe(getattr(self, "_screen_keep", None)) else False,
+        if "screen" in built:
+            s["screen_capture"] = {"keep_captures": safe(getattr(self, "_screen_keep", None)).isChecked() if safe(getattr(self, "_screen_keep", None)) else False,
                                "hotkey": safe(getattr(self, "_screen_hotkey", None)).text().strip() if safe(getattr(self, "_screen_hotkey", None)) else "Ctrl+Alt+O",
                                "cloud_first": safe(getattr(self, "_screen_cloud_first", None)).isChecked() if safe(getattr(self, "_screen_cloud_first", None)) else True,
-                               "auto_observe": safe(getattr(self, "_screen_auto_observe", None)).isChecked() if safe(getattr(self, "_screen_auto_observe", None)) else False,
+                               "auto_observe": safe(getattr(self, "_screen_auto_observe", None)).isChecked() if safe(getattr(self, "_screen_auto_observe", None)) else self.config.get("screen_capture", "auto_observe", default=True),
                                "observe_min_interval": (safe(getattr(self, "_screen_observe_min", None)).value() if safe(getattr(self, "_screen_observe_min", None)) else 5) * 60,
                                "observe_max_interval": (safe(getattr(self, "_screen_observe_max", None)).value() if safe(getattr(self, "_screen_observe_max", None)) else 15) * 60,
                                "observe_cooldown": (safe(getattr(self, "_screen_observe_cooldown", None)).value() if safe(getattr(self, "_screen_observe_cooldown", None)) else 10) * 60,
                                "vision_max_dimension": safe(getattr(self, "_screen_vision_max_dimension", None)).value() if safe(getattr(self, "_screen_vision_max_dimension", None)) else 1280}
-        s["vision"] = {"enabled": safe(getattr(self, "_vision_enabled", None)).isChecked() if safe(getattr(self, "_vision_enabled", None)) else False,
+        else:
+            # 屏幕页未构建时，仍要保存通用/图像页“随机识图”开关的改动。
+            observe_cb = (safe(getattr(self, "_vision_random_observe", None))
+                          or safe(getattr(self, "_general_random_observe", None)))
+            if observe_cb is not None:
+                section = dict(self.config.get("screen_capture", default={}))
+                section["auto_observe"] = observe_cb.isChecked()
+                s["screen_capture"] = section
+        if "vision" in built:
+            s["vision"] = {"enabled": safe(getattr(self, "_vision_enabled", None)).isChecked() if safe(getattr(self, "_vision_enabled", None)) else False,
                        "base_url": safe(getattr(self, "_vision_url", None)).text().strip() if safe(getattr(self, "_vision_url", None)) else "",
                        "model": safe(getattr(self, "_vision_model", None)).text().strip() if safe(getattr(self, "_vision_model", None)) else "",
                        "api_key": safe(getattr(self, "_vision_key", None)).text().strip() if safe(getattr(self, "_vision_key", None)) else "",
                        "allow_cloud": safe(getattr(self, "_vision_allow_cloud", None)).isChecked() if safe(getattr(self, "_vision_allow_cloud", None)) else False}
-        s["knowledge"] = {
-            "enabled": safe(getattr(self, "_knowledge_enabled", None)).isChecked() if safe(getattr(self, "_knowledge_enabled", None)) else True,
-        }
+        if "character_knowledge" in built:
+            s["knowledge"] = {
+                "enabled": safe(getattr(self, "_knowledge_enabled", None)).isChecked() if safe(getattr(self, "_knowledge_enabled", None)) else True,
+            }
         memory_page = safe(getattr(self, "_memory_page", None))
         s["memory"] = memory_page.collect() if memory_page else self.config.get("memory", default={})
 
@@ -1825,6 +1870,9 @@ class SettingsWindow(QDialog):
         return {}
 
     def _save_character_prompt(self):
+        # 懒加载：接口设置页未打开过时，提示词从未被编辑，无需写回。
+        if not hasattr(self, "_system_prompt"):
+            return
         save_character_prompt(
             self._character_config_path(), self._system_prompt.toPlainText(),
             self._format_prompt.toPlainText(),

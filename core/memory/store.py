@@ -139,6 +139,18 @@ class MemoryStore:
         self.conn.row_factory = sqlite3.Row
         self.conn.execute("PRAGMA journal_mode=WAL")
         self.conn.execute("PRAGMA busy_timeout=3000")
+        # WAL 下 NORMAL 依然保证数据库一致性，但省掉每次提交的 fsync；
+        # 聊天回合的写入延迟从毫秒级降到微秒级。
+        self.conn.execute("PRAGMA synchronous=NORMAL")
+        self.conn.execute("PRAGMA temp_store=MEMORY")
+        self.conn.execute("PRAGMA cache_size=-16000")
+        # 检索候选缓存：memories 表内容不变时跳过整表 JSON 反序列化。
+        self._memories_dirty = True
+        self._search_cache: list[tuple[dict, list, set, str]] = []
+        # 日历归档的 Markdown 文件写入延后到后台批量执行。
+        self._archive_write_lock = threading.Lock()
+        self._pending_archive_files: dict[int, bool] = {}
+        self._archive_flush_timer: threading.Timer | None = None
         self._init_schema()
         self._ensure_embedding_engine()
         self.sync_summary_files()
@@ -153,8 +165,13 @@ class MemoryStore:
         return NATIVE_AVAILABLE
 
     def close(self) -> None:
+        self.flush_archive_files()
         with self._lock:
             self.conn.close()
+
+    def _touch_memories(self) -> None:
+        """Invalidate the parsed retrieval cache after any memories write."""
+        self._memories_dirty = True
 
     def update_settings(self, settings: MemorySettings | dict) -> None:
         self.settings = settings if isinstance(settings, MemorySettings) else MemorySettings.from_dict(settings)
@@ -194,6 +211,7 @@ class MemoryStore:
                     content_hash TEXT NOT NULL, generated_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL);
                 CREATE INDEX IF NOT EXISTS idx_messages_unsummarized ON messages(summarized, id);
+                CREATE INDEX IF NOT EXISTS idx_messages_date ON messages(memory_date);
                 CREATE INDEX IF NOT EXISTS idx_memories_layer_date ON memories(layer, memory_date, period);
                 CREATE INDEX IF NOT EXISTS idx_archives_kind_range ON archives(kind, range_start, range_end);
             """)
@@ -243,6 +261,7 @@ class MemoryStore:
                                   (json.dumps(_embedding(row["content"])), row["id"]))
             self.conn.execute("INSERT OR REPLACE INTO metadata(key,value) VALUES('embedding_engine',?)",
                               (engine,))
+            self._touch_memories()
 
     def add_turn(self, user_text: str, assistant_text: str, mood: str = "平静",
                  when: datetime | None = None) -> tuple[int, int]:
@@ -402,6 +421,7 @@ class MemoryStore:
                                 now.isoformat(timespec="seconds"), now.isoformat(timespec="seconds"),
                                 metadata.get("start_date") or existing["range_start"],
                                 metadata.get("end_date") or existing["range_end"], existing["id"]))
+                        self._touch_memories()
                         report["updated"] += 1
                     else:
                         report["skipped"] += 1
@@ -441,6 +461,7 @@ class MemoryStore:
                 WHERE id=? AND layer='summary'""", (
                 content, json.dumps(_embedding(content)), self._content_hash(content), now, now, memory_id))
         if cur.rowcount:
+            self._touch_memories()
             self._write_summary_file(memory_id)
         return bool(cur.rowcount)
 
@@ -492,12 +513,13 @@ class MemoryStore:
 
     def pending_summary(self) -> dict | None:
         threshold = self.settings.recent_turns * 2
-        rows = self.conn.execute(
-            "SELECT * FROM messages WHERE summarized=0 ORDER BY id DESC").fetchall()
-        if len(rows) <= threshold:
+        total = self.conn.execute(
+            "SELECT COUNT(*) FROM messages WHERE summarized=0").fetchone()[0]
+        if total <= threshold:
             return None
         # Archive six complete oldest turns at a time.
-        batch = list(reversed(rows))[:12]
+        batch = self.conn.execute(
+            "SELECT * FROM messages WHERE summarized=0 ORDER BY id LIMIT 12").fetchall()
         prior = self.conn.execute(
             "SELECT content FROM memories WHERE layer='summary' ORDER BY id DESC LIMIT 1").fetchone()
         summary_count = self.conn.execute(
@@ -573,6 +595,7 @@ class MemoryStore:
             self.conn.execute(
                 "UPDATE memories SET layer='fact',category='事实',updated_at=? WHERE id=?",
                 (now.isoformat(timespec="seconds"), row["id"]))
+            self._touch_memories()
 
     def _insert_memory(self, layer: str, data: dict, now: datetime,
                        write_summary_file: bool = True) -> int:
@@ -599,6 +622,7 @@ class MemoryStore:
                 str(data.get("file_path") or ""), self._content_hash(content),
                 generated_at, manual_updated_at))
         memory_id = int(cur.lastrowid)
+        self._touch_memories()
         if layer == "summary" and write_summary_file:
             self._write_summary_file(memory_id)
         return memory_id
@@ -627,9 +651,30 @@ class MemoryStore:
                     (merged[:1200], json.dumps(list(dict.fromkeys(sources))),
                      json.dumps(_embedding(merged[:1200])), now.isoformat(timespec="seconds"), second["id"]))
                 self.conn.execute("DELETE FROM memories WHERE id=?", (first["id"],))
+                self._touch_memories()
                 if layer == "summary":
                     self._write_summary_file(second["id"])
                 rows = rows[1:]
+
+    def _search_candidates(self) -> list[tuple[dict, list, set, str]]:
+        """Return parsed memory rows, rebuilding only after memories change."""
+        if self._memories_dirty:
+            rows = self.conn.execute("SELECT * FROM memories ORDER BY id DESC").fetchall()
+            cache = []
+            for row in rows:
+                item = dict(row)
+                try:
+                    embedding = json.loads(row["embedding"] or "[]")
+                except (json.JSONDecodeError, TypeError):
+                    embedding = []
+                try:
+                    sources = set(json.loads(row["source_ids"] or "[]"))
+                except (json.JSONDecodeError, TypeError):
+                    sources = set()
+                cache.append((item, embedding, sources, item["content"].lower()))
+            self._search_cache = cache
+            self._memories_dirty = False
+        return self._search_cache
 
     def search(self, query: str, exclude_ids: set[int] | None = None, **filters) -> list[dict]:
         exclude_ids = exclude_ids or set()
@@ -638,43 +683,38 @@ class MemoryStore:
         date = filters.get("date") or time_filter["date"]
         periods = filters.get("periods") or time_filter["periods"]
         query_emb, terms = _embedding(query), _tokens(query)
-        rows = self.conn.execute("SELECT * FROM memories ORDER BY id DESC").fetchall()
         candidates = []
-        for row in rows:
-            if row["id"] in exclude_ids or row["importance"] < self.settings.min_importance:
+        for item, embedding, sources, lowered in self._search_candidates():
+            if item["id"] in exclude_ids or item["importance"] < self.settings.min_importance:
                 continue
-            if visible_message_ids:
-                try:
-                    sources = set(json.loads(row["source_ids"] or "[]"))
-                except (json.JSONDecodeError, TypeError):
-                    sources = set()
-                if sources & visible_message_ids:
-                    continue
-            if date and not ((row["range_start"] or row["memory_date"]) <= date
-                             <= (row["range_end"] or row["memory_date"])):
+            if visible_message_ids and sources & visible_message_ids:
                 continue
-            if periods and row["period"] not in periods:
+            if date and not ((item["range_start"] or item["memory_date"]) <= date
+                             <= (item["range_end"] or item["memory_date"])):
                 continue
-            if filters.get("layer") and row["layer"] != filters["layer"]:
+            if periods and item["period"] not in periods:
                 continue
-            if filters.get("subject") and row["subject"] != filters["subject"]:
+            if filters.get("layer") and item["layer"] != filters["layer"]:
                 continue
-            if filters.get("category") and row["category"] != filters["category"]:
+            if filters.get("subject") and item["subject"] != filters["subject"]:
                 continue
-            lowered = row["content"].lower()
+            if filters.get("category") and item["category"] != filters["category"]:
+                continue
             keyword = sum(lowered.count(term) for term in terms) / max(1, len(terms))
-            candidates.append((row, json.loads(row["embedding"] or "[]"), keyword))
+            candidates.append((item, embedding, keyword))
         scores = hybrid_rank(
             query_emb, [item[1] for item in candidates], [item[2] for item in candidates],
             [item[0]["importance"] for item in candidates])
-        ranked = [(score, dict(candidates[index][0])) for index, score in scores
+        ranked = [(score, candidates[index][0]) for index, score in scores
                   if score > 0 or date]
         result, chars = [], 0
-        for _, item in ranked:
+        for _, cached_item in ranked:
             if len(result) >= self.settings.retrieval_count:
                 break
-            if chars + len(item["content"]) > self.settings.max_context_chars:
+            if chars + len(cached_item["content"]) > self.settings.max_context_chars:
                 continue
+            # Copy so callers and later turns never mutate the shared cache.
+            item = dict(cached_item)
             item["source_messages"] = self._source_messages(item)
             result.append(item)
             chars += len(item["content"])
@@ -759,50 +799,98 @@ class MemoryStore:
             self.conn.execute("INSERT OR REPLACE INTO metadata(key,value) VALUES('archive_format_version','2')")
 
     def refresh_calendar_archives(self, day: str | None = None) -> int:
-        """Incrementally materialize human-readable calendar summaries."""
+        """Incrementally materialize human-readable calendar summaries.
+
+        Runs on every chat turn, so the统计用聚合查询、摘录只取最近 40 条，
+        Markdown 文件写入交给后台防抖批处理，避免阻塞 GUI 线程。
+        """
         day = day or datetime.now().date().isoformat()
         changed = 0
+        pending_ids = []
         with self._lock, self.conn:
             for kind, (start, end) in self._archive_ranges(day).items():
-                messages = self.conn.execute(
-                    "SELECT id,role,content,memory_date,period FROM messages "
-                    "WHERE memory_date BETWEEN ? AND ? ORDER BY id", (start, end)).fetchall()
-                if not messages:
+                stats = self.conn.execute(
+                    "SELECT COUNT(*) AS total, "
+                    "COUNT(DISTINCT memory_date) AS active_days, "
+                    "SUM(role='user') AS turns FROM messages "
+                    "WHERE memory_date BETWEEN ? AND ?", (start, end)).fetchone()
+                if not stats or not stats["total"]:
                     continue
-                source_ids = [int(row["id"]) for row in messages]
-                active_days = len({row["memory_date"] for row in messages})
-                turns = sum(1 for row in messages if row["role"] == "user")
+                # 只取 id 列（索引覆盖查询），不再把整个周期的消息内容读出。
+                source_ids = [int(row[0]) for row in self.conn.execute(
+                    "SELECT id FROM messages WHERE memory_date BETWEEN ? AND ? ORDER BY id",
+                    (start, end))]
+                recent = self.conn.execute(
+                    "SELECT id,role,content,memory_date,period FROM messages "
+                    "WHERE memory_date BETWEEN ? AND ? ORDER BY id DESC LIMIT 40",
+                    (start, end)).fetchall()
                 excerpts = []
-                for row in messages[-40:]:
+                for row in reversed(recent):
                     speaker = "我" if row["role"] == "assistant" else "用户"
                     excerpts.append(f"- {row['memory_date']} {row['period']} · {speaker}：{row['content'][:240]}")
                 label = self._archive_kind_label(kind)
                 title = f"{start} {label}" if start == end else f"{start} 至 {end} {label}"
-                content = (f"# {title}\n\n本周期陪伴 {active_days} 天，共完成 {turns} 轮对话。\n\n"
+                content = (f"# {title}\n\n本周期陪伴 {stats['active_days']} 天，"
+                           f"共完成 {int(stats['turns'] or 0)} 轮对话。\n\n"
                            "## 对话记录摘要\n\n" + "\n".join(excerpts))
                 stable_id = str(uuid.uuid5(uuid.NAMESPACE_URL,
                                            f"{self.character_dir.resolve()}:{kind}:{start}:{end}"))
                 relative = Path("archives") / kind / start[:4] / f"{start}.md"
                 now = datetime.now().isoformat(timespec="seconds")
                 existing = self.conn.execute(
-                    "SELECT id,generated_at FROM archives WHERE stable_id=?", (stable_id,)).fetchone()
+                    "SELECT id,content_hash FROM archives WHERE stable_id=?", (stable_id,)).fetchone()
                 digest = self._content_hash(content)
                 if existing:
+                    if existing["content_hash"] == digest:
+                        continue
                     self.conn.execute(
                         "UPDATE archives SET title=?,content=?,source_ids=?,file_path=?,content_hash=?,updated_at=? WHERE id=?",
                         (title, content, json.dumps(source_ids), str(relative), digest, now, existing["id"]))
+                    pending_ids.append(int(existing["id"]))
                 else:
-                    self.conn.execute(
+                    cur = self.conn.execute(
                         "INSERT INTO archives(stable_id,kind,title,content,range_start,range_end,source_ids,file_path,content_hash,generated_at,updated_at) "
                         "VALUES(?,?,?,?,?,?,?,?,?,?,?)",
                         (stable_id, kind, title, content, start, end, json.dumps(source_ids),
                          str(relative), digest, now, now))
-                row = self.conn.execute("SELECT * FROM archives WHERE stable_id=?", (stable_id,)).fetchone()
-                target = self.root / relative
+                    pending_ids.append(int(cur.lastrowid))
+                changed += 1
+        for archive_id in pending_ids:
+            self._queue_archive_file(archive_id)
+        return changed
+
+    def _queue_archive_file(self, archive_id: int) -> None:
+        with self._archive_write_lock:
+            self._pending_archive_files[archive_id] = True
+            if self._archive_flush_timer is None:
+                timer = threading.Timer(2.0, self.flush_archive_files)
+                timer.daemon = True
+                self._archive_flush_timer = timer
+                timer.start()
+
+    def flush_archive_files(self) -> int:
+        """Write queued archive Markdown files; safe to call from any thread."""
+        with self._archive_write_lock:
+            timer, self._archive_flush_timer = self._archive_flush_timer, None
+            if timer is not None:
+                timer.cancel()
+            ids = list(self._pending_archive_files)
+            self._pending_archive_files.clear()
+        written = 0
+        for archive_id in ids:
+            with self._lock:
+                row = self.conn.execute(
+                    "SELECT * FROM archives WHERE id=?", (archive_id,)).fetchone()
+            if not row:
+                continue
+            try:
+                target = self.root / row["file_path"]
                 target.parent.mkdir(parents=True, exist_ok=True)
                 target.write_text(self._archive_markdown(row), encoding="utf-8")
-                changed += 1
-        return changed
+                written += 1
+            except OSError:
+                continue
+        return written
 
     def list_archives(self, kind: str = "", limit: int = 500) -> list[dict]:
         if kind:
@@ -844,6 +932,7 @@ class MemoryStore:
 
     def export_archive(self, path: Path) -> dict[str, int]:
         """Create a portable ZIP containing JSON, Markdown sources and a manifest."""
+        self.flush_archive_files()
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
         payload = {
@@ -913,12 +1002,16 @@ class MemoryStore:
         values.append(memory_id)
         with self.conn:
             cur = self.conn.execute(sql, values)
+        if cur.rowcount:
+            self._touch_memories()
         return bool(cur.rowcount)
 
     def delete_record(self, memory_id: int) -> bool:
         self._delete_summary_file(memory_id)
         with self.conn:
             cur = self.conn.execute("DELETE FROM memories WHERE id=?", (memory_id,))
+        if cur.rowcount:
+            self._touch_memories()
         return bool(cur.rowcount)
 
     def export_json(self, path: Path) -> None:
@@ -1035,6 +1128,9 @@ class MemoryStore:
             self.conn.execute("DELETE FROM emotion_log")
             self.conn.execute("DELETE FROM archives")
             self.conn.execute("DELETE FROM metadata WHERE key='history_imported'")
+        self._touch_memories()
+        with self._archive_write_lock:
+            self._pending_archive_files.clear()
         shutil.rmtree(self.summaries_dir, ignore_errors=True)
         self.summaries_dir.mkdir(parents=True, exist_ok=True)
         shutil.rmtree(self.archives_dir, ignore_errors=True)

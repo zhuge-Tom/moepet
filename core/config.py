@@ -23,7 +23,8 @@ DEFAULTS = {
         "idle_interval": 30,
     },
     "general": {
-        "typing_speed": 40,
+        # 逐字显示放慢到接近朗读节奏，缩小文字与语音的时间差。
+        "typing_speed": 80,
         "dialog_scale": 100,
         "auto_start": False,
     },
@@ -36,10 +37,12 @@ DEFAULTS = {
         "ignore_format_error": True,
     },
     "asr": {
-        "enabled": False, "model_path": "", "hotkey": "Ctrl+Alt+Space",
+        # 预填免费云端转写端点：在设置页粘贴 API Key 即可使用。
+        "enabled": True, "model_path": "", "hotkey": "Ctrl+Alt+Space",
         "device": "cpu", "compute_type": "int8", "auto_send": True,
-        "provider": "local", "base_url": "", "api_key": "",
-        "model": "whisper-1", "language": "",
+        "provider": "cloud", "base_url": "https://api.siliconflow.cn/v1",
+        "api_key": "",
+        "model": "FunAudioLLM/SenseVoiceSmall", "language": "",
     },
     "tts": {
         "enabled": True, "model_path": "vendor/gpt_sovits_cpu", "auto_play": True,
@@ -67,16 +70,18 @@ DEFAULTS = {
     "screen_capture": {
         "hotkey": "Ctrl+Alt+O", "ocr_model_path": "", "keep_captures": False,
         "cloud_first": True,
-        # Active observation is deliberately opt-in. Values are seconds.
-        "auto_observe": False, "observe_min_interval": 300,
+        # 随机识图默认开启；仍需图像理解服务就绪后才会真正触发。Values are seconds.
+        "auto_observe": True, "observe_min_interval": 300,
         "observe_max_interval": 900, "observe_cooldown": 600,
         # Upper bound for images sent to an optional vision provider.
         # OCR keeps the original capture for best text recognition.
         "vision_max_dimension": 1280,
     },
     "vision": {
-        "enabled": False, "base_url": "", "api_key": "", "model": "",
-        "allow_cloud": False,
+        # 预填免费视觉端点（智谱 GLM-4V-Flash）：粘贴 API Key 即可使用。
+        "enabled": True, "base_url": "https://open.bigmodel.cn/api/paas/v4",
+        "api_key": "", "model": "glm-4v-flash",
+        "allow_cloud": True,
     },
     "knowledge": {
         "enabled": True, "retrieval_count": 4, "max_context_chars": 3000,

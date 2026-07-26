@@ -30,8 +30,19 @@ CHAT_PRESETS = (
 
 VISION_PRESETS = (
     ProviderPreset("custom", "自定义 OpenAI-compatible 视觉服务", "", ""),
+    ProviderPreset("zhipu", "智谱 GLM-4V-Flash（免费）",
+                   "https://open.bigmodel.cn/api/paas/v4", "glm-4v-flash"),
+    ProviderPreset("siliconflow", "SiliconFlow（硅基流动）",
+                   "https://api.siliconflow.cn/v1", "Qwen/Qwen2.5-VL-32B-Instruct"),
     ProviderPreset("ollama", "Ollama（本地，无需 API Key）", "http://localhost:11434/v1", "qwen3-vl:8b"),
     ProviderPreset("openai", "OpenAI", "https://api.openai.com/v1", "gpt-4o-mini"),
+)
+
+ASR_PRESETS = (
+    ProviderPreset("custom", "自定义 OpenAI-compatible 转写服务", "", ""),
+    ProviderPreset("siliconflow", "SiliconFlow（硅基流动，免费额度）",
+                   "https://api.siliconflow.cn/v1", "FunAudioLLM/SenseVoiceSmall"),
+    ProviderPreset("openai", "OpenAI Whisper", "https://api.openai.com/v1", "whisper-1"),
 )
 
 TTS_PRESETS = (

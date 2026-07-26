@@ -16,7 +16,7 @@ from ui.theme import (
     STAR_TEXT, STAR_TEXT_MUTED, STAR_TEXT_SUBTLE,
 )
 from ui.settings.provider_presets import (
-    CHAT_PRESETS, TTS_PRESETS, VISION_PRESETS, preset_key_for_url,
+    ASR_PRESETS, CHAT_PRESETS, TTS_PRESETS, VISION_PRESETS, preset_key_for_url,
 )
 from ui.settings.service_status import vision_ready
 
@@ -301,11 +301,12 @@ def make_asr_page(config, add_probe) -> tuple[QWidget, dict[str, QWidget], dict[
     layout.addWidget(auto_send)
 
     _section(layout, "云端识别 API")
-    api_url = _line_edit("https://api.example.com/v1/audio/transcriptions")
+    api_url = _line_edit("https://api.siliconflow.cn/v1")
     api_url.setText(config.get("asr", "base_url", default=""))
+    api_preset = _provider_preset(layout, api_url.text(), ASR_PRESETS)
     api_key = _line_edit("sk-xxxx", password=True)
     api_key.setText(config.get_secret("asr") or config.get("asr", "api_key", default=""))
-    api_model = _line_edit("whisper-1 / 供应商模型名")
+    api_model = _line_edit("FunAudioLLM/SenseVoiceSmall / whisper-1")
     api_model.setText(config.get("asr", "model", default="whisper-1"))
     language = _line_edit("留空自动识别，例如 zh")
     language.setText(config.get("asr", "language", default=""))
@@ -323,7 +324,8 @@ def make_asr_page(config, add_probe) -> tuple[QWidget, dict[str, QWidget], dict[
               "asr_compute": compute, "asr_hotkey": hotkey, "asr_auto_send": auto_send,
               "asr_api_url": api_url, "asr_api_key": api_key, "asr_api_model": api_model,
               "asr_api_language": language, "asr_discover_button": discover_button,
-              "asr_model_picker": discover_picker, "asr_discover_status": discover_status}
+              "asr_model_picker": discover_picker, "asr_discover_status": discover_status,
+              "asr_provider_preset": api_preset}
     return page, fields, {**local_rows, **cloud_rows}
 
 
@@ -387,9 +389,9 @@ def make_screen_page(config, add_probe) -> tuple[QWidget, dict[str, QWidget]]:
     cloud_first.setChecked(config.get("screen_capture", "cloud_first", default=True))
     layout.addWidget(cloud_first)
 
-    _section(layout, "随机主动观察（可选）")
-    auto_observe = QCheckBox("允许角色在随机间隔内观察屏幕并自然回应")
-    auto_observe.setChecked(config.get("screen_capture", "auto_observe", default=False))
+    _section(layout, "随机识图")
+    auto_observe = QCheckBox("随机识图：角色在随机间隔内观察屏幕并自然回应")
+    auto_observe.setChecked(config.get("screen_capture", "auto_observe", default=True))
     layout.addWidget(auto_observe)
     fields = {"screen_keep": keep, "screen_hotkey": hotkey, "screen_cloud_first": cloud_first,
               "screen_auto_observe": auto_observe}
@@ -414,7 +416,7 @@ def make_screen_page(config, add_probe) -> tuple[QWidget, dict[str, QWidget]]:
     _row(layout, "发送给视觉模型的最大边长", vision_size)
     fields["screen_vision_max_dimension"] = vision_size
     _hint(layout, "只影响发给图像理解服务的副本；原始截图仍用于本地 OCR。较小尺寸可减少延迟与云端图像消耗。")
-    _hint(layout, "主动观察默认关闭；需要图像理解可用，云端服务还需确认上传授权。")
+    _hint(layout, "随机识图默认开启；需要图像理解服务配置完成（含 API Key）后才会真正触发。")
     add_probe(layout, "ocr", "测试本地 OCR")
     layout.addStretch()
     return page, fields
@@ -445,10 +447,16 @@ def make_vision_page(config, add_probe) -> tuple[QWidget, dict[str, QWidget]]:
     allow_cloud.setChecked(config.get("vision", "allow_cloud", default=False))
     layout.addWidget(allow_cloud)
     _hint(layout, "本地地址无需上传授权；云端地址必须勾选授权才会收到截图。")
+    _section(layout, "随机识图")
+    random_observe = QCheckBox("随机识图：角色在随机间隔内观察屏幕并自然回应")
+    random_observe.setChecked(config.get("screen_capture", "auto_observe", default=True))
+    layout.addWidget(random_observe)
+    _hint(layout, "间隔与冷却时间可在“屏幕识别”页调整；需要图像理解服务可用。")
     add_probe(layout, "vision", "测试图像理解服务")
     layout.addStretch()
     return page, {"vision_status_card": card, "vision_enabled": enabled, "vision_url": url,
                   "vision_model": model, "vision_key": key, "vision_allow_cloud": allow_cloud,
+                  "vision_random_observe": random_observe,
                   "vision_discover_button": discover_button,
                   "vision_model_picker": discover_picker,
                   "vision_discover_status": discover_status,

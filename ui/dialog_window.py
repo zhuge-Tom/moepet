@@ -26,7 +26,7 @@ class DialogWindow(QDialog):
     position_changed = Signal(int, int)
     size_changed = Signal(int, int)
 
-    TYPING_INTERVAL = 40  # 逐字显示间隔（毫秒）
+    TYPING_INTERVAL = 80  # 逐字显示间隔（毫秒）
     CONTROL_HEIGHT = 40
 
     def __init__(self, char_name: str = "???", parent=None):
@@ -39,6 +39,11 @@ class DialogWindow(QDialog):
         self._history: list[dict] = []
         self._is_streaming = False
         self._stream_buffer = ""
+        # 流式输出同样走逐字显示：已过滤的目标文本、已显示的字符数、
+        # 以及流结束后要替换成的最终清洗文本。
+        self._stream_visible = ""
+        self._stream_typed = 0
+        self._stream_final_text: str | None = None
         self._scale_percent = 100
         self._voice_available = True
         self._voice_recording = False
@@ -128,10 +133,18 @@ class DialogWindow(QDialog):
 
     # ─── 文本显示 ─────────────────────────────
 
+    def _cancel_stream_typing(self) -> None:
+        """Reset streaming typewriter state before a non-stream display."""
+        self._is_streaming = False
+        self._stream_visible = ""
+        self._stream_typed = 0
+        self._stream_final_text = None
+        self._text_display.setPlaceholderText("")
+
     def display_text(self, text: str, role: str = "assistant"):
         """逐字显示文本"""
-        if self._typing:
-            self._typing_timer.stop()
+        self._typing_timer.stop()
+        self._cancel_stream_typing()
 
         # 存入历史
         self._history.append({"role": role, "text": text})
@@ -145,29 +158,34 @@ class DialogWindow(QDialog):
 
     def display_instant(self, text: str, role: str = "user"):
         """立即显示文本（用户消息用）"""
+        self._typing_timer.stop()
+        self._typing = False
+        self._cancel_stream_typing()
         self._history.append({"role": role, "text": text})
         self._text_display.setText(text)
 
     # ─── 流式输入（LLM 用）────────────────────
 
     def start_stream(self):
-        """开始流式接收，清空显示区并显示思考中"""
-        if self._typing:
-            self._typing_timer.stop()
-            self._typing = False
+        """开始流式接收：清空显示区，先展示“正在思考”占位"""
+        self._typing_timer.stop()
+        self._typing = False
         self._text_display.clear()
         self._stream_buffer = ""
+        self._stream_visible = ""
+        self._stream_typed = 0
+        self._stream_final_text = None
         self._is_streaming = True
+        self._text_display.setPlaceholderText(f"{self._char_name} 正在思考…")
 
     def append_stream(self, text: str):
-        """Append a stream chunk without exposing provisional stage directions."""
+        """Buffer a stream chunk; the typewriter reveals it at reading pace."""
         if not self._is_streaming:
             self.start_stream()
         self._stream_buffer += text
-        self._text_display.setPlainText(self._visible_stream_text(self._stream_buffer))
-        cursor = self._text_display.textCursor()
-        cursor.movePosition(QTextCursor.End)
-        self._text_display.setTextCursor(cursor)
+        self._stream_visible = self._visible_stream_text(self._stream_buffer)
+        if not self._typing_timer.isActive():
+            self._typing_timer.start()
 
     @staticmethod
     def _visible_stream_text(text: str) -> str:
@@ -189,17 +207,25 @@ class DialogWindow(QDialog):
         return "".join(visible)
 
     def finish_stream(self, full_text: str = ""):
-        """流式结束，保存历史"""
+        """流式结束：保存历史，打字机继续敲完剩余文字"""
         self._is_streaming = False
         text = full_text or self._stream_buffer
         if text:
-            # The service may remove model markup after the last stream chunk.
-            # Replace the provisional display so UI, history, and TTS agree.
-            if full_text and full_text != self._stream_buffer:
-                self._text_display.setPlainText(full_text)
             self._history.append({"role": "assistant", "text": text})
+            # The service may remove model markup after the last stream chunk.
+            # The typewriter finishes the visible text first, then swaps in
+            # the cleaned final copy so UI, history, and TTS agree.
+            self._stream_final_text = full_text or self._visible_stream_text(self._stream_buffer)
+            if not self._typing_timer.isActive():
+                self._typing_timer.start()
+        else:
+            self._typing_timer.stop()
+            self._text_display.setPlaceholderText("")
 
     def _type_next_char(self):
+        if self._is_streaming or self._stream_final_text is not None:
+            self._advance_stream_typing()
+            return
         if self._typed_index < len(self._full_text):
             self._text_display.insertPlainText(self._full_text[self._typed_index])
             self._typed_index += 1
@@ -210,6 +236,38 @@ class DialogWindow(QDialog):
         else:
             self._typing_timer.stop()
             self._typing = False
+
+    def _advance_stream_typing(self) -> None:
+        """Reveal one buffered stream character per tick, then settle."""
+        target = self._stream_visible
+        if self._stream_typed < len(target):
+            self._text_display.insertPlainText(target[self._stream_typed])
+            self._stream_typed += 1
+            cursor = self._text_display.textCursor()
+            cursor.movePosition(QTextCursor.End)
+            self._text_display.setTextCursor(cursor)
+            return
+        if self._is_streaming:
+            # 已敲完缓冲，流还没结束：保持定时器等待下一批字符。
+            return
+        final = self._stream_final_text
+        self._stream_final_text = None
+        self._typing_timer.stop()
+        self._text_display.setPlaceholderText("")
+        if final is not None and final != target:
+            self._text_display.setPlainText(final)
+
+    def flush_typing(self) -> None:
+        """Reveal everything pending at once (tests and instant-skip paths)."""
+        for _ in range(200000):
+            state = (self._stream_typed, self._typed_index,
+                     self._stream_final_text, self._typing_timer.isActive())
+            if not self._typing_timer.isActive():
+                break
+            self._type_next_char()
+            if state == (self._stream_typed, self._typed_index,
+                         self._stream_final_text, self._typing_timer.isActive()):
+                break
 
     # ─── 输入处理 ─────────────────────────────
 

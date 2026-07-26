@@ -1,4 +1,6 @@
-PySide6>=6.8,<7
+# Essentials 已覆盖 moepet 用到的全部 Qt 模块（Core/Gui/Widgets/Network/OpenGLWidgets），
+# 完整 PySide6 会额外安装 WebEngine/Multimedia 等 400MB+ 的未用组件。
+PySide6-Essentials>=6.8,<7
 live2d-py==0.7.0.4
 keyring>=25,<26
 jieba>=0.42,<1
