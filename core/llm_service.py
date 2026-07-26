@@ -154,7 +154,7 @@ class LLMService(QObject):
         self._buffer = ""
         self._turn_context = ""
         self._speech_protocol_active = self._speech_protocol and stream
-        self._speech_stage = "await_zh"
+        self._speech_stage = "await_pair"
         self._speech_buffer = ""
         self._speech_sent = False
 
@@ -225,8 +225,58 @@ class LLMService(QObject):
             self.chunk_received.emit(content)
 
     def _drain_speech_protocol(self, final: bool = False) -> None:
-        """Parse repeated ``<zh>…</zh><jp>…</jp>`` streaming pairs."""
+        """Parse Japanese-first pairs, while accepting the legacy order."""
         while self._speech_protocol_active:
+            if self._speech_stage == "await_pair":
+                jp_marker = self._speech_buffer.find("<jp>")
+                zh_marker = self._speech_buffer.find("<zh>")
+                markers = [(pos, stage, size) for pos, stage, size in (
+                    (jp_marker, "jp_first", 4), (zh_marker, "zh", 4)) if pos >= 0]
+                if not markers:
+                    if final or len(self._speech_buffer) > 32:
+                        self._speech_protocol_active = False
+                        self._emit_visible_chunk(self._speech_buffer)
+                        self._speech_buffer = ""
+                    return
+                marker, stage, size = min(markers, key=lambda item: item[0])
+                self._speech_buffer = self._speech_buffer[marker + size:]
+                self._speech_stage = stage
+            if self._speech_stage == "jp_first":
+                marker = self._speech_buffer.find("</jp>")
+                if marker < 0:
+                    if final:
+                        self._speech_protocol_active = False
+                        self._speech_buffer = ""
+                    return
+                japanese = self._speech_buffer[:marker].strip()
+                self._speech_buffer = self._speech_buffer[marker + 5:]
+                self._speech_stage = "await_zh_after_jp"
+                if japanese:
+                    self._speech_sent = True
+                    self.speech_ready.emit(japanese)
+                continue
+            if self._speech_stage == "await_zh_after_jp":
+                marker = self._speech_buffer.find("<zh>")
+                if marker < 0:
+                    if final:
+                        self._speech_protocol_active = False
+                        self._speech_buffer = ""
+                    return
+                self._speech_buffer = self._speech_buffer[marker + 4:]
+                self._speech_stage = "zh_after_jp"
+            if self._speech_stage == "zh_after_jp":
+                marker = self._speech_buffer.find("</zh>")
+                if marker >= 0:
+                    self._emit_visible_chunk(self._speech_buffer[:marker])
+                    self._speech_buffer = self._speech_buffer[marker + 5:]
+                    self._speech_stage = "await_pair"
+                    continue
+                if final:
+                    self._emit_visible_chunk(self._speech_buffer)
+                    self._speech_buffer = ""
+                    self._speech_protocol_active = False
+                    return
+                return
             if self._speech_stage == "await_zh":
                 marker = self._speech_buffer.find("<zh>")
                 if marker < 0:
@@ -268,7 +318,7 @@ class LLMService(QObject):
                 if marker >= 0:
                     japanese = self._speech_buffer[:marker].strip()
                     self._speech_buffer = self._speech_buffer[marker + 5:]
-                    self._speech_stage = "await_zh"
+                    self._speech_stage = "await_pair"
                     if japanese:
                         self._speech_sent = True
                         self.speech_ready.emit(japanese)

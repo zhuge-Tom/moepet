@@ -9,6 +9,9 @@ tools/.cubism_external_token.json
 
 # 按需下载的本地 CPU GPT-SoVITS 兼容包（不提交仓库）
 vendor/gpt_sovits_cpu/
+vendor/style_bert_vits2/**
+!vendor/style_bert_vits2/
+!vendor/style_bert_vits2/server_moepet.py
 
 # 本地语音资产（单文件超过 GitHub 100 MB 限制）
 voice_assets/*/*.ckpt

@@ -698,6 +698,28 @@ class SettingsWindow(QDialog):
         dialog.exec()
 
     def _test_and_play_local_tts(self):
+        provider = self._tts_provider.currentData()
+        if provider == "sbv2":
+            self._tts_preview_button.setEnabled(False)
+            self._tts_preview_provider_name = "Style-Bert-VITS2 ONNX"
+            self._tts_preview_status.setText(
+                "正在启动 Style-Bert-VITS2 ONNX 并合成日语测试语音…")
+            self._tts_preview_status.setStyleSheet(
+                f"color: {STAR_FOCUS}; font-size: 12px;")
+            output = Path(os.getenv("TEMP", ".")) / "moepet-sbv2-preview.wav"
+            started = self._tts_preview_service.synthesize_sbv2(
+                "こんにちは、Moepetの音声テストです。", output,
+                self._tts_speed.value() / 100.0,
+                style=self.config.get("sbv2", "style", default="Neutral"),
+                style_weight=self.config.get("sbv2", "style_weight", default=1.0),
+                streaming=False,
+                project_path=str(self._base_dir / self.config.get(
+                    "sbv2", "project_path", default="vendor/style_bert_vits2")),
+            )
+            if not started:
+                self._on_tts_preview_failed("无法启动 Style-Bert-VITS2 ONNX 测试")
+            return
+
         bundle = self._selected_local_tts_bundle()
         assets = inspect_noir_voice_assets(self._base_dir)
         if not bundle.ready:
@@ -713,6 +735,7 @@ class SettingsWindow(QDialog):
             self._on_tts_preview_failed(str(exc))
             return
         self._tts_preview_button.setEnabled(False)
+        self._tts_preview_provider_name = "GPT-SoVITS"
         self._tts_preview_status.setText("正在启动 GPT-SoVITS 并合成测试语音…")
         self._tts_preview_status.setStyleSheet(f"color: {STAR_FOCUS}; font-size: 12px;")
         output = Path(os.getenv("TEMP", ".")) / "moepet-tts-preview.wav"
@@ -731,8 +754,9 @@ class SettingsWindow(QDialog):
         if not audio_path:
             return
         if self._tts_preview_audio.play(audio_path):
+            provider_name = getattr(self, "_tts_preview_provider_name", "TTS")
             self._tts_preview_status.setText(
-                "测试成功，模型已在后台保持预热。保存设置后，聊天可直接开始合成。")
+                f"{provider_name} 测试成功并已播放。保存设置后，聊天回复会先转为日文再流式合成日语语音。")
             self._tts_preview_status.setStyleSheet("color: #71d6bb; font-size: 12px;")
         else:
             self._on_tts_preview_failed("音频已生成，但 Windows 无法播放该文件")
@@ -1391,11 +1415,15 @@ class SettingsWindow(QDialog):
         provider = self._tts_provider.currentData()
         is_cpu = provider in {"gpt_sovits_cpu", "gpt_sovits_local"}
         is_gpu = provider == "gpt_sovits_gpu"
+        is_sbv2 = provider == "sbv2"
         is_local = is_cpu or is_gpu
         is_gpt_remote = provider == "gpt_sovits_remote"
         is_openai = provider == "openai_compatible"
         self._tts_local_section.setVisible(is_local)
-        self._tts_remote_section.setVisible(not is_local)
+        self._tts_local_guide.setVisible(is_cpu)
+        self._tts_guide_button.setVisible(is_cpu)
+        self._tts_remote_section.setVisible(not is_local and not is_sbv2)
+        self._tts_sbv2_section.setVisible(is_sbv2)
         self._tts_remote_section.setText(
             "OpenAI 兼容 TTS API" if is_openai else "远端 GPT-SoVITS API")
         self._tts_local_section.setText("本地 GPT-SoVITS CPU 兼容包" if is_cpu else "本地 GPT-SoVITS GPU 整合包")
@@ -1413,7 +1441,7 @@ class SettingsWindow(QDialog):
         for name in ("tts_model", "tts_local_url", "tts_local_config", "tts_local_device", "tts_local_reference", "tts_local_reference_text"):
             self._tts_rows[name].setVisible(is_local)
         for name in ("tts_api_url", "tts_api_key"):
-            self._tts_rows[name].setVisible(not is_local)
+            self._tts_rows[name].setVisible(not is_local and not is_sbv2)
         self._tts_rows["tts_remote_reference"].setVisible(is_gpt_remote)
         for name in ("tts_provider_preset", "tts_api_model", "tts_api_voice",
                      "tts_response_format", "tts_preset_note"):
@@ -1459,6 +1487,9 @@ class SettingsWindow(QDialog):
             if provider in {"gpt_sovits_cpu", "gpt_sovits_gpu", "gpt_sovits_local"}:
                 configured = self._selected_local_tts_bundle().ready and \
                     inspect_noir_voice_assets(self._base_dir).ready
+            elif provider == "sbv2":
+                sbv2_onnx = self._base_dir / "vendor" / "style_bert_vits2" / "model_assets" / "noir" / "noir.onnx"
+                configured = sbv2_onnx.is_file()
             elif provider == "gpt_sovits_remote":
                 configured = bool(self._tts_api_url.text().strip()
                                   and self._tts_remote_reference.text().strip())
@@ -1651,7 +1682,7 @@ class SettingsWindow(QDialog):
                     "remote_reference_audio": safe(getattr(self, "_tts_remote_reference", None)).text().strip() if safe(getattr(self, "_tts_remote_reference", None)) else "",
                     "speed": safe(getattr(self, "_tts_speed", None)).value() / 100.0 if safe(getattr(self, "_tts_speed", None)) else 1.0,
                     "auto_play": True,
-                    "provider": safe(getattr(self, "_tts_provider", None)).currentData() if safe(getattr(self, "_tts_provider", None)) else "gpt_sovits_cpu",
+                    "provider": safe(getattr(self, "_tts_provider", None)).currentData() if safe(getattr(self, "_tts_provider", None)) else "sbv2",
                     "base_url": safe(getattr(self, "_tts_api_url", None)).text().strip() if safe(getattr(self, "_tts_api_url", None)) else "",
                     "api_key": safe(getattr(self, "_tts_api_key", None)).text().strip() if safe(getattr(self, "_tts_api_key", None)) else "",
                     "preset": safe(getattr(self, "_tts_provider_preset", None)).currentData() if safe(getattr(self, "_tts_provider_preset", None)) else "custom",

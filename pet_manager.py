@@ -138,8 +138,12 @@ class PetManager:
     def _prewarm_local_tts(self) -> None:
         if not self.config.get("tts", "enabled", default=False):
             return
-        if self.config.get("tts", "provider", default="gpt_sovits_cpu") not in {
-                "gpt_sovits_cpu", "gpt_sovits_gpu", "gpt_sovits_local"}:
+        provider = self.config.get("tts", "provider", default="sbv2")
+        if provider == "sbv2":
+            self._tts.prewarm_sbv2(self._project_path(self.config.get(
+                "sbv2", "project_path", default="vendor/style_bert_vits2")))
+            return
+        if provider not in {"gpt_sovits_cpu", "gpt_sovits_gpu", "gpt_sovits_local"}:
             return
         char = self._char_data.get(self.config.current_character)
         try:
@@ -214,20 +218,21 @@ class PetManager:
         if bilingual_speech:
             full_prompt += (
                 "\n\n本地语音分段协议：只输出一个或多个连续片段："
-                "<zh>一小句中文</zh><jp>完整对应的自然日文</jp>。"
-                "中文必须先输出；每段中文尽量为 4 到 14 个汉字并在自然标点处结束；"
-                "所有回答内容必须放入 zh 片段，且每个 zh 都必须紧跟对应 jp，不得省略、总结或截断。"
-                "尽量减少片段数量，不要输出协议外文字。")
+                "<jp>自然日文</jp><zh>完整对应的一小句中文</zh>。"
+                "日文必须先输出并立即闭合，让语音尽早开始；首段中文尽量为 4 到 6 个汉字，"
+                "后续每段尽量为 6 到 10 个汉字并在自然标点处结束；"
+                "所有回答内容必须放入 zh 片段，且每个 jp 都必须紧跟对应 zh，不得省略、总结或截断。"
+                "优先尽快完成首个中日片段，不要输出协议外文字。")
         if full_prompt:
             self._llm.set_system_prompt(full_prompt)
 
     def _uses_bilingual_local_speech(self) -> bool:
-        provider = self.config.get("tts", "provider", default="gpt_sovits_cpu")
+        provider = self.config.get("tts", "provider", default="sbv2")
         return bool(
             self.config.get("tts", "bilingual_streaming", default=True)
             and self.config.get("tts", "enabled", default=False)
             and self.config.get("tts", "auto_play", default=True)
-            and provider in {"gpt_sovits_cpu", "gpt_sovits_gpu", "gpt_sovits_local"}
+            and provider in {"gpt_sovits_cpu", "gpt_sovits_gpu", "gpt_sovits_local", "sbv2"}
         )
 
     # ─── 初始化 ───────────────────────────────
@@ -1256,7 +1261,7 @@ class PetManager:
         if not self.config.get("tts", "auto_play", default=True):
             return False
         self._tts_epoch = self._role_epoch
-        if self.config.get("tts", "provider", default="gpt_sovits_local") == "openai_compatible":
+        if self.config.get("tts", "provider", default="sbv2") == "openai_compatible":
             output_format = self.config.get("tts", "response_format", default="wav") or "wav"
             output = Path(tempfile.gettempdir()) / f"moepet-tts.{output_format}"
             self._show_pending_tts_text()
@@ -1292,13 +1297,13 @@ class PetManager:
         self._tts_segment_inflight = False
         self._tts_stream_buffer = ""
         self._tts_stream_started = False
-        provider = self.config.get("tts", "provider", default="gpt_sovits_cpu")
+        provider = self.config.get("tts", "provider", default="sbv2")
         self._tts_stream_enabled = bool(
             llm_streaming
             and not self._uses_bilingual_local_speech()
             and self.config.get("tts", "enabled", default=False)
             and self.config.get("tts", "auto_play", default=True)
-            and provider in {"gpt_sovits_cpu", "gpt_sovits_gpu", "gpt_sovits_local"}
+            and provider in {"gpt_sovits_cpu", "gpt_sovits_gpu", "gpt_sovits_local", "sbv2"}
         )
 
     def _on_llm_speech_ready(self, japanese_text: str) -> None:
@@ -1311,7 +1316,7 @@ class PetManager:
             return
         self._llm_bilingual_speech_received = True
         self._tts_direct_japanese_queue.extend(
-            TTSService._split_japanese_for_low_latency(japanese_text, target_chars=8))
+            TTSService._split_japanese_for_low_latency(japanese_text, target_chars=6))
         self._start_next_bilingual_speech()
 
     def _start_next_bilingual_speech(self) -> None:
@@ -1418,22 +1423,26 @@ class PetManager:
             self._tts_epoch = None
             self._on_tts_error("未找到当前角色")
             return None
-        provider = self.config.get("tts", "provider", default="gpt_sovits_cpu")
+        provider = self.config.get("tts", "provider", default="sbv2")
         is_local = provider in {"gpt_sovits_cpu", "gpt_sovits_gpu", "gpt_sovits_local"}
+        is_sbv2 = provider == "sbv2"
         reference = self.config.get("tts", "local_reference_audio", default="") if is_local else (
             self.config.get("tts", "remote_reference_audio", default="")
             or char.voice.get("remote_reference_audio", ""))
-        if not reference:
+        if not reference and not is_sbv2:
             self._tts_epoch = None
             self._on_tts_error("GPT-SoVITS 需要角色的授权参考音频")
             return None
         try:
-            bundle, assets, generated_config = self._local_tts_runtime() if is_local else (None, None, None)
+            if is_sbv2:
+                bundle, assets, generated_config = None, None, None
+            else:
+                bundle, assets, generated_config = self._local_tts_runtime() if is_local else (None, None, None)
         except RuntimeError as exc:
             self._tts_epoch = None
             self._on_tts_error(str(exc))
             return None
-        reference_path = assets.reference_audio if is_local else reference
+        reference_path = assets.reference_audio if is_local else (reference if not is_sbv2 else "")
         handle = tempfile.NamedTemporaryFile(
             prefix="moepet-tts-", suffix=".wav", delete=False)
         output = Path(handle.name)
@@ -1450,23 +1459,30 @@ class PetManager:
         # the reply now, rather than waiting for the finished WAV, so text
         # naturally leads speech without the raw-stream flash.
         self._show_pending_tts_text()
-        started = self._tts.synthesize_gpt_sovits(
-            japanese_text, base_url,
-            "" if is_local else (self.config.get_secret("tts") or self.config.get("tts", "api_key", default="")),
-            reference_path, self._local_reference_text(char), output,
-            speed,
-            local_project=str(bundle.root) if is_local else "",
-            local_python=str(bundle.python) if is_local else "",
-            local_config=str(generated_config) if is_local else "",
-            cpu_threads=self.config.get("tts", "cpu_threads", default=4),
-            # Each early clause is already deliberately short. One finalized
-            # WAV avoids another internal split and lets the next clause begin
-            # as soon as this request completes.
-            streaming_mode=(0 if getattr(self, "_tts_segment_inflight", False)
-                            else self.config.get("tts", "streaming_mode", default=3)),
-            fragment_interval=self.config.get("tts", "fragment_interval", default=0.12),
-            device=self.config.get("tts", "local_device", default="cuda"),
-        )
+        if is_sbv2:
+            sbv2_style = self.config.get("sbv2", "style", default="Neutral")
+            sbv2_style_weight = float(self.config.get("sbv2", "style_weight", default=1.0))
+            sbv2_project = self._project_path(self.config.get("sbv2", "project_path", default="vendor/style_bert_vits2"))
+            started = self._tts.synthesize_sbv2(
+                japanese_text, output, speed,
+                style=sbv2_style, style_weight=sbv2_style_weight,
+                streaming=not getattr(self, "_tts_segment_inflight", False),
+                project_path=sbv2_project)
+        else:
+            started = self._tts.synthesize_gpt_sovits(
+                japanese_text, base_url,
+                "" if is_local else (self.config.get_secret("tts") or self.config.get("tts", "api_key", default="")),
+                reference_path, self._local_reference_text(char), output,
+                speed,
+                local_project=str(bundle.root) if is_local else "",
+                local_python=str(bundle.python) if is_local else "",
+                local_config=str(generated_config) if is_local else "",
+                cpu_threads=self.config.get("tts", "cpu_threads", default=4),
+                streaming_mode=(0 if getattr(self, "_tts_segment_inflight", False)
+                                else self.config.get("tts", "streaming_mode", default=3)),
+                fragment_interval=self.config.get("tts", "fragment_interval", default=0.12),
+                device=self.config.get("tts", "local_device", default="cuda"),
+            )
         if started:
             signals.tts_state_changed.emit(True)
         else:
@@ -1561,7 +1577,7 @@ class PetManager:
                 or not config.get("tts", "enabled", default=False)
                 or not config.get("tts", "auto_play", default=True)):
             return False
-        provider = config.get("tts", "provider", default="gpt_sovits_cpu")
+        provider = config.get("tts", "provider", default="sbv2")
         if provider not in {"gpt_sovits_cpu", "gpt_sovits_gpu", "gpt_sovits_local"}:
             return False
         try:

@@ -58,8 +58,25 @@ def _ensure_live2d_runtime() -> None:
     )
 
 
+def _configure_network_no_proxy() -> None:
+    """让 Qt 和 Python urllib 完全不走代理，避免被 SpeedCat 7892 劫持。
+
+    SpeedCat DLL 注入会导致 SSL 崩溃，moepet 的 API 请求（DeepSeek）
+    可以直连，不需要经过代理。
+    """
+    # 1) Qt 网络栈 — QNetworkAccessManager 默认读系统代理
+    from PySide6.QtNetwork import QNetworkProxy
+    QNetworkProxy.setApplicationProxy(QNetworkProxy(QNetworkProxy.NoProxy))
+
+    # 2) Python urllib — vision/asr 等模块使用
+    for var in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"):
+        os.environ.pop(var, None)
+    os.environ["NO_PROXY"] = "*"
+
+
 def main():
     _ensure_live2d_runtime()
+    _configure_network_no_proxy()
     if sys.platform == "win32":
         try:
             ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("zhuge-Tom.Moepet")

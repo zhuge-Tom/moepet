@@ -315,6 +315,111 @@ class TTSService(BackgroundService):
         endpoint = base_url.rstrip("/")
         return endpoint if endpoint.endswith("/audio/speech") else endpoint + "/audio/speech"
 
+    def synthesize_sbv2(
+            self, text, output_path, speed=1.0, style="Neutral", style_weight=1.0,
+            streaming=True, project_path=""):
+        """Synthesize via local Style-Bert-VITS2 ONNX server."""
+        if not text.strip():
+            self.failed.emit("合成文本为空")
+            return False
+        base_url = "http://127.0.0.1:5001"
+
+        def work():
+            self._ensure_sbv2_server(base_url, project_path)
+
+            parts = self._split_japanese_for_streaming(text) if streaming else [text.strip()]
+            output = Path(output_path)
+            for index, part in enumerate(parts):
+                if not part.strip():
+                    continue
+                payload = {
+                    "text": part,
+                    "speed": max(0.5, min(float(speed), 2.0)),
+                    "style": style,
+                    "style_weight": float(style_weight),
+                }
+                request = Request(
+                    f"{base_url}/tts",
+                    data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+                    headers={"Content-Type": "application/json; charset=utf-8"},
+                )
+                for attempt in range(2):
+                    try:
+                        with urlopen(request, timeout=180) as resp:
+                            audio = resp.read()
+                        if audio and len(audio) > 100:
+                            break
+                    except (OSError, URLError):
+                        if attempt == 0:
+                            time.sleep(1)
+                            continue
+                        raise
+                if not audio or len(audio) <= 100:
+                    raise RuntimeError(f"SBV2 返回空音频: {part}")
+                part_path = (
+                    output
+                    if len(parts) == 1
+                    else output.with_name(f"{output.stem}-{index:02d}{output.suffix}")
+                )
+                part_path.write_bytes(audio)
+                if len(parts) > 1:
+                    self.fragment_ready.emit(str(part_path))
+            return str(output) if len(parts) == 1 else None
+        return self.run(work)
+
+    def _ensure_sbv2_server(self, base_url: str, project_path: str = "") -> None:
+        if self._service_ready(base_url):
+            return
+        with self._local_start_lock:
+            if self._service_ready(base_url):
+                return
+            # Resolve project path: absolute, or relative to moepet base
+            from pathlib import Path as _Path
+            if project_path and _Path(project_path).is_absolute():
+                sbv2_root = _Path(project_path)
+            else:
+                # Relative to moepet project root (assumes tts_service lives in core/)
+                sbv2_root = _Path(__file__).resolve().parent.parent / (project_path or "vendor/style_bert_vits2")
+            server_script = sbv2_root / "server_moepet.py"
+            if not server_script.is_file():
+                raise RuntimeError(f"SBV2 服务器脚本未找到: {server_script}")
+            python = sbv2_root / "venv_cpu" / "Scripts" / "python.exe"
+            if not python.is_file():
+                raise RuntimeError(
+                    f"SBV2 venv 未找到。请先在 {sbv2_root} 创建 venv_cpu")
+            env = {
+                **os.environ,
+                "OMP_NUM_THREADS": "4",
+                "MKL_NUM_THREADS": "4",
+                "TOKENIZERS_PARALLELISM": "false",
+            }
+            self._local_process = subprocess.Popen(
+                [str(python), str(server_script), "--port", "5001"],
+                cwd=str(sbv2_root),
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                env=env,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+            for _ in range(300):
+                if self._service_ready(base_url):
+                    return
+                if self._local_process.poll() is not None:
+                    break
+                time.sleep(1)
+        raise RuntimeError("SBV2 服务器启动失败或模型加载超时")
+
+    def prewarm_sbv2(self, project_path: str = "") -> None:
+        """Background pre-warm: start SBV2 server so first TTS has no cold start."""
+        base_url = "http://127.0.0.1:5001"
+
+        def warm():
+            try:
+                self._ensure_sbv2_server(base_url, project_path)
+            except Exception as exc:
+                self.failed.emit(str(exc))
+
+        threading.Thread(target=warm, name="moepet-sbv2-prewarm", daemon=True).start()
+
     def synthesize_cloud(self, text, base_url, api_key, model, voice, output_path,
                          speed=1.0, response_format="wav"):
         if not base_url or not model or not voice:

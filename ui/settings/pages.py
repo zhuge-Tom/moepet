@@ -7,7 +7,7 @@ form persistence while individual pages own their own presentation tree.
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton,
-    QSpinBox, QVBoxLayout, QWidget,
+    QSizePolicy, QSpinBox, QVBoxLayout, QWidget,
 )
 
 from ui.settings_components import ServiceStatusCard
@@ -116,11 +116,15 @@ def make_tts_page(config, add_probe) -> tuple[QWidget, dict[str, QWidget], dict[
     card = ServiceStatusCard("语音输出", "默认不下载大模型整合包。CPU 兼容包可按引导安装到 vendor/gpt_sovits_cpu；GPU 包由你选择已解压目录。")
     layout.addWidget(card)
     provider = QComboBox()
-    provider.addItem("本地 GPT-SoVITS CPU 兼容包", "gpt_sovits_cpu")
-    provider.addItem("本地 GPT-SoVITS GPU 整合包", "gpt_sovits_gpu")
+    provider.addItem("本地 GPT-SoVITS CPU 兼容包（效果好，推理慢）", "gpt_sovits_cpu")
+    provider.addItem("本地 GPT-SoVITS GPU 整合包（效果好，配置要求高）", "gpt_sovits_gpu")
+    provider.addItem("本地 Style-Bert-VITS2 ONNX（效果稍差，本地直接能用）", "sbv2")
     provider.addItem("远端 GPT-SoVITS API（推荐 GPU）", "gpt_sovits_remote")
     provider.addItem("OpenAI 兼容 TTS API", "openai_compatible")
-    provider.setCurrentIndex(max(provider.findData(config.get("tts", "provider", default="gpt_sovits_local")), 0))
+    provider.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
+    provider.setMinimumContentsLength(22)
+    provider.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+    provider.setCurrentIndex(max(provider.findData(config.get("tts", "provider", default="sbv2")), 0))
     _row(layout, "语音后端", provider)
 
     local_section = _section(layout, "本地 GPT-SoVITS")
@@ -222,6 +226,12 @@ def make_tts_page(config, add_probe) -> tuple[QWidget, dict[str, QWidget], dict[
     speed.setValue(int(config.get("tts", "speed", default=1.0) * 100))
     speed_row = _field_row(layout, "语速", speed)
     add_probe(layout, "tts", "测试语音引擎")
+    sbv2_section = _section(layout, "本地 Style-Bert-VITS2 ONNX")
+    sbv2_section.setVisible(False)
+    sbv2_info = QLabel("ONNX 模型已集成。无需参考音频，直接日文合成。首次推理自动启动服务。")
+    sbv2_info.setWordWrap(True)
+    sbv2_info.setStyleSheet("color: #71d6bb; font-size: 12px;")
+    layout.addWidget(sbv2_info)
     layout.addStretch()
     fields = {"tts_status_card": card, "tts_provider": provider,
               "tts_model": model_path, "tts_local_url": local_url,
@@ -237,7 +247,8 @@ def make_tts_page(config, add_probe) -> tuple[QWidget, dict[str, QWidget], dict[
               "tts_model_picker": discover_picker, "tts_discover_status": discover_status,
               "tts_provider_preset": preset, "tts_api_model": api_model,
               "tts_api_voice": api_voice, "tts_response_format": response_format,
-              "tts_preset_note": preset_note}
+              "tts_preset_note": preset_note,
+              "tts_sbv2_section": sbv2_section, "tts_sbv2_info": sbv2_info}
     rows = {"tts_model": local_row, "tts_local_url": local_url_row,
             "tts_local_config": local_config_row, "tts_local_device": device_row,
             "tts_local_reference": reference_row, "tts_local_reference_text": reference_text_row,

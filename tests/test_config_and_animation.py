@@ -328,7 +328,7 @@ def test_llm_bilingual_stream_routes_every_chinese_clause_to_matching_speech():
 
     service = LLMService()
     service._speech_protocol_active = True
-    service._speech_stage = "await_zh"
+    service._speech_stage = "await_pair"
     service._speech_buffer = ""
     service._speech_sent = False
     service._buffer_out = ""
@@ -336,8 +336,11 @@ def test_llm_bilingual_stream_routes_every_chinese_clause_to_matching_speech():
     service.speech_ready.connect(speech.append)
     service.chunk_received.connect(visible.append)
 
-    service._accept_stream_content("<zh>没关系。</zh><jp>大丈夫だよ。</jp>")
-    service._accept_stream_content("<zh>我会陪着你。</zh><jp>そばにいるよ。</jp>")
+    service._accept_stream_content("<jp>大丈夫だよ。</jp>")
+    assert speech == ["大丈夫だよ。"]
+    assert visible == []
+    service._accept_stream_content("<zh>没关系。</zh>")
+    service._accept_stream_content("<jp>そばにいるよ。</jp><zh>我会陪着你。</zh>")
 
     assert speech == ["大丈夫だよ。", "そばにいるよ。"]
     assert "".join(visible) == "没关系。我会陪着你。"
@@ -430,6 +433,28 @@ def test_llm_chunk_starts_local_speech_before_the_full_reply_arrives():
 
     assert spoken == ["我会陪着你，"]
     assert manager._tts_stream_started is True
+
+
+def test_sbv2_enables_low_latency_streaming_translation(tmp_path):
+    from collections import deque
+
+    manager = type("Manager", (), {})()
+    manager.config = Config(tmp_path / "config.json")
+    manager.config.set("tts", "enabled", True)
+    manager.config.set("tts", "auto_play", True)
+    manager.config.set("tts", "provider", "sbv2")
+    manager._tts_text_queue = deque(["stale"])
+    manager._tts_direct_japanese_queue = deque(["古い"])
+    manager._tts_segment_inflight = True
+    manager._tts_stream_buffer = "stale"
+    manager._tts_stream_started = True
+    manager._uses_bilingual_local_speech = lambda: False
+
+    PetManager._begin_streaming_local_tts(manager, True)
+
+    assert manager._tts_stream_enabled is True
+    assert not manager._tts_text_queue
+    assert not manager._tts_direct_japanese_queue
 
 
 def test_audio_sync_requires_a_successful_tts_request(tmp_path):
@@ -587,7 +612,7 @@ def test_bilingual_speech_queues_every_complete_japanese_segment():
 
     queued = list(manager._tts_direct_japanese_queue)
     assert "".join(queued) == "最初の文です。次の文も読みます。"
-    assert all(1 <= len(part) <= 8 for part in queued)
+    assert all(1 <= len(part) <= 6 for part in queued)
 
 
 def test_local_tts_prewarm_passes_the_reference_cache_inputs():
@@ -653,6 +678,7 @@ def test_openai_compatible_tts_skips_japanese_translation(tmp_path):
         manager.config.set("tts", key, value)
     manager._role_epoch = 7
     manager._show_pending_tts_text = lambda: None
+    manager._project_path = lambda value: value
     manager._set_pet_state = lambda _state: None
     manager._tts_translator = type("Translator", (), {
         "translate": lambda *_args: (_ for _ in ()).throw(AssertionError("不应翻译")),
@@ -664,6 +690,25 @@ def test_openai_compatible_tts_skips_japanese_translation(tmp_path):
     assert PetManager._speak(manager, "直接朗读中文")
     assert calls[0][0] == "直接朗读中文"
     assert calls[0][1:5] == ("http://127.0.0.1:8080/v1", "", "tts-model", "noir")
+
+
+def test_sbv2_synthesizes_translated_japanese_without_reference_audio(tmp_path):
+    manager = type("Manager", (), {})()
+    manager.config = Config(tmp_path / "config.json")
+    manager.config.set("tts", "provider", "sbv2")
+    manager._role_epoch = manager._tts_epoch = 4
+    manager._tts_segment_inflight = True
+    manager._char_data = {"noir": type("Character", (), {"voice": {}})()}
+    manager._show_pending_tts_text = lambda: None
+    manager._project_path = lambda value: value
+    calls = []
+    manager._tts = type("TTS", (), {
+        "synthesize_sbv2": lambda _self, *args, **kwargs: calls.append((args, kwargs)) or True,
+    })()
+
+    assert PetManager._on_tts_translation_done(manager, "こんにちは。")
+    assert calls[0][0][0] == "こんにちは。"
+    assert calls[0][1]["streaming"] is False
 
 
 def test_windows_audio_player_does_not_require_qt_multimedia(qapp, tmp_path, monkeypatch):
@@ -1787,6 +1832,21 @@ def test_voice_page_factories_switch_provider_rows(qapp, tmp_path):
     assert "tts_translate" not in tts
     assert {"asr_model", "asr_api_url"}.issubset(asr_rows)
     window = SettingsWindow(config, ["noir"], "noir", tmp_path)
+    assert window._tts_provider.itemText(0).endswith("（效果好，推理慢）")
+    assert window._tts_provider.itemText(1).endswith("（效果好，配置要求高）")
+    assert window._tts_provider.itemText(2).endswith("（效果稍差，本地直接能用）")
+    assert window._tts_provider.currentData() == "sbv2"
+    assert window._tts_local_guide.isHidden()
+    assert window._tts_guide_button.isHidden()
+
+    window._tts_provider.setCurrentIndex(window._tts_provider.findData("gpt_sovits_cpu"))
+    assert not window._tts_local_guide.isHidden()
+    assert not window._tts_guide_button.isHidden()
+
+    window._tts_provider.setCurrentIndex(window._tts_provider.findData("gpt_sovits_gpu"))
+    assert window._tts_local_guide.isHidden()
+    assert window._tts_guide_button.isHidden()
+
     window._tts_provider.setCurrentIndex(window._tts_provider.findData("gpt_sovits_remote"))
     window._asr_provider.setCurrentIndex(window._asr_provider.findData("cloud"))
     assert window._tts_rows["tts_model"].isHidden()
@@ -1842,6 +1902,22 @@ def test_settings_window_marks_local_chat_service_ready(qapp, tmp_path):
     assert window._ai_status_card.badge.text() == "已就绪"
 
 
+def test_settings_window_previews_sbv2_with_the_selected_engine(qapp, tmp_path):
+    from ui.settings_window import SettingsWindow
+
+    window = SettingsWindow(Config(tmp_path / "config.json"), ["noir"], "noir", tmp_path)
+    window._tts_provider.setCurrentIndex(window._tts_provider.findData("sbv2"))
+    calls = []
+    window._tts_preview_service.synthesize_sbv2 = (
+        lambda *args, **kwargs: calls.append((args, kwargs)) or True)
+
+    window._test_and_play_local_tts()
+
+    assert calls[0][0][0] == "こんにちは、Moepetの音声テストです。"
+    assert calls[0][1]["streaming"] is False
+    assert "Style-Bert-VITS2 ONNX" in window._tts_preview_status.text()
+
+
 def test_settings_window_tracks_unsaved_form_changes(qapp, tmp_path):
     from ui.settings_window import SettingsWindow
     window = SettingsWindow(Config(tmp_path / "config.json"), ["noir"], "noir", tmp_path)
@@ -1851,15 +1927,14 @@ def test_settings_window_tracks_unsaved_form_changes(qapp, tmp_path):
     assert window._dirty_label.text() == "有未保存的更改"
 
 
-def test_cpu_tts_defaults_to_the_optional_vendor_package(qapp, tmp_path):
+def test_sbv2_is_the_default_local_tts(qapp, tmp_path):
     from ui.settings_window import SettingsWindow
 
     window = SettingsWindow(Config(tmp_path / "config.json"), ["noir"], "noir", tmp_path)
 
-    assert window._tts_provider.currentData() == "gpt_sovits_cpu"
-    assert window._tts_model.text() == "vendor/gpt_sovits_cpu"
-    assert "CPU 兼容包尚未安装" in window._tts_bundle_status.text()
-    assert window._tts_model.isEnabled()
+    assert window._tts_provider.currentData() == "sbv2"
+    assert not window._tts_sbv2_section.isHidden()
+    assert window._tts_guide_button.isHidden()
 
 
 def test_settings_window_only_accepts_after_successful_apply(qapp, tmp_path, monkeypatch):
