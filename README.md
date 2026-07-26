@@ -13,10 +13,15 @@
 - 默认使用 Live2D，支持呼吸、眨眼、视线跟随、表情和口型。
 - Windows 透明区域鼠标穿透，只有人物实体区域接收点击。
 - 兼容 OpenAI Chat Completions API，可使用 DeepSeek、OpenAI、Ollama 等服务。
-- 通过引导按需下载 CPU 兼容包，或连接用户自行下载的 GPT-SoVITS GPU 整合包。
-- 支持本地或 OpenAI 兼容语音识别、OCR 和多模态图像理解。
+- 默认使用本地 Style-Bert-VITS2 ONNX 日语语音（CPU 即可运行，无需 API Key），
+  流式自适应分段让回复在一秒左右开口；也支持 GPT-SoVITS 与 OpenAI 兼容 TTS。
+- 随机识图主动搭话：角色会不定期理解你屏幕上正在做的事，
+  像旅伴一样主动开启一段可以顺着聊下去的对话（可关闭）。
+- 语音输入与图像理解内置免费云端预设（SiliconFlow SenseVoiceSmall、
+  智谱 GLM-4V-Flash），粘贴 API Key 即可使用；也支持本地 faster-whisper 与 OCR。
 - 每个角色拥有独立的聊天历史、记忆库、资料库、声音和显示配置。
 - 支持近期摘要、长期记忆、时间线以及日/周/月/季/年归档。
+- 对话框逐字显示与“正在思考…”占位，节奏与语音朗读贴合。
 
 ## 运行要求
 
@@ -151,35 +156,49 @@ Moepet 会记住手动选择的整合包绝对路径，不会移动或修改它�
 
 ## 配置语音输入
 
-打开“设置 → 语音输入”。
+打开“设置 → 语音输入”。默认已预填免费云端识别服务，粘贴 API Key 即可按住
+`Ctrl+Alt+Space` 说话。
 
-### 本地识别
+### 云端识别（默认，免费）
 
-1. 选择本地 `faster-whisper`。
-2. 选择模型或填写模型路径。
-3. CPU 环境建议使用 `device=cpu`、`compute_type=int8`。
-4. 设置录音快捷键，默认是 `Ctrl+Alt+Space`。
-5. 测试麦克风后应用设置。
+1. 到 [cloud.siliconflow.cn](https://cloud.siliconflow.cn) 注册硅基流动账号，
+   在左侧“API 密钥”页创建一个 Key。
+2. 在“语音输入”页的 API Key 栏粘贴，其余（地址
+   `https://api.siliconflow.cn/v1`、模型 `FunAudioLLM/SenseVoiceSmall`）已预填。
+3. 点击“测试当前识别后端”，通过后应用。SenseVoiceSmall 为平台免费模型，
+   中文识别好、速度快；也可通过“服务预设”切换 OpenAI Whisper 或自定义服务。
 
-需要额外组件时运行：
+### 本地识别（可选，不上传音频）
+
+1. 识别后端切换为本地 `faster-whisper`，选择模型目录。
+2. CPU 环境建议 `device=cpu`、`compute_type=int8`。
+3. 需要额外组件时运行：
 
 ```powershell
 .\.venv\Scripts\python.exe -m pip install -r requirements-optional.txt
 ```
 
-### OpenAI 兼容识别
-
-选择远程识别后，填写 Base URL、API Key、模型（通常为 `whisper-1`）和可选语言。服务需要兼容 OpenAI 音频转写接口。
-
 ## 配置屏幕识别与图像理解
 
-- “屏幕识别”管理截图快捷键、OCR、截图保留和主动观察。
-- “图像理解”配置支持图像输入的 OpenAI 兼容模型。
+“图像理解”页默认已预填免费视觉服务（智谱 GLM-4V-Flash）：
+
+1. 到 [open.bigmodel.cn](https://open.bigmodel.cn) 注册智谱账号，
+   在“API Keys”页创建一个 Key。
+2. 在“图像理解”页的 API Key 栏粘贴（地址与模型已预填，GLM-4V-Flash 免费）。
+3. 点击“测试图像理解服务”，通过后应用。“服务预设”也提供 SiliconFlow、
+   Ollama 本地等选择。
+
+其余要点：
+
+- “屏幕识别”管理截图快捷键、OCR、截图保留和随机识图的间隔/冷却。
 - 默认截图快捷键为 `Ctrl+Alt+O`。
 - 云端图像理解必须显式开启上传授权。
-- 随机识图默认开启（也可在“通用设置”或“图像理解”页关闭）；在图像理解服务配置完成前不会实际触发。间隔与冷却时间在“屏幕识别”页调整。
-
-只想在本地识别文字时，可安装 `rapidocr-onnxruntime`；需要理解画面含义时，再配置多模态模型服务。
+- **随机识图**默认开启（“通用设置”“图像理解”页均可关闭）：角色会以随机间隔
+  （默认 5～15 分钟，含冷却）理解你屏幕上正在做的事，然后像旅伴一样主动搭话——
+  对具体内容提问、发表感想，或在你深夜忙碌时轻声关心；同一件事不会重复唠叨。
+  在图像理解服务配置完成（含 API Key）前不会实际触发。
+- 只想在本地识别文字时，可安装 `rapidocr-onnxruntime`；需要理解画面含义时，
+  再配置多模态模型服务。
 
 ## 显示与窗口配置
 
