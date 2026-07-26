@@ -232,6 +232,9 @@ def make_tts_page(config, add_probe) -> tuple[QWidget, dict[str, QWidget], dict[
     sbv2_info.setWordWrap(True)
     sbv2_info.setStyleSheet("color: #71d6bb; font-size: 12px;")
     layout.addWidget(sbv2_info)
+    sbv2_guide_button = QPushButton("配置引导")
+    sbv2_guide_button.setFixedHeight(30)
+    layout.addWidget(sbv2_guide_button)
     layout.addStretch()
     fields = {"tts_status_card": card, "tts_provider": provider,
               "tts_model": model_path, "tts_local_url": local_url,
@@ -248,7 +251,8 @@ def make_tts_page(config, add_probe) -> tuple[QWidget, dict[str, QWidget], dict[
               "tts_provider_preset": preset, "tts_api_model": api_model,
               "tts_api_voice": api_voice, "tts_response_format": response_format,
               "tts_preset_note": preset_note,
-              "tts_sbv2_section": sbv2_section, "tts_sbv2_info": sbv2_info}
+              "tts_sbv2_section": sbv2_section, "tts_sbv2_info": sbv2_info,
+              "tts_sbv2_guide_button": sbv2_guide_button}
     rows = {"tts_model": local_row, "tts_local_url": local_url_row,
             "tts_local_config": local_config_row, "tts_local_device": device_row,
             "tts_local_reference": reference_row, "tts_local_reference_text": reference_text_row,

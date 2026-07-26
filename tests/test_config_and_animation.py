@@ -1838,14 +1838,17 @@ def test_voice_page_factories_switch_provider_rows(qapp, tmp_path):
     assert window._tts_provider.currentData() == "sbv2"
     assert window._tts_local_guide.isHidden()
     assert window._tts_guide_button.isHidden()
+    assert not window._tts_sbv2_guide_button.isHidden()
 
     window._tts_provider.setCurrentIndex(window._tts_provider.findData("gpt_sovits_cpu"))
     assert not window._tts_local_guide.isHidden()
     assert not window._tts_guide_button.isHidden()
+    assert window._tts_sbv2_guide_button.isHidden()
 
     window._tts_provider.setCurrentIndex(window._tts_provider.findData("gpt_sovits_gpu"))
     assert window._tts_local_guide.isHidden()
     assert window._tts_guide_button.isHidden()
+    assert window._tts_sbv2_guide_button.isHidden()
 
     window._tts_provider.setCurrentIndex(window._tts_provider.findData("gpt_sovits_remote"))
     window._asr_provider.setCurrentIndex(window._asr_provider.findData("cloud"))

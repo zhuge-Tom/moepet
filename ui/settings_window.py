@@ -697,6 +697,70 @@ class SettingsWindow(QDialog):
         layout.addLayout(buttons)
         dialog.exec()
 
+    def _show_sbv2_guide(self):
+        """Explain and verify the large local assets omitted from Git clones."""
+        root = self._base_dir / "vendor" / "style_bert_vits2"
+        checks = (
+            ("Style-Bert-VITS2 源码", root / "style_bert_vits2" / "__init__.py"),
+            ("CPU Python 环境", root / "venv_cpu" / "Scripts" / "python.exe"),
+            ("日语 BERT FP16 ONNX", root / "bert" /
+             "deberta-v2-large-japanese-char-wwm-onnx" / "model_fp16.onnx"),
+            ("Noir 声学 ONNX", root / "model_assets" / "noir" / "noir.onnx"),
+            ("Noir 模型配置", root / "model_assets" / "noir" / "config.json"),
+            ("Noir 风格向量", root / "model_assets" / "noir" / "style_vectors.npy"),
+        )
+        status = "<br>".join(
+            f"<span style='color:{'#71d6bb' if path.is_file() else '#ff789d'}'>"
+            f"{'✓' if path.is_file() else '✗'} {name}</span>"
+            for name, path in checks
+        )
+        ready = all(path.is_file() for _, path in checks)
+        summary = (
+            "全部组件已就绪，可以直接点击“测试并播放语音”。"
+            if ready else
+            "普通 GitHub 克隆不包含大模型和虚拟环境，请按下面步骤补齐红色项目。"
+        )
+        guide_text = (
+            "<h3>Style-Bert-VITS2 ONNX 配置引导</h3>"
+            f"<p>{summary}</p><p>{status}</p>"
+            "<p><b>1. 放置上游源码</b><br>从 Style-Bert-VITS2 官方仓库下载源码，"
+            "将仓库内容放入 <code>vendor/style_bert_vits2</code>；保留 Moepet 自带的 "
+            "<code>server_moepet.py</code>。</p>"
+            "<p><b>2. 创建 CPU 环境</b><br><code>py -3.11 -m venv "
+            "vendor\\style_bert_vits2\\venv_cpu</code><br><code>vendor\\style_bert_vits2\\venv_cpu\\Scripts\\python.exe "
+            "-m pip install -r vendor\\style_bert_vits2\\requirements-infer.txt fastapi uvicorn scipy</code></p>"
+            "<p><b>3. 放置日语 BERT ONNX</b><br>下载官方 "
+            "<code>tsukumijima/deberta-v2-large-japanese-char-wwm-onnx</code> 的 "
+            "<code>model_fp16.onnx</code> 与 tokenizer/config 文件，放入同名 BERT 目录。</p>"
+            "<p><b>4. 放置 Noir 模型</b><br>在 <code>model_assets/noir</code> 中放入 "
+            "<code>noir.onnx</code>、<code>config.json</code> 和 <code>style_vectors.npy</code>。</p>"
+            "<p><b>5. 验证</b><br>关闭本窗口后重新打开配置引导检查状态，再点击“测试并播放语音”。"
+            "首次启动会在后台预热，之后聊天会先生成日文并低延迟朗读。</p>"
+        )
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Style-Bert-VITS2 ONNX 配置引导")
+        dialog.setMinimumWidth(680)
+        layout = QVBoxLayout(dialog)
+        guide = QLabel(guide_text)
+        guide.setWordWrap(True)
+        guide.setTextFormat(Qt.RichText)
+        guide.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        layout.addWidget(guide)
+        buttons = QHBoxLayout()
+        upstream = QPushButton("打开上游项目")
+        upstream.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(
+            "https://github.com/litagin02/Style-Bert-VITS2")))
+        local = QPushButton("打开本地目录")
+        local.clicked.connect(lambda: QDesktopServices.openUrl(QUrl.fromLocalFile(str(root))))
+        close = QPushButton("明白了")
+        close.clicked.connect(dialog.accept)
+        buttons.addWidget(upstream)
+        buttons.addWidget(local)
+        buttons.addStretch()
+        buttons.addWidget(close)
+        layout.addLayout(buttons)
+        dialog.exec()
+
     def _test_and_play_local_tts(self):
         provider = self._tts_provider.currentData()
         if provider == "sbv2":
@@ -858,6 +922,7 @@ class SettingsWindow(QDialog):
         self._tts_bundle_browse.clicked.connect(self._choose_local_tts_bundle)
         self._tts_reference_browse.clicked.connect(self._choose_local_tts_reference)
         self._tts_guide_button.clicked.connect(self._show_local_tts_guide)
+        self._tts_sbv2_guide_button.clicked.connect(self._show_sbv2_guide)
         self._tts_preview_button = QPushButton("测试并播放语音")
         self._tts_preview_button.setFixedHeight(30)
         self._tts_preview_status = QLabel("选择整合包和参考音频后可验证完整语音链路")
@@ -1424,6 +1489,8 @@ class SettingsWindow(QDialog):
         self._tts_guide_button.setVisible(is_cpu)
         self._tts_remote_section.setVisible(not is_local and not is_sbv2)
         self._tts_sbv2_section.setVisible(is_sbv2)
+        self._tts_sbv2_info.setVisible(is_sbv2)
+        self._tts_sbv2_guide_button.setVisible(is_sbv2)
         self._tts_remote_section.setText(
             "OpenAI 兼容 TTS API" if is_openai else "远端 GPT-SoVITS API")
         self._tts_local_section.setText("本地 GPT-SoVITS CPU 兼容包" if is_cpu else "本地 GPT-SoVITS GPU 整合包")

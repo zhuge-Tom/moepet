@@ -98,6 +98,19 @@ API Key 会优先保存到 Windows 凭据管理器，不应写入仓库、截图
 
 ## 配置语音合成
 
+### 本地 Style-Bert-VITS2 ONNX（默认）
+
+新配置默认选择本地 Style-Bert-VITS2 ONNX。由于源码、Python 环境和模型文件体积较大，普通 GitHub 克隆只包含 Moepet 的集成服务，不包含这些运行资产。
+
+打开“设置 → 语音合成”，保持“本地 Style-Bert-VITS2 ONNX”，点击“配置引导”。向导会逐项检测：
+
+- [Style-Bert-VITS2 上游源码](https://github.com/litagin02/Style-Bert-VITS2)
+- `vendor/style_bert_vits2/venv_cpu/Scripts/python.exe`
+- `bert/deberta-v2-large-japanese-char-wwm-onnx/model_fp16.onnx` 及 tokenizer/config 文件
+- `model_assets/noir/noir.onnx`、`config.json` 和 `style_vectors.npy`
+
+按照向导补齐红色项目后，点击“测试并播放语音”。测试通过后应用会后台预热模型；聊天回复使用日文优先的短片段协议，尽早开始日语朗读。
+
 ### 本地 GPT-SoVITS 语音
 
 打开“设置 → 语音合成”，选择：
