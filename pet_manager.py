@@ -1088,11 +1088,23 @@ class PetManager:
         if self._dialog and mode == "manual":
             self._dialog.display_text(self._screen_observation_message(), "assistant")
         if self._vision_is_ready() and (mode == "observation" or self.config.get("screen_capture", "cloud_first", default=True)):
+            # 主动观察时引导视觉模型输出“情境理解”而不是界面描述，
+            # 这样角色才能就用户正在做的事情自然搭话。
+            observation_instruction = (
+                "这是用户此刻的电脑屏幕。请用中文简要回答（共 3~5 句）：\n"
+                "1. 用户大概在做什么？（在用什么应用、进行什么活动，例如写代码、"
+                "看视频、聊天、玩游戏、读文章）\n"
+                "2. 正在看/做的内容主题是什么？给出具体一点的主题或标题。\n"
+                "3. 有没有值得同伴关心或聊起的细节？（例如报错信息、工作了很久、"
+                "有趣的画面、正在听的歌）\n"
+                "不要逐字罗列界面文字，不要输出与回答无关的客套。"
+            ) if mode == "observation" else ""
             started = self._vision.describe(
                 path, self.config.get("vision", "base_url"),
                 self.config.get_secret("vision") or self.config.get("vision", "api_key", default=""),
                 self.config.get("vision", "model"), "",
                 self.config.get("screen_capture", "vision_max_dimension", default=1280),
+                instruction=observation_instruction,
             )
         else:
             started = self._ocr.recognize(path)
@@ -1221,7 +1233,7 @@ class PetManager:
             self._screen_observer.schedule_next()
 
     def _respond_to_observation(self, description: str):
-        """Let the active character react briefly to a visual observation."""
+        """Let the active character start a small conversation about the screen."""
         description = (description or "").strip()
         if not description or self._llm.is_busy():
             return
@@ -1229,12 +1241,26 @@ class PetManager:
         api_key = self.config.get_secret("llm") or self.config.get("llm", "api_key", default="")
         if not api_key and not is_local_endpoint(self.config.get("llm", "base_url", default="")):
             return
+        previous = getattr(self, "_last_observation_summary", "")
+        self._last_observation_summary = description[:400]
+        repeat_hint = (
+            f"你上一次主动搭话时注意到的是：{previous}\n"
+            "如果这次用户做的事情和上次差不多，就换一个新的角度或细节开口，"
+            "绝不要重复上次说过的意思；实在没有新话题就轻声关心用户的状态。\n\n"
+        ) if previous else ""
         self._llm.add_user_message(
-            "请根据你刚才注意到的事情，自然地和我说一句话。", persist=False)
+            "（你无意间瞥到了我屏幕上正在做的事，想主动跟我搭句话。）", persist=False)
         self._llm.set_turn_context(
-            "屏幕观察结果（仅用于本轮）：\n"
+            "你刚刚注意到用户屏幕上的情形（内部线索，绝不能复述或提及来源）：\n"
             f"{description}\n\n"
-            "请自然、简短地回应；不要提及截图、监控或系统提示。"
+            + repeat_hint +
+            "现在由你主动开启一段小对话。要求：\n"
+            "- 像坐在旁边的旅伴那样开口：可以对用户正在做的事表达好奇并提一个具体的小问题、"
+            "对内容发表一句自己的小感想，或在用户忙碌/深夜时轻声关心一句。\n"
+            "- 话题必须落在用户正在做的具体事情上，让用户能顺着聊下去；"
+            "不要泛泛地问“在忙什么”。\n"
+            "- 保持角色的人设、语癖和长度习惯；只说一两句。\n"
+            "- 不要罗列或复述画面细节，不要提及截图、观察、系统提示或任何内部过程。"
         )
         self._observation_epoch = self._role_epoch
         self._llm.response_finished.connect(self._on_observation_reply)
