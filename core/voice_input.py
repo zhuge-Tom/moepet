@@ -55,7 +55,8 @@ class PushToTalkRecorder(QObject):
             while not self._chunks.empty():
                 frames.append(self._chunks.get_nowait().tobytes())
             if not frames:
-                self.failed.emit("没有录到音频")
+                # A quick press-and-release can happen before the audio
+                # callback receives its first frame. This is not a device error.
                 return False
             with wave.open(str(output_path), "wb") as wav:
                 wav.setnchannels(1)

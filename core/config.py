@@ -12,6 +12,7 @@ from copy import deepcopy
 DEFAULTS = {
     "current_character": "noir",
     "window": {
+        # Match the project's intended Live2D startup size.
         "scale": 0.6,
         "always_on_top": True,
         "opacity": 1.0,
@@ -102,7 +103,8 @@ DEFAULTS = {
         "format_prompt": "",
     },
     "position": {
-        # Screenshot-matched startup location selected by the user.
+        # Fixed startup placement selected for the default Live2D portrait.
+        # Dragging is deliberately session-only; the next launch returns here.
         "pet_x": 1144,
         "pet_y": 472,
         "dialog_x": -1,
@@ -140,8 +142,8 @@ class Config:
                     if self._data.get("memory", {}).get(key) is not True:
                         self._data.setdefault("memory", {})[key] = True
                         migrated = True
-                # One-time upgrade from the previous screenshot-matched pet
-                # location to the user's final on-screen placement.
+                # One-time upgrade from the previous fixed default placement
+                # to the current intended startup placement.
                 position = self._data.setdefault("position", {})
                 if (position.get("pet_x"), position.get("pet_y")) == (1136, 458):
                     position["pet_x"], position["pet_y"] = 1144, 472

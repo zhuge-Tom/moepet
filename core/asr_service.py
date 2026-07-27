@@ -2,12 +2,33 @@
 import json
 import mimetypes
 from pathlib import Path
+from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 from core.openai_compat import bearer_headers, is_local_endpoint
 from core.workers import BackgroundService
 
 
 class ASRService(BackgroundService):
+    @staticmethod
+    def _transcription_url(base_url: str) -> str:
+        endpoint = base_url.rstrip("/")
+        if endpoint.endswith("/audio/transcriptions"):
+            return endpoint
+        if endpoint.endswith("/audio/speech"):
+            endpoint = endpoint.removesuffix("/audio/speech")
+        return f"{endpoint}/audio/transcriptions"
+
+    @staticmethod
+    def _http_error_detail(error: HTTPError) -> str:
+        try:
+            payload = json.loads(error.read().decode("utf-8", errors="replace"))
+        except (OSError, ValueError, UnicodeDecodeError):
+            return ""
+        detail = payload.get("error", payload) if isinstance(payload, dict) else payload
+        if isinstance(detail, dict):
+            detail = detail.get("message") or detail.get("detail") or ""
+        return str(detail).strip()
+
     def transcribe(self, audio_path: Path, model_path: str, device="cpu", compute_type="int8"):
         if not model_path or not Path(model_path).exists():
             self.failed.emit("请在设置中配置有效的 faster-whisper 模型目录")
@@ -52,15 +73,18 @@ class ASRService(BackgroundService):
                 audio_path.read_bytes(), b"\r\n",
                 f"--{boundary}--\r\n".encode(),
             ))
-            endpoint = base_url.rstrip("/")
-            if not endpoint.endswith("/audio/transcriptions"):
-                endpoint += "/audio/transcriptions"
+            endpoint = self._transcription_url(base_url)
             request = Request(endpoint, data=b"".join(chunks), headers={
                 "Content-Type": f"multipart/form-data; boundary={boundary}",
                 **bearer_headers(api_key),
             })
-            with urlopen(request, timeout=90) as response:
-                data = json.loads(response.read())
+            try:
+                with urlopen(request, timeout=90) as response:
+                    data = json.loads(response.read())
+            except HTTPError as exc:
+                detail = self._http_error_detail(exc)
+                message = f"语音识别服务返回 HTTP {exc.code}"
+                raise RuntimeError(f"{message}：{detail}" if detail else message) from exc
             return {"text": str(data.get("text", "")).strip(), "language": language}
 
         return self.run(work)

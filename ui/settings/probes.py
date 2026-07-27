@@ -103,6 +103,17 @@ def probe_http_endpoint(url: str, api_key: str, payload: dict | None = None) -> 
         return False, f"无法连接服务：{getattr(exc, 'reason', exc)}"
 
 
+def probe_asr_model(base_url: str, api_key: str, model: str) -> tuple[bool, str]:
+    """Check an ASR provider without sending an invalid audio-less request."""
+    try:
+        models = discover_models(base_url, api_key)
+    except Exception as exc:
+        return False, f"无法获取服务模型：{exc}"
+    if model not in models:
+        return False, f"服务可达，但不提供语音识别模型：{model}"
+    return True, "服务连接、凭据和语音识别模型均可用"
+
+
 def probe_cosyvoice(model_path: str, config_path: str = "") -> tuple[bool, str]:
     """Compatibility name for the local GPT-SoVITS integrated-package probe."""
     from core.local_tts_bundle import inspect_local_tts_bundle

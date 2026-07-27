@@ -1,7 +1,9 @@
 from pathlib import Path
+from io import BytesIO
 import json
 import math
 import os
+from urllib.error import HTTPError
 
 import pytest
 from PySide6.QtCore import QPoint, Qt
@@ -256,6 +258,8 @@ def test_config_has_multimodal_defaults(tmp_path):
     assert config.get("screen_capture", "vision_max_dimension") == 1280
     assert config.get("tts", "enabled") is True
     assert config.get("tts", "auto_play") is True
+    assert config.get("window", "scale") == 0.6
+    assert config.get_position("pet") == (1144, 472)
 
 
 def test_previous_pet_start_position_migrates_to_final_placement(tmp_path):
@@ -277,6 +281,41 @@ def test_cloud_asr_endpoint_is_completed(tmp_path):
     from core.asr_service import ASRService
     service = ASRService()
     assert service.transcribe_cloud(tmp_path / "missing.wav", "", "", "whisper-1") is False
+
+
+def test_cloud_asr_endpoint_accepts_api_root_or_full_transcription_path():
+    from core.asr_service import ASRService
+
+    assert ASRService._transcription_url("https://api.openai.com/v1") == (
+        "https://api.openai.com/v1/audio/transcriptions")
+    assert ASRService._transcription_url(
+        "https://api.openai.com/v1/audio/transcriptions") == (
+        "https://api.openai.com/v1/audio/transcriptions")
+
+
+def test_cloud_asr_exposes_provider_error_detail():
+    from core.asr_service import ASRService
+
+    error = HTTPError(
+        "https://api.example/v1/audio/transcriptions", 400, "Bad Request", None,
+        BytesIO(b'{"error":{"message":"Invalid audio format"}}'),
+    )
+
+    assert ASRService._http_error_detail(error) == "Invalid audio format"
+
+
+def test_asr_probe_validates_selected_model(monkeypatch):
+    from ui.settings.probes import probe_asr_model
+
+    monkeypatch.setattr(
+        "ui.settings.probes.discover_models",
+        lambda _url, _key: ["FunAudioLLM/SenseVoiceSmall"],
+    )
+
+    assert probe_asr_model(
+        "https://api.siliconflow.cn/v1", "key", "FunAudioLLM/SenseVoiceSmall") == (
+        True, "服务连接、凭据和语音识别模型均可用")
+    assert probe_asr_model("https://api.siliconflow.cn/v1", "key", "whisper-1")[0] is False
 
 
 def test_background_services_expose_their_busy_state():
@@ -363,6 +402,33 @@ def test_tts_error_is_logged_without_writing_to_chat(caplog):
     manager._set_pet_state = lambda _state: None
     PetManager._on_tts_error(manager, "HTTP Error 404")
     assert "TTS synthesis failed: HTTP Error 404" in caplog.text
+
+
+def test_voice_input_errors_are_logged_without_writing_to_chat(caplog):
+    manager = type("Manager", (), {})()
+    recording_states = []
+    manager._dialog = type("Dialog", (), {
+        "set_voice_recording": lambda _self, value: recording_states.append(value),
+        "display_text": lambda *_args: (_ for _ in ()).throw(AssertionError("chat was changed")),
+    })()
+
+    PetManager._on_voice_error(manager, "device temporarily busy")
+
+    assert recording_states == [False]
+    assert "Voice input failed: device temporarily busy" in caplog.text
+
+
+def test_asr_errors_are_logged_without_writing_to_chat(caplog):
+    manager = type("Manager", (), {})()
+    manager._active_voice_path = None
+    manager._voice_epoch = manager._role_epoch = 3
+    manager._dialog = type("Dialog", (), {
+        "display_text": lambda *_args: (_ for _ in ()).throw(AssertionError("chat was changed")),
+    })()
+
+    PetManager._on_asr_error(manager, "HTTP 400")
+
+    assert "ASR transcription failed: HTTP 400" in caplog.text
 
 
 def test_tts_failure_reveals_a_reply_waiting_for_audio():
@@ -1064,6 +1130,8 @@ def test_start_keeps_settings_closed_even_when_chat_is_unconfigured(tmp_path):
     manager.config.set("current_character", "noir")
     manager._windows = {"noir": type("Window", (), {
         "move": lambda self, *_args: None, "show": lambda self: None,
+        "width": lambda self: 100, "height": lambda self: 200,
+        "x": lambda self: 0, "y": lambda self: 0,
     })()}
     manager._setup_tray = lambda: None
     manager._needs_initial_setup = lambda: True
@@ -1482,6 +1550,7 @@ def test_start_places_portrait_bottom_right_and_closes_dialog(tmp_path, monkeypa
     monkeypatch.setattr("pet_manager.QApplication.primaryScreen", lambda: Screen())
     PetManager.start(manager)
     assert manager._windows["noir"].moves == [(1144, 472)]
+    assert manager.config.get_position("pet") == (1144, 472)
     assert manager.config.get("dialog", "visible") is False
 
 
@@ -2109,6 +2178,22 @@ def test_voice_recorder_cancel_discards_active_stream():
     recorder._stream = stream
     recorder.cancel()
     assert stream.stopped and stream.closed and not recorder.recording
+
+
+def test_voice_recorder_empty_capture_is_cancelled_without_device_error(tmp_path):
+    from core.voice_input import PushToTalkRecorder
+
+    class Stream:
+        def stop(self): pass
+        def close(self): pass
+
+    recorder = PushToTalkRecorder()
+    recorder._stream = Stream()
+    errors = []
+    recorder.failed.connect(errors.append)
+
+    assert recorder.stop(tmp_path / "empty.wav") is False
+    assert errors == []
 
 
 def test_tray_observation_state_updates_without_signal(qapp):

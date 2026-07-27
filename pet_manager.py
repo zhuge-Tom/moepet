@@ -1009,15 +1009,12 @@ class PetManager:
         if getattr(self, "_voice_epoch", None) != self._role_epoch:
             return
         self._voice_epoch = None
-        if self._dialog:
-            self._dialog.display_text(f"语音识别失败：{error}", "assistant")
+        LOGGER.error("ASR transcription failed: %s", error)
 
     def _on_voice_error(self, error: str):
         if self._dialog:
             self._dialog.set_voice_recording(False)
-            # Low-level driver/module errors are not useful dialogue and can
-            # collide visually with the next model reply.
-            self._dialog.display_text("麦克风暂时不可用，请检查设备或权限后再试。", "assistant")
+        LOGGER.error("Voice input failed: %s", error)
 
     def _refresh_dialog_capabilities(self):
         """Reflect configured integrations in the persistent chat controls."""

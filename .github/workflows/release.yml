@@ -1,9 +1,8 @@
 name: Build Windows release
 
 on:
-  push:
-    tags:
-      - "v*"
+  # Windows runner usage is billed for this account. Releases are built
+  # locally and uploaded with GitHub CLI; keep this workflow opt-in only.
   workflow_dispatch:
 
 permissions:
@@ -23,7 +22,7 @@ jobs:
           python -m pip install -r requirements.txt pyinstaller
       - name: Build Moepet
         run: |
-          python -m PyInstaller --noconfirm --clean --windowed --name Moepet --icon assets/moepet.ico --add-data "assets;assets" --add-data "characters;characters" main.py
+          python -m PyInstaller --noconfirm --clean --windowed --contents-directory . --name Moepet --icon assets/moepet.ico --add-data "assets;assets" --add-data "characters;characters" main.py
           @"
           Moepet Windows 免安装版
 

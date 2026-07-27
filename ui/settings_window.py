@@ -623,7 +623,8 @@ class SettingsWindow(QDialog):
         key = self._asr_api_key.text().strip()
         model = self._asr_api_model.text().strip() or "whisper-1"
         if provider == "cloud":
-            return lambda: probe_http_endpoint(url, key, {"model": model})
+            from ui.settings.probes import probe_asr_model
+            return lambda: probe_asr_model(url, key, model)
         return lambda: probe_local_module("faster_whisper", model_path)
 
     def _prepare_tts_probe(self):
