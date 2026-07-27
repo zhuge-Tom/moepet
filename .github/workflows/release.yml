@@ -1,0 +1,39 @@
+name: Build Windows release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install build dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt pyinstaller
+      - name: Build Moepet
+        run: |
+          python -m PyInstaller --noconfirm --clean --windowed --name Moepet --icon assets/moepet.ico --add-data "assets;assets" --add-data "characters;characters" main.py
+          @"
+          Moepet Windows 免安装版
+
+          解压后双击 Moepet.exe 启动。
+          如需本地日语语音，请从同一 Release 下载 moepet-sbv2-noir-v1.zip，
+          并解压到本目录，使 vendor\\style_bert_vits2 位于 Moepet.exe 同级目录。
+          "@ | Set-Content -Encoding utf8 dist/Moepet/使用说明.txt
+          Compress-Archive -Path dist/Moepet/* -DestinationPath Moepet-windows-x64.zip
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: Moepet-windows-x64.zip
