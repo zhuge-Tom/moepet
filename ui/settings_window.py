@@ -746,7 +746,7 @@ class SettingsWindow(QDialog):
         root = self._base_dir / "vendor" / "style_bert_vits2"
         checks = (
             ("Style-Bert-VITS2 源码", root / "style_bert_vits2" / "__init__.py"),
-            ("CPU Python 环境", root / "venv_cpu" / "Scripts" / "python.exe"),
+            ("便携 Python 运行时", root / "runtime" / "python.exe"),
             ("日语 BERT FP16 ONNX", root / "bert" /
              "deberta-v2-large-japanese-char-wwm-onnx" / "model_fp16.onnx"),
             ("Noir 声学 ONNX", root / "model_assets" / "noir" / "noir.onnx"),
@@ -762,23 +762,17 @@ class SettingsWindow(QDialog):
         summary = (
             "全部组件已就绪，可以直接点击“测试并播放语音”。"
             if ready else
-            "普通 GitHub 克隆不包含大模型和虚拟环境，请按下面步骤补齐红色项目。"
+            "普通 GitHub 克隆不包含大模型和便携运行时，请按下面步骤补齐红色项目。"
         )
         guide_text = (
             "<h3>Style-Bert-VITS2 ONNX 配置引导</h3>"
             f"<p>{summary}</p><p>{status}</p>"
-            "<p><b>1. 放置上游源码</b><br>从 Style-Bert-VITS2 官方仓库下载源码，"
-            "将仓库内容放入 <code>vendor/style_bert_vits2</code>；保留 Moepet 自带的 "
-            "<code>server_moepet.py</code>。</p>"
-            "<p><b>2. 创建 CPU 环境</b><br><code>py -3.11 -m venv "
-            "vendor\\style_bert_vits2\\venv_cpu</code><br><code>vendor\\style_bert_vits2\\venv_cpu\\Scripts\\python.exe "
-            "-m pip install -r vendor\\style_bert_vits2\\requirements-infer.txt fastapi uvicorn scipy</code></p>"
-            "<p><b>3. 放置日语 BERT ONNX</b><br>下载官方 "
-            "<code>tsukumijima/deberta-v2-large-japanese-char-wwm-onnx</code> 的 "
-            "<code>model_fp16.onnx</code> 与 tokenizer/config 文件，放入同名 BERT 目录。</p>"
-            "<p><b>4. 放置 Noir 模型</b><br>在 <code>model_assets/noir</code> 中放入 "
-            "<code>noir.onnx</code>、<code>config.json</code> 和 <code>style_vectors.npy</code>。</p>"
-            "<p><b>5. 验证</b><br>关闭本窗口后重新打开配置引导检查状态，再点击“测试并播放语音”。"
+            "<p><b>1. 一键安装（推荐）</b><br>在项目根目录执行：<br>"
+            "<code>powershell -ExecutionPolicy Bypass -File .\\setup.ps1 -InstallSbv2</code><br>"
+            "安装器会下载含便携 Python、日语 BERT 和 Noir 模型的完整资产包。</p>"
+            "<p><b>2. 手动安装</b><br>从 Releases 下载 <code>moepet-sbv2-noir-v1.zip</code>，"
+            "解压到项目根目录；解压后应出现 <code>vendor/style_bert_vits2</code>。</p>"
+            "<p><b>3. 验证</b><br>关闭本窗口后重新打开配置引导检查状态，再点击“测试并播放语音”。"
             "首次启动会在后台预热，之后聊天会先生成日文并低延迟朗读。</p>"
         )
         dialog = QDialog(self)

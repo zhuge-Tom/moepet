@@ -32,7 +32,7 @@
 - 首次安装需要联网
 - 至少预留约 4 GB 磁盘空间
 
-本地 TTS 默认选择 CPU 兼容模式。普通克隆不会包含该包；需要本地声音时，按设置页引导下载到 `vendor/gpt_sovits_cpu`。有 NVIDIA GPU 时，也可以改用自行解压的 GPU 整合包。
+本地 TTS 默认选择 Style-Bert-VITS2 ONNX。普通克隆不包含语音运行时与模型；需要本地声音时，按设置页引导下载到 `vendor/style_bert_vits2`。GPT-SoVITS CPU 兼容包仍可作为备选；有 NVIDIA GPU 时，也可以改用自行解压的 GPU 整合包。
 
 ## 安装
 
