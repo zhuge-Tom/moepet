@@ -507,7 +507,7 @@ def test_llm_chunk_starts_local_speech_before_the_full_reply_arrives():
     assert manager._tts_stream_started is True
 
 
-def test_sbv2_waits_for_complete_reply_to_preserve_speech_continuity(tmp_path):
+def test_sbv2_enables_low_latency_streaming_translation(tmp_path):
     from collections import deque
 
     manager = type("Manager", (), {})()
@@ -526,7 +526,7 @@ def test_sbv2_waits_for_complete_reply_to_preserve_speech_continuity(tmp_path):
 
     PetManager._begin_streaming_local_tts(manager, True)
 
-    assert manager._tts_stream_enabled is False
+    assert manager._tts_stream_enabled is True
     assert not manager._tts_text_queue
     assert manager._tts_jp_buffer == ""
     assert manager._tts_jp_stream_done is False
@@ -688,13 +688,13 @@ def test_bilingual_speech_buffers_every_complete_japanese_segment():
 
     assert manager._tts_jp_buffer == "最初の文です。次の文も読みます。"
     assert manager._llm_bilingual_speech_received is True
-    assert starts == []
+    assert starts == [True, True]
 
 
-def test_bilingual_speech_submits_one_complete_utterance_after_stream_end():
+def test_bilingual_speech_starts_first_segment_before_stream_end():
     manager = type("Manager", (), {})()
     manager._tts_segment_inflight = False
-    manager._tts_jp_stream_done = True
+    manager._tts_jp_stream_done = False
     manager._tts_jp_buffer = "最初の文です。次の文も続きます。"
     manager._role_epoch = 7
     manager._tts = type("TTS", (), {"is_busy": lambda _self: False})()
@@ -704,9 +704,40 @@ def test_bilingual_speech_submits_one_complete_utterance_after_stream_end():
 
     PetManager._start_next_bilingual_speech(manager)
 
-    assert utterances == ["最初の文です。次の文も続きます。"]
-    assert manager._tts_jp_buffer == ""
+    assert utterances == ["最初の文です。"]
+    assert manager._tts_jp_buffer == "次の文も続きます。"
     assert manager._tts_segment_inflight is True
+
+
+def test_completed_segment_prefetches_next_while_audio_starts(monkeypatch, tmp_path):
+    from collections import deque
+
+    manager = type("Manager", (), {})()
+    manager._role_epoch = manager._tts_epoch = 4
+    manager._tts_audio_queue = deque()
+    manager._tts_audio_playing = False
+    manager._tts_segment_inflight = True
+    playback = []
+    manager._play_next_tts_fragment = lambda: playback.append(
+        list(manager._tts_audio_queue))
+    manager._start_next_bilingual_speech = lambda: None
+    manager._start_next_streaming_speech = lambda: None
+    scheduled = []
+    monkeypatch.setattr(
+        "pet_manager.QTimer.singleShot",
+        lambda delay, callback: scheduled.append((delay, callback)),
+    )
+    audio = tmp_path / "first.wav"
+    audio.write_bytes(b"RIFF")
+
+    PetManager._on_tts_done(manager, str(audio))
+
+    assert playback == [[str(audio)]]
+    assert manager._tts_segment_inflight is False
+    assert [callback for delay, callback in scheduled if delay == 0] == [
+        manager._start_next_bilingual_speech,
+        manager._start_next_streaming_speech,
+    ]
 
 
 def test_adaptive_segment_cut_starts_tiny_and_grows():
@@ -850,7 +881,7 @@ def test_sbv2_synthesizes_translated_japanese_without_reference_audio(tmp_path):
 
     assert PetManager._on_tts_translation_done(manager, "こんにちは。")
     assert calls[0][0][0] == "こんにちは。"
-    assert calls[0][1]["streaming"] is False
+    assert calls[0][1]["streaming"] is True
 
 
 def test_windows_audio_player_does_not_require_qt_multimedia(qapp, tmp_path, monkeypatch):
