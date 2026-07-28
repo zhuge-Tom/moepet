@@ -1326,6 +1326,44 @@ def test_live2d_keeps_canvas_framebuffer_valid_in_current_context():
     assert not _ensure_live2d_canvas_framebuffer(canvas, 720, 880, gl)
 
 
+def test_live2d_canvas_restores_qt_fbo_with_plain_python_integers():
+    import numpy as np
+    from ui.live2d_window import _draw_live2d_on_canvas
+
+    calls = []
+
+    class GL:
+        GL_FRAMEBUFFER = 0x8D40
+        GL_FRAMEBUFFER_BINDING = 0x8CA6
+        GL_VIEWPORT = 0x0BA2
+
+        def glBindVertexArray(self, value): calls.append(("vao", value))
+        def glGetIntegerv(self, name):
+            if name == self.GL_FRAMEBUFFER_BINDING:
+                return np.int32(3)
+            return np.array([0, 0, 720, 880], dtype=np.int32)
+        def glBindFramebuffer(self, target, value):
+            calls.append(("fbo", type(value), value))
+        def glViewport(self, *values): calls.append(("viewport", *(type(v) for v in values)))
+
+    canvas = type("Canvas", (), {
+        "_canvas_framebuffer": np.uint32(4),
+        "_width": 720,
+        "_height": 880,
+    })()
+    drawn = []
+
+    _draw_live2d_on_canvas(canvas, lambda: drawn.append(True), GL())
+
+    assert drawn == [True]
+    assert [call for call in calls if call[0] == "fbo"] == [
+        ("fbo", int, 4),
+        ("fbo", int, 3),
+    ]
+    viewport_call = next(call for call in calls if call[0] == "viewport")
+    assert viewport_call[1:] == (int, int, int, int)
+
+
 def test_live2d_interactive_point_uses_rendered_alpha():
     from PySide6.QtCore import QPoint
     from ui.live2d_window import Live2DWindow

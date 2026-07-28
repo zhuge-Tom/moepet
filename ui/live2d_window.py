@@ -32,7 +32,26 @@ def _create_live2d_canvas(canvas_type):
     canvas = canvas_type()
     canvas._canvas_framebuffer = 0
     canvas._canvas_texture = 0
+    # live2d-py restores Qt's FBO using numpy.int32 values returned by
+    # glGetIntegerv. Frozen PyOpenGL builds can marshal that scalar
+    # incorrectly, so replace the private draw step with an int-safe adapter.
+    canvas._Canvas__draw_on_canvas = lambda on_draw: _draw_live2d_on_canvas(
+        canvas, on_draw)
     return canvas
+
+
+def _draw_live2d_on_canvas(canvas, on_draw, gl=None) -> None:
+    """Draw via live2d-py's canvas while restoring Qt GL state with ints."""
+    if gl is None:
+        from OpenGL import GL as gl
+    gl.glBindVertexArray(0)
+    old_fbo = int(gl.glGetIntegerv(gl.GL_FRAMEBUFFER_BINDING))
+    old_viewport = tuple(int(value) for value in gl.glGetIntegerv(gl.GL_VIEWPORT))
+    gl.glBindFramebuffer(gl.GL_FRAMEBUFFER, int(canvas._canvas_framebuffer))
+    gl.glViewport(0, 0, int(canvas._width), int(canvas._height))
+    on_draw()
+    gl.glBindFramebuffer(gl.GL_FRAMEBUFFER, old_fbo)
+    gl.glViewport(*old_viewport)
 
 
 def _clear_pending_gl_errors(functions, limit: int = 16) -> tuple[int, ...]:
