@@ -57,7 +57,7 @@ def _create_live2d_canvas(canvas_type, qt_functions_provider):
 
     def draw_on_canvas(on_draw):
         from OpenGL import GL
-        return _draw_live2d_on_canvas(
+        canvas._moepet_native_errors = _draw_live2d_on_canvas(
             canvas, on_draw, GL, qt_functions_provider())
 
     canvas._Canvas__draw_on_canvas = draw_on_canvas
@@ -170,6 +170,18 @@ class Live2DCanvas(QOpenGLWidget):
         # live2d-py's first checked call and abort an otherwise valid frame.
         _clear_pending_gl_errors(self.context().functions())
         self._canvas.Draw(lambda: (live2d.clearBuffer(), self._model.Draw()))
+        native_errors = getattr(self._canvas, "_moepet_native_errors", ())
+        if native_errors:
+            # A failed Cubism offscreen pass can leave a fully transparent
+            # window without raising until the next PyOpenGL call. Treat that
+            # as renderer initialization failure so PetManager can replace the
+            # window with the always-available static illustration.
+            self._model = None
+            self.set_rendering_enabled(False)
+            codes = ", ".join(str(code) for code in native_errors)
+            self.initialization_failed.emit(
+                f"Live2D OpenGL 渲染失败（{codes}），已自动切换静态立绘。")
+            return
         self._maybe_cache_framebuffer_alpha()
 
     def _maybe_cache_framebuffer_alpha(self) -> None:

@@ -1311,6 +1311,38 @@ def test_live2d_consumes_native_errors_before_restoring_qt_framebuffer():
     assert calls.index("consume-error") < calls.index(("qt-fbo", 3))
 
 
+def test_live2d_gl_failure_requests_static_renderer_fallback():
+    from ui.live2d_window import Live2DCanvas
+
+    emitted = []
+    rendering = []
+
+    class Canvas:
+        _moepet_native_errors = ()
+        def Draw(self, _callback):
+            self._moepet_native_errors = (1281,)
+
+    widget = type("Widget", (), {
+        "_model": object(),
+        "_canvas": Canvas(),
+        "context": lambda _self: type("Context", (), {
+            "functions": lambda _self: type("Functions", (), {
+                "glGetError": lambda _self: 0,
+            })(),
+        })(),
+        "set_rendering_enabled": lambda _self, enabled: rendering.append(enabled),
+        "initialization_failed": type("Signal", (), {
+            "emit": lambda _self, message: emitted.append(message),
+        })(),
+    })()
+
+    Live2DCanvas.paintGL(widget)
+
+    assert widget._model is None
+    assert rendering == [False]
+    assert emitted and "1281" in emitted[0]
+
+
 def test_live2d_interactive_point_uses_rendered_alpha():
     from PySide6.QtCore import QPoint
     from ui.live2d_window import Live2DWindow
