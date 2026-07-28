@@ -46,6 +46,19 @@ def _clear_pending_gl_errors(functions, limit: int = 16) -> tuple[int, ...]:
     return tuple(errors)
 
 
+def _ensure_live2d_canvas_framebuffer(canvas, width: int, height: int, gl) -> bool:
+    """Recreate a Canvas FBO when Qt has switched OpenGL contexts."""
+    handle = int(getattr(canvas, "_canvas_framebuffer", 0))
+    if handle > 0 and bool(gl.glIsFramebuffer(handle)):
+        return False
+    # The old names belong to another context. Do not ask the current context
+    # to delete them; zero is the OpenGL-defined no-object handle.
+    canvas._canvas_framebuffer = 0
+    canvas._canvas_texture = 0
+    canvas.SetSize(max(1, int(width)), max(1, int(height)))
+    return True
+
+
 def _wav_has_signal(audio_path: str) -> bool:
     """Avoid sending silent PCM to live2d-py's divide-by-zero normalizer."""
     try:
@@ -151,6 +164,14 @@ class Live2DCanvas(QOpenGLWidget):
         # A sticky error from Qt's FBO setup would otherwise be attributed to
         # live2d-py's first checked call and abort an otherwise valid frame.
         _clear_pending_gl_errors(self.context().functions())
+        from OpenGL import GL
+        pixel_ratio = self.devicePixelRatioF()
+        _ensure_live2d_canvas_framebuffer(
+            self._canvas,
+            round(self.width() * pixel_ratio),
+            round(self.height() * pixel_ratio),
+            GL,
+        )
         self._canvas.Draw(lambda: (live2d.clearBuffer(), self._model.Draw()))
         self._maybe_cache_framebuffer_alpha()
 

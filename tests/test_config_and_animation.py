@@ -1292,6 +1292,40 @@ def test_live2d_clears_stale_qt_gl_errors_before_pyopengl_draw():
     assert calls == ["get", "get", "get"]
 
 
+def test_live2d_recreates_canvas_framebuffer_in_current_paint_context():
+    from ui.live2d_window import _ensure_live2d_canvas_framebuffer
+
+    class Canvas:
+        _canvas_framebuffer = 3
+        _canvas_texture = 4
+        sizes = []
+
+        def SetSize(self, width, height):
+            self.sizes.append((width, height))
+            self._canvas_framebuffer = 8
+            self._canvas_texture = 9
+
+    gl = type("GL", (), {"glIsFramebuffer": lambda _self, handle: False})()
+    canvas = Canvas()
+
+    assert _ensure_live2d_canvas_framebuffer(canvas, 720, 880, gl)
+    assert canvas.sizes == [(720, 880)]
+    assert (canvas._canvas_framebuffer, canvas._canvas_texture) == (8, 9)
+
+
+def test_live2d_keeps_canvas_framebuffer_valid_in_current_context():
+    from ui.live2d_window import _ensure_live2d_canvas_framebuffer
+
+    canvas = type("Canvas", (), {
+        "_canvas_framebuffer": 3,
+        "SetSize": lambda *_args: (_ for _ in ()).throw(
+            AssertionError("valid framebuffer must not be recreated")),
+    })()
+    gl = type("GL", (), {"glIsFramebuffer": lambda _self, handle: handle == 3})()
+
+    assert not _ensure_live2d_canvas_framebuffer(canvas, 720, 880, gl)
+
+
 def test_live2d_interactive_point_uses_rendered_alpha():
     from PySide6.QtCore import QPoint
     from ui.live2d_window import Live2DWindow
