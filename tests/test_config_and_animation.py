@@ -863,6 +863,35 @@ def test_windows_audio_player_does_not_require_qt_multimedia(qapp, tmp_path, mon
     assert calls == [(str(audio), fake_winsound.SND_FILENAME | fake_winsound.SND_ASYNC)]
 
 
+def test_windows_audio_player_adds_no_silence_between_queued_fragments(
+        qapp, tmp_path, monkeypatch):
+    import sys
+    import types
+    import wave
+    from core.tts_service import AudioPlaybackService
+
+    monkeypatch.setitem(sys.modules, "winsound", types.SimpleNamespace(
+        SND_FILENAME=0x20000,
+        SND_ASYNC=0x0001,
+        PlaySound=lambda _path, _flags: None,
+    ))
+    audio = tmp_path / "ten-ms.wav"
+    with wave.open(str(audio), "wb") as wav:
+        wav.setnchannels(1)
+        wav.setsampwidth(2)
+        wav.setframerate(32000)
+        wav.writeframes(b"\0\0" * 320)
+
+    player = AudioPlaybackService()
+    starts = []
+    player._timer = type("TimerSpy", (), {
+        "start": lambda _self, milliseconds: starts.append(milliseconds),
+    })()
+
+    assert player.play(audio)
+    assert starts == [10]
+
+
 def test_chat_dispatch_skips_blocking_memory_screen_request():
     source = Path("pet_manager.py").read_text(encoding="utf-8")
     assert "self._dispatch_chat_request(text, self._combined_turn_context(text))" in source

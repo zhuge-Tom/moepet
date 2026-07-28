@@ -50,10 +50,9 @@ class AudioPlaybackService(QObject):
         self._path = path
         self._busy = True
         self.busy_changed.emit(True)
-        # The pad only needs to absorb device-open jitter before the first
-        # sample. Anything larger becomes an audible pause between queued
-        # clause fragments.
-        self._timer.start(duration_ms + 45)
+        # Hand off queued fragments as soon as the WAV duration elapses.
+        # A fixed tail pad becomes audible silence at every clause boundary.
+        self._timer.start(duration_ms)
         return True
 
     def stop(self) -> None:
