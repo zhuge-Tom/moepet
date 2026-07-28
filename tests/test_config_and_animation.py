@@ -1319,17 +1319,9 @@ def test_live2d_uses_upstream_canvas_without_overriding_its_fbo_path():
     import ui.live2d_window as live2d_window_module
 
     source = Path(live2d_window_module.__file__).read_text(encoding="utf-8")
-    assert "self._canvas = Canvas()" in source
-    assert "_Canvas__draw_on_canvas" not in source
-
-
-def test_packaged_live2d_disables_stale_pyopengl_error_attribution_early():
-    import ui.live2d_window as live2d_window_module
-
-    source = Path(live2d_window_module.__file__).read_text(encoding="utf-8")
-    configuration = source.index("OpenGL.ERROR_CHECKING = False")
-    canvas_import = source.index("from live2d.utils.canvas import Canvas")
-    assert configuration < canvas_import
+    assert "self.defaultFramebufferObject" in source
+    assert "target_fbo_provider()" in source
+    assert "glGetIntegerv(GL.GL_FRAMEBUFFER_BINDING)" not in source
 
 
 def test_live2d_real_model_renders_a_nontransparent_frame():

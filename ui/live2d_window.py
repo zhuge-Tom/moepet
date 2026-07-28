@@ -23,6 +23,41 @@ _WS_EX_TRANSPARENT = 0x00000020
 LOGGER = logging.getLogger(__name__)
 
 
+def _clear_pending_gl_errors(functions, limit: int = 16) -> tuple[int, ...]:
+    errors = []
+    for _ in range(limit):
+        error = int(functions.glGetError())
+        if error == 0:
+            break
+        errors.append(error)
+    return tuple(errors)
+
+
+def _create_live2d_canvas(canvas_type, qt_functions_provider,
+                          target_fbo_provider, target_size_provider):
+    """Keep Canvas premultiplication but restore Qt's actual widget FBO."""
+    canvas = canvas_type()
+    canvas._canvas_framebuffer = 0
+    canvas._canvas_texture = 0
+
+    def draw_on_canvas(on_draw):
+        from OpenGL import GL
+
+        GL.glBindVertexArray(0)
+        GL.glBindFramebuffer(GL.GL_FRAMEBUFFER, int(canvas._canvas_framebuffer))
+        GL.glViewport(0, 0, int(canvas._width), int(canvas._height))
+        on_draw()
+        qt_functions = qt_functions_provider()
+        canvas._moepet_native_errors = _clear_pending_gl_errors(qt_functions)
+        width, height = target_size_provider()
+        qt_functions.glBindFramebuffer(
+            GL.GL_FRAMEBUFFER, int(target_fbo_provider()))
+        qt_functions.glViewport(0, 0, int(width), int(height))
+
+    canvas._Canvas__draw_on_canvas = draw_on_canvas
+    return canvas
+
+
 def _wav_has_signal(audio_path: str) -> bool:
     """Avoid sending silent PCM to live2d-py's divide-by-zero normalizer."""
     try:
@@ -90,14 +125,6 @@ class Live2DCanvas(QOpenGLWidget):
 
     def initializeGL(self) -> None:
         try:
-            # PyInstaller's frozen module graph leaves Cubism's GL status on
-            # PyOpenGL's checked restore call. The restore itself is required
-            # and succeeds; only the wrapper's stale-error attribution is
-            # wrong. Configure PyOpenGL before importing any of its GL entry
-            # points, while retaining full checks in the development runtime.
-            if getattr(sys, "frozen", False):
-                import OpenGL
-                OpenGL.ERROR_CHECKING = False
             import live2d.v3 as live2d
             from live2d.utils.canvas import Canvas
             global _runtime_initialized
@@ -112,7 +139,15 @@ class Live2DCanvas(QOpenGLWidget):
             self._model.SetAutoBreathEnable(True)
             self._load_model_expressions()
             self.set_expression(self._expression, force=True)
-            self._canvas = Canvas()
+            self._canvas = _create_live2d_canvas(
+                Canvas,
+                lambda: self.context().functions(),
+                self.defaultFramebufferObject,
+                lambda: (
+                    round(self.width() * self.devicePixelRatioF()),
+                    round(self.height() * self.devicePixelRatioF()),
+                ),
+            )
             self.set_rendering_enabled(True)
         except Exception as exc:
             self._model = None
