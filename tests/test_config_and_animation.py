@@ -1298,6 +1298,19 @@ def test_live2d_canvas_uses_zero_for_unallocated_gl_handles():
     assert canvas._canvas_texture == 0
 
 
+def test_live2d_clears_stale_qt_gl_errors_before_pyopengl_draw():
+    from ui.live2d_window import _clear_pending_gl_errors
+
+    calls = []
+    errors = iter((1281, 1282, 0))
+    functions = type("Functions", (), {
+        "glGetError": lambda _self: calls.append("get") or next(errors),
+    })()
+
+    assert _clear_pending_gl_errors(functions) == (1281, 1282)
+    assert calls == ["get", "get", "get"]
+
+
 def test_live2d_interactive_point_uses_rendered_alpha():
     from PySide6.QtCore import QPoint
     from ui.live2d_window import Live2DWindow

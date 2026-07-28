@@ -38,6 +38,17 @@ def _create_live2d_canvas(canvas_type):
     return canvas
 
 
+def _clear_pending_gl_errors(functions, limit: int = 16) -> tuple[int, ...]:
+    """Drain errors left by Qt before PyOpenGL starts checked operations."""
+    errors = []
+    for _ in range(limit):
+        error = int(functions.glGetError())
+        if error == 0:
+            break
+        errors.append(error)
+    return tuple(errors)
+
+
 def _wav_has_signal(audio_path: str) -> bool:
     """Avoid sending silent PCM to live2d-py's divide-by-zero normalizer."""
     try:
@@ -158,6 +169,10 @@ class Live2DCanvas(QOpenGLWidget):
             return
         import live2d.v3 as live2d
 
+        # Qt and PyOpenGL share this context but use different error handling.
+        # A sticky error from Qt's FBO setup would otherwise be attributed to
+        # live2d-py's first checked call and abort an otherwise valid frame.
+        _clear_pending_gl_errors(self.context().functions())
         self._canvas.Draw(lambda: (live2d.clearBuffer(), self._model.Draw()))
         self._maybe_cache_framebuffer_alpha()
 
