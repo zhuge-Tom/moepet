@@ -1275,6 +1275,15 @@ def test_live2d_native_hit_test_does_not_mutate_window_style(monkeypatch):
     assert seen == [QPoint(101, 101)]
 
 
+def test_live2d_native_event_does_not_reenter_qt_for_unhandled_messages():
+    from ui.live2d_window import Live2DCanvas, Live2DWindow
+
+    # Calling the unbound overrides with a plain object also proves neither
+    # path delegates to a Qt base implementation for an unhandled message.
+    assert Live2DCanvas.nativeEvent(object(), b"unrelated_event", None) == (False, 0)
+    assert Live2DWindow.nativeEvent(object(), b"unrelated_event", None) == (False, 0)
+
+
 def test_live2d_interactive_point_uses_rendered_alpha():
     from PySide6.QtCore import QPoint
     from ui.live2d_window import Live2DWindow

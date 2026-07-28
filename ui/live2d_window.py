@@ -211,7 +211,9 @@ class Live2DCanvas(QOpenGLWidget):
             if (global_pos is not None and
                     hasattr(owner, "_native_hit_test_result")):
                 return True, owner._native_hit_test_result()
-        return super().nativeEvent(event_type, message)
+        # Do not call QOpenGLWidget.nativeEvent here. On Windows that can
+        # synchronously re-enter this override while Qt is binding its FBO.
+        return False, 0
 
     def timerEvent(self, event) -> None:
         if event.timerId() != self._render_timer_id:
@@ -571,7 +573,9 @@ class Live2DWindow(PetWindow):
         if bytes(event_type) in {b"windows_generic_MSG", b"windows_dispatcher_MSG"}:
             if _native_hit_test_position(message) is not None:
                 return True, self._native_hit_test_result()
-        return super().nativeEvent(event_type, message)
+        # Returning "unhandled" is the native-event contract. Delegating to
+        # the QWidget base can synchronously re-enter paintGL on Windows.
+        return False, 0
 
     def mouseDoubleClickEvent(self, event) -> None:
         """Only the rendered Live2D body, not its transparent window, opens chat."""
