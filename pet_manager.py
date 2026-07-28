@@ -1347,12 +1347,7 @@ class PetManager:
         return started
 
     def _begin_streaming_local_tts(self, llm_streaming: bool) -> None:
-        """Reset speech state; synthesize only after the full reply arrives.
-
-        Per-clause synthesis reduced time to first audio, but every fragment
-        reopened the Windows audio device and produced audible gaps. A single
-        utterance restores the original continuous speech cadence.
-        """
+        """Allow the first local-TTS clause to overlap LLM streaming."""
         self._tts_text_queue.clear()
         self._tts_jp_buffer = ""
         self._tts_jp_stream_done = False
@@ -1360,7 +1355,14 @@ class PetManager:
         self._tts_segment_inflight = False
         self._tts_stream_buffer = ""
         self._tts_stream_started = False
-        self._tts_stream_enabled = False
+        provider = self.config.get("tts", "provider", default="sbv2")
+        self._tts_stream_enabled = bool(
+            llm_streaming
+            and not self._uses_bilingual_local_speech()
+            and self.config.get("tts", "enabled", default=False)
+            and self.config.get("tts", "auto_play", default=True)
+            and provider in {"gpt_sovits_cpu", "gpt_sovits_gpu", "gpt_sovits_local", "sbv2"}
+        )
 
     def _on_llm_speech_ready(self, japanese_text: str) -> None:
         """Buffer every protocol segment without truncating the spoken reply."""
@@ -1372,20 +1374,27 @@ class PetManager:
             return
         self._llm_bilingual_speech_received = True
         self._tts_jp_buffer = getattr(self, "_tts_jp_buffer", "") + japanese_text
-        if getattr(self, "_tts_jp_stream_done", False):
-            self._start_next_bilingual_speech()
+        self._start_next_bilingual_speech()
 
     def _start_next_bilingual_speech(self) -> None:
         if (getattr(self, "_tts_segment_inflight", False)
-                or not getattr(self, "_tts_jp_stream_done", False)
                 or not getattr(self, "_tts_jp_buffer", "").strip()):
             return
         tts = getattr(self, "_tts", None)
         if tts and getattr(tts, "is_busy", lambda: False)():
             QTimer.singleShot(20, self._start_next_bilingual_speech)
             return
-        segment = self._tts_jp_buffer.strip()
-        self._tts_jp_buffer = ""
+        # Cut a tiny first segment for the fastest first sound, then longer
+        # ones while earlier audio plays, so each fixed per-request model
+        # cost is amortized and playback never starves.
+        idle = not getattr(self, "_tts_audio_playing", False) and not getattr(
+            self, "_tts_audio_queue", ())
+        segment, remaining = TTSService._cut_japanese_segment(
+            self._tts_jp_buffer, getattr(self, "_tts_jp_segment_index", 0),
+            stream_done=getattr(self, "_tts_jp_stream_done", False), idle=idle)
+        if not segment:
+            return
+        self._tts_jp_buffer = remaining
         self._tts_segment_inflight = True
         self._tts_epoch = self._role_epoch
         started = self._on_tts_translation_done(segment)
@@ -1526,7 +1535,7 @@ class PetManager:
             started = self._tts.synthesize_sbv2(
                 japanese_text, output, speed,
                 style=sbv2_style, style_weight=sbv2_style_weight,
-                streaming=False,
+                streaming=not getattr(self, "_tts_segment_inflight", False),
                 project_path=sbv2_project)
         else:
             started = self._tts.synthesize_gpt_sovits(
@@ -1538,7 +1547,8 @@ class PetManager:
                 local_python=str(bundle.python) if is_local else "",
                 local_config=str(generated_config) if is_local else "",
                 cpu_threads=self.config.get("tts", "cpu_threads", default=4),
-                streaming_mode=0,
+                streaming_mode=(0 if getattr(self, "_tts_segment_inflight", False)
+                                else self.config.get("tts", "streaming_mode", default=3)),
                 fragment_interval=self.config.get("tts", "fragment_interval", default=0.12),
                 device=self.config.get("tts", "local_device", default="cuda"),
             )

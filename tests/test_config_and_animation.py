@@ -507,7 +507,7 @@ def test_llm_chunk_starts_local_speech_before_the_full_reply_arrives():
     assert manager._tts_stream_started is True
 
 
-def test_sbv2_waits_for_complete_reply_to_preserve_speech_continuity(tmp_path):
+def test_sbv2_enables_low_latency_streaming_translation(tmp_path):
     from collections import deque
 
     manager = type("Manager", (), {})()
@@ -519,14 +519,14 @@ def test_sbv2_waits_for_complete_reply_to_preserve_speech_continuity(tmp_path):
     manager._tts_jp_buffer = "古い"
     manager._tts_jp_stream_done = True
     manager._tts_jp_segment_index = 3
-    manager._tts_segment_inflight = False
+    manager._tts_segment_inflight = True
     manager._tts_stream_buffer = "stale"
     manager._tts_stream_started = True
     manager._uses_bilingual_local_speech = lambda: False
 
     PetManager._begin_streaming_local_tts(manager, True)
 
-    assert manager._tts_stream_enabled is False
+    assert manager._tts_stream_enabled is True
     assert not manager._tts_text_queue
     assert manager._tts_jp_buffer == ""
     assert manager._tts_jp_stream_done is False
@@ -679,33 +679,13 @@ def test_bilingual_speech_buffers_every_complete_japanese_segment():
     manager._llm_bilingual_speech_expected = True
     manager._llm_bilingual_speech_epoch = manager._role_epoch = 2
     manager._tts_jp_buffer = ""
-    starts = []
-    manager._start_next_bilingual_speech = lambda: starts.append(True)
+    manager._start_next_bilingual_speech = lambda: None
 
     PetManager._on_llm_speech_ready(manager, "最初の文です。")
     PetManager._on_llm_speech_ready(manager, "次の文も読みます。")
 
     assert manager._tts_jp_buffer == "最初の文です。次の文も読みます。"
     assert manager._llm_bilingual_speech_received is True
-    assert starts == []
-
-
-def test_bilingual_speech_submits_one_complete_utterance_after_stream_end():
-    manager = type("Manager", (), {})()
-    manager._tts_segment_inflight = False
-    manager._tts_jp_stream_done = True
-    manager._tts_jp_buffer = "最初の文です。次の文も続きます。"
-    manager._role_epoch = 7
-    manager._tts = type("TTS", (), {"is_busy": lambda _self: False})()
-    utterances = []
-    manager._on_tts_translation_done = lambda text: utterances.append(text) or True
-    manager._tts_jp_segment_index = 0
-
-    PetManager._start_next_bilingual_speech(manager)
-
-    assert utterances == ["最初の文です。次の文も続きます。"]
-    assert manager._tts_jp_buffer == ""
-    assert manager._tts_segment_inflight is True
 
 
 def test_adaptive_segment_cut_starts_tiny_and_grows():
@@ -838,7 +818,7 @@ def test_sbv2_synthesizes_translated_japanese_without_reference_audio(tmp_path):
     manager.config = Config(tmp_path / "config.json")
     manager.config.set("tts", "provider", "sbv2")
     manager._role_epoch = manager._tts_epoch = 4
-    manager._tts_segment_inflight = False
+    manager._tts_segment_inflight = True
     manager._char_data = {"noir": type("Character", (), {"voice": {}})()}
     manager._show_pending_tts_text = lambda: None
     manager._project_path = lambda value: value
