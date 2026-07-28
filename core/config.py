@@ -47,7 +47,7 @@ DEFAULTS = {
     },
     "tts": {
         "enabled": True, "model_path": "vendor/gpt_sovits_cpu", "auto_play": True,
-        "speed": 1.0, "volume": 1.0,
+        "speed": 0.85, "volume": 1.0,
         "provider": "sbv2", "base_url": "", "api_key": "",
         "local_api_url": "http://127.0.0.1:9880",
         "local_python": "",
@@ -60,7 +60,7 @@ DEFAULTS = {
         "cpu_threads": 4, "streaming_mode": 3, "fragment_interval": 0.12,
         "sync_text_to_audio": False,
         "bilingual_streaming": True,
-        "low_latency_speed": 1.01,
+        "low_latency_speed": 1.2,
     },
     "sbv2": {
         "project_path": "vendor/style_bert_vits2",
