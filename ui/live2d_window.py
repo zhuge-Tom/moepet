@@ -90,6 +90,14 @@ class Live2DCanvas(QOpenGLWidget):
 
     def initializeGL(self) -> None:
         try:
+            # PyInstaller's frozen module graph leaves Cubism's GL status on
+            # PyOpenGL's checked restore call. The restore itself is required
+            # and succeeds; only the wrapper's stale-error attribution is
+            # wrong. Configure PyOpenGL before importing any of its GL entry
+            # points, while retaining full checks in the development runtime.
+            if getattr(sys, "frozen", False):
+                import OpenGL
+                OpenGL.ERROR_CHECKING = False
             import live2d.v3 as live2d
             from live2d.utils.canvas import Canvas
             global _runtime_initialized
