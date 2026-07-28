@@ -1284,6 +1284,20 @@ def test_live2d_native_event_does_not_reenter_qt_for_unhandled_messages():
     assert Live2DWindow.nativeEvent(object(), b"unrelated_event", None) == (False, 0)
 
 
+def test_live2d_canvas_uses_zero_for_unallocated_gl_handles():
+    from ui.live2d_window import _create_live2d_canvas
+
+    class RuntimeCanvas:
+        def __init__(self):
+            self._canvas_framebuffer = -1
+            self._canvas_texture = -1
+
+    canvas = _create_live2d_canvas(RuntimeCanvas)
+
+    assert canvas._canvas_framebuffer == 0
+    assert canvas._canvas_texture == 0
+
+
 def test_live2d_interactive_point_uses_rendered_alpha():
     from PySide6.QtCore import QPoint
     from ui.live2d_window import Live2DWindow

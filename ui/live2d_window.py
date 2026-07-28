@@ -24,6 +24,20 @@ _GWL_EXSTYLE = -20
 _WS_EX_TRANSPARENT = 0x00000020
 
 
+def _create_live2d_canvas(canvas_type):
+    """Create a live2d-py Canvas with valid unallocated GL handles.
+
+    live2d-py 0.7.0.4 uses ``-1`` sentinels, then passes them to OpenGL delete
+    calls during the first resize. OpenGL reserves zero for "no object";
+    normalising the sentinels prevents a deferred GL_INVALID_VALUE from being
+    reported by the next framebuffer bind.
+    """
+    canvas = canvas_type()
+    canvas._canvas_framebuffer = 0
+    canvas._canvas_texture = 0
+    return canvas
+
+
 def _wav_has_signal(audio_path: str) -> bool:
     """Avoid sending silent PCM to live2d-py's divide-by-zero normalizer."""
     try:
@@ -125,7 +139,7 @@ class Live2DCanvas(QOpenGLWidget):
             self._model.SetAutoBreathEnable(True)
             self._load_model_expressions()
             self.set_expression(self._expression, force=True)
-            self._canvas = Canvas()
+            self._canvas = _create_live2d_canvas(Canvas)
             self.set_rendering_enabled(True)
         except Exception as exc:
             self._model = None
