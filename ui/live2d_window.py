@@ -551,10 +551,18 @@ class Live2DWindow(PetWindow):
         return transparent
 
     def _native_hit_test_result(self) -> int:
-        """Use Qt's DPI-correct global cursor coordinate for the Alpha lookup."""
+        """Answer WM_NCHITTEST without mutating native window state.
+
+        Changing WS_EX_TRANSPARENT while Windows is resolving a hit test can
+        synchronously dispatch more native messages.  In a QOpenGLWidget this
+        may re-enter Qt while it is restoring its framebuffer and make
+        live2d-py's OpenGL error checker raise GL_INVALID_VALUE.  The cursor
+        timer owns style synchronisation; this callback only reads the cached
+        alpha mask.
+        """
         return (
             _HTTRANSPARENT
-            if self._sync_pointer_passthrough(QCursor.pos())
+            if self._should_pass_pointer_through(QCursor.pos())
             else _HTCLIENT
         )
 

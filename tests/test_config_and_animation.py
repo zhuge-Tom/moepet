@@ -1258,7 +1258,7 @@ def test_live2d_pointer_passthrough_keeps_gl_canvas_non_native(monkeypatch):
     assert calls == [(101, True), (101, False)]
 
 
-def test_live2d_native_hit_test_uses_qt_logical_cursor_position(monkeypatch):
+def test_live2d_native_hit_test_does_not_mutate_window_style(monkeypatch):
     import ui.live2d_window as live2d_window_module
     from PySide6.QtCore import QPoint
     from ui.live2d_window import Live2DWindow
@@ -1266,7 +1266,9 @@ def test_live2d_native_hit_test_uses_qt_logical_cursor_position(monkeypatch):
     seen = []
     monkeypatch.setattr(live2d_window_module.QCursor, "pos", lambda: QPoint(101, 101))
     window = type("Window", (), {
-        "_sync_pointer_passthrough": lambda _self, point: seen.append(point) or True,
+        "_should_pass_pointer_through": lambda _self, point: seen.append(point) or True,
+        "_set_native_pointer_passthrough": lambda *_args: (_ for _ in ()).throw(
+            AssertionError("WM_NCHITTEST must not mutate WS_EX_TRANSPARENT")),
     })()
 
     assert Live2DWindow._native_hit_test_result(window) == -1
