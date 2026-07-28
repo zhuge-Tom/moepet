@@ -1324,6 +1324,12 @@ def test_live2d_uses_upstream_canvas_without_overriding_its_fbo_path():
     assert "glGetIntegerv(GL.GL_FRAMEBUFFER_BINDING)" not in source
 
 
+def test_pyinstaller_collects_live2d_framework_shaders():
+    source = Path("Moepet.spec").read_text(encoding="utf-8")
+    assert "collect_data_files" in source
+    assert "v3/FrameworkShaders/*" in source
+
+
 def test_live2d_real_model_renders_a_nontransparent_frame():
     import subprocess
     import sys

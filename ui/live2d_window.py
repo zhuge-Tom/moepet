@@ -43,6 +43,7 @@ def _create_live2d_canvas(canvas_type, qt_functions_provider,
     def draw_on_canvas(on_draw):
         from OpenGL import GL
 
+        target_fbo = int(target_fbo_provider())
         GL.glBindVertexArray(0)
         GL.glBindFramebuffer(GL.GL_FRAMEBUFFER, int(canvas._canvas_framebuffer))
         GL.glViewport(0, 0, int(canvas._width), int(canvas._height))
