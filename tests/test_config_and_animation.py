@@ -1361,7 +1361,7 @@ def test_live2d_consumes_native_errors_before_restoring_qt_framebuffer():
     assert calls.index("consume-error") < calls.index(("qt-fbo", 3))
 
 
-def test_live2d_tolerates_isolated_native_invalid_value_after_drawing():
+def test_live2d_tolerates_drained_native_state_errors_after_drawing():
     from ui.live2d_window import Live2DCanvas
 
     emitted = []
@@ -1370,7 +1370,7 @@ def test_live2d_tolerates_isolated_native_invalid_value_after_drawing():
     class Canvas:
         _moepet_native_errors = ()
         def Draw(self, _callback):
-            self._moepet_native_errors = (1281,)
+            self._moepet_native_errors = (1281, 1282)
 
     widget = type("Widget", (), {
         "_model": object(),
@@ -1403,7 +1403,7 @@ def test_live2d_still_falls_back_for_other_native_gl_errors():
     class Canvas:
         _moepet_native_errors = ()
         def Draw(self, _callback):
-            self._moepet_native_errors = (1282,)
+            self._moepet_native_errors = (1280,)
 
     widget = type("Widget", (), {
         "_model": object(),
@@ -1423,7 +1423,7 @@ def test_live2d_still_falls_back_for_other_native_gl_errors():
 
     assert widget._model is None
     assert rendering == [False]
-    assert emitted and "1282" in emitted[0]
+    assert emitted and "1280" in emitted[0]
 
 
 def test_live2d_interactive_point_uses_rendered_alpha():

@@ -171,11 +171,13 @@ class Live2DCanvas(QOpenGLWidget):
         _clear_pending_gl_errors(self.context().functions())
         self._canvas.Draw(lambda: (live2d.clearBuffer(), self._model.Draw()))
         native_errors = getattr(self._canvas, "_moepet_native_errors", ())
-        # Cubism Native on the packaged Windows runtime can leave one isolated
-        # GL_INVALID_VALUE (1281) after a frame that rendered successfully.
-        # It has already been drained at the native/Qt boundary, so do not
-        # misclassify that known condition as a fatal renderer failure.
-        fatal_errors = tuple(error for error in native_errors if error != 1281)
+        # Cubism Native on the packaged Windows runtime can leave
+        # GL_INVALID_VALUE / GL_INVALID_OPERATION (1281 / 1282) after a frame
+        # that rendered successfully. They have already been drained at the
+        # native/Qt boundary, so do not misclassify them as renderer failures.
+        tolerated_errors = {1281, 1282}
+        fatal_errors = tuple(error for error in native_errors
+                             if error not in tolerated_errors)
         if fatal_errors:
             # A failed Cubism offscreen pass can leave a fully transparent
             # window without raising until the next PyOpenGL call. Treat that
