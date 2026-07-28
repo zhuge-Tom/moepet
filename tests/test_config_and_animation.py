@@ -1315,115 +1315,43 @@ def test_live2d_does_not_override_native_event_during_gl_rendering():
     assert "nativeEvent" not in Live2DWindow.__dict__
 
 
-def test_live2d_clears_stale_qt_gl_errors_before_pyopengl_draw():
-    from ui.live2d_window import _clear_pending_gl_errors
+def test_live2d_uses_upstream_canvas_without_overriding_its_fbo_path():
+    import ui.live2d_window as live2d_window_module
 
-    calls = []
-    errors = iter((1281, 1282, 0))
-    functions = type("Functions", (), {
-        "glGetError": lambda _self: calls.append("get") or next(errors),
-    })()
-
-    assert _clear_pending_gl_errors(functions) == (1281, 1282)
-    assert calls == ["get", "get", "get"]
+    source = Path(live2d_window_module.__file__).read_text(encoding="utf-8")
+    assert "self._canvas = Canvas()" in source
+    assert "_Canvas__draw_on_canvas" not in source
 
 
-def test_live2d_consumes_native_errors_before_restoring_qt_framebuffer():
-    from ui.live2d_window import _draw_live2d_on_canvas
+def test_live2d_real_model_renders_a_nontransparent_frame():
+    import subprocess
+    import sys
 
-    calls = []
-
-    class GL:
-        GL_FRAMEBUFFER = 0x8D40
-        GL_FRAMEBUFFER_BINDING = 0x8CA6
-        GL_VIEWPORT = 0x0BA2
-        def glBindVertexArray(self, _value): calls.append("vao")
-        def glGetIntegerv(self, name):
-            return 3 if name == self.GL_FRAMEBUFFER_BINDING else (0, 0, 540, 660)
-        def glBindFramebuffer(self, _target, value): calls.append(("canvas-fbo", value))
-        def glViewport(self, *_values): calls.append("canvas-viewport")
-
-    errors = iter((1281, 0))
-    qt = type("QtFunctions", (), {
-        "glGetError": lambda _self: calls.append("consume-error") or next(errors),
-        "glBindFramebuffer": lambda _self, _target, value: calls.append(("qt-fbo", value)),
-        "glViewport": lambda _self, *_values: calls.append("qt-viewport"),
-    })()
-    canvas = type("Canvas", (), {
-        "_canvas_framebuffer": 4, "_width": 540, "_height": 660,
-    })()
-
-    drained = _draw_live2d_on_canvas(
-        canvas, lambda: calls.append("model-draw"), GL(), qt)
-
-    assert drained == (1281,)
-    assert calls.index("model-draw") < calls.index("consume-error")
-    assert calls.index("consume-error") < calls.index(("qt-fbo", 3))
-
-
-def test_live2d_tolerates_drained_native_state_errors_after_drawing():
-    from ui.live2d_window import Live2DCanvas
-
-    emitted = []
-    rendering = []
-
-    class Canvas:
-        _moepet_native_errors = ()
-        def Draw(self, _callback):
-            self._moepet_native_errors = (1281, 1282)
-
-    widget = type("Widget", (), {
-        "_model": object(),
-        "_canvas": Canvas(),
-        "context": lambda _self: type("Context", (), {
-            "functions": lambda _self: type("Functions", (), {
-                "glGetError": lambda _self: 0,
-            })(),
-        })(),
-        "set_rendering_enabled": lambda _self, enabled: rendering.append(enabled),
-        "_maybe_cache_framebuffer_alpha": lambda _self: None,
-        "initialization_failed": type("Signal", (), {
-            "emit": lambda _self, message: emitted.append(message),
-        })(),
-    })()
-
-    Live2DCanvas.paintGL(widget)
-
-    assert widget._model is not None
-    assert rendering == []
-    assert emitted == []
-
-
-def test_live2d_still_falls_back_for_other_native_gl_errors():
-    from ui.live2d_window import Live2DCanvas
-
-    emitted = []
-    rendering = []
-
-    class Canvas:
-        _moepet_native_errors = ()
-        def Draw(self, _callback):
-            self._moepet_native_errors = (1280,)
-
-    widget = type("Widget", (), {
-        "_model": object(),
-        "_canvas": Canvas(),
-        "context": lambda _self: type("Context", (), {
-            "functions": lambda _self: type("Functions", (), {
-                "glGetError": lambda _self: 0,
-            })(),
-        })(),
-        "set_rendering_enabled": lambda _self, enabled: rendering.append(enabled),
-        "initialization_failed": type("Signal", (), {
-            "emit": lambda _self, message: emitted.append(message),
-        })(),
-    })()
-
-    Live2DCanvas.paintGL(widget)
-
-    assert widget._model is None
-    assert rendering == [False]
-    assert emitted and "1280" in emitted[0]
+    code = r'''import time
+from pathlib import Path
+from PySide6.QtWidgets import QApplication
+from PySide6.QtGui import QImage
+from ui.live2d_window import Live2DCanvas
+app = QApplication([])
+canvas = Live2DCanvas(Path("characters/noir/sprites/live2d/NOIR/noir.model3.json").resolve())
+canvas.resize(540, 660)
+canvas.show()
+deadline = time.monotonic() + 2.0
+while time.monotonic() < deadline:
+    app.processEvents()
+    time.sleep(0.01)
+image = canvas.grabFramebuffer().convertToFormat(QImage.Format_RGBA8888)
+raw = bytes(image.bits())[:image.sizeInBytes()]
+assert canvas._model is not None
+assert any(raw[3::4])
+canvas.close()
+'''
+    env = os.environ.copy()
+    env.pop("QT_QPA_PLATFORM", None)
+    result = subprocess.run(
+        [sys.executable, "-c", code], cwd=Path.cwd(), env=env,
+        capture_output=True, text=True, timeout=15)
+    assert result.returncode == 0, result.stdout + result.stderr
 
 
 def test_live2d_interactive_point_uses_rendered_alpha():

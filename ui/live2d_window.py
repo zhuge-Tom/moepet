@@ -1,6 +1,7 @@
 """Cubism 3 desktop-pet window backed by the optional live2d-py runtime."""
 
 from pathlib import Path
+import logging
 import math
 import random
 import sys
@@ -19,49 +20,7 @@ _SMILE_MOUTH_LAYER = 1.0
 _PURSED_MOUTH_LAYER = 1.0
 _GWL_EXSTYLE = -20
 _WS_EX_TRANSPARENT = 0x00000020
-
-
-def _clear_pending_gl_errors(functions, limit: int = 16) -> tuple[int, ...]:
-    """Drain errors left by Qt before PyOpenGL starts checked operations."""
-    errors = []
-    for _ in range(limit):
-        error = int(functions.glGetError())
-        if error == 0:
-            break
-        errors.append(error)
-    return tuple(errors)
-
-
-def _draw_live2d_on_canvas(canvas, on_draw, gl, qt_functions) -> tuple[int, ...]:
-    """Run Live2D's offscreen pass without leaking native GL errors to Qt."""
-    gl.glBindVertexArray(0)
-    old_fbo = int(gl.glGetIntegerv(gl.GL_FRAMEBUFFER_BINDING))
-    old_viewport = tuple(int(value) for value in gl.glGetIntegerv(gl.GL_VIEWPORT))
-    gl.glBindFramebuffer(gl.GL_FRAMEBUFFER, int(canvas._canvas_framebuffer))
-    gl.glViewport(0, 0, int(canvas._width), int(canvas._height))
-    on_draw()
-    # Cubism Native can leave a sticky error even after producing a valid
-    # frame. Consume it at the native/Qt boundary so PyOpenGL does not blame
-    # the following framebuffer restore and abort Canvas.Draw.
-    errors = _clear_pending_gl_errors(qt_functions)
-    qt_functions.glBindFramebuffer(gl.GL_FRAMEBUFFER, old_fbo)
-    qt_functions.glViewport(*old_viewport)
-    return errors
-
-
-def _create_live2d_canvas(canvas_type, qt_functions_provider):
-    """Create the premultiplying Canvas with a safe Qt-state restore step."""
-    canvas = canvas_type()
-    canvas._canvas_framebuffer = 0
-    canvas._canvas_texture = 0
-
-    def draw_on_canvas(on_draw):
-        from OpenGL import GL
-        canvas._moepet_native_errors = _draw_live2d_on_canvas(
-            canvas, on_draw, GL, qt_functions_provider())
-
-    canvas._Canvas__draw_on_canvas = draw_on_canvas
-    return canvas
+LOGGER = logging.getLogger(__name__)
 
 
 def _wav_has_signal(audio_path: str) -> bool:
@@ -145,8 +104,7 @@ class Live2DCanvas(QOpenGLWidget):
             self._model.SetAutoBreathEnable(True)
             self._load_model_expressions()
             self.set_expression(self._expression, force=True)
-            self._canvas = _create_live2d_canvas(
-                Canvas, lambda: self.context().functions())
+            self._canvas = Canvas()
             self.set_rendering_enabled(True)
         except Exception as exc:
             self._model = None
@@ -165,30 +123,18 @@ class Live2DCanvas(QOpenGLWidget):
             return
         import live2d.v3 as live2d
 
-        # Qt and PyOpenGL share this context but use different error handling.
-        # A sticky error from Qt's FBO setup would otherwise be attributed to
-        # live2d-py's first checked call and abort an otherwise valid frame.
-        _clear_pending_gl_errors(self.context().functions())
         self._canvas.Draw(lambda: (live2d.clearBuffer(), self._model.Draw()))
-        native_errors = getattr(self._canvas, "_moepet_native_errors", ())
-        # Cubism Native on the packaged Windows runtime can leave
-        # GL_INVALID_VALUE / GL_INVALID_OPERATION (1281 / 1282) after a frame
-        # that rendered successfully. They have already been drained at the
-        # native/Qt boundary, so do not misclassify them as renderer failures.
-        tolerated_errors = {1281, 1282}
-        fatal_errors = tuple(error for error in native_errors
-                             if error not in tolerated_errors)
-        if fatal_errors:
-            # A failed Cubism offscreen pass can leave a fully transparent
-            # window without raising until the next PyOpenGL call. Treat that
-            # as renderer initialization failure so PetManager can replace the
-            # window with the always-available static illustration.
-            self._model = None
-            self.set_rendering_enabled(False)
-            codes = ", ".join(str(code) for code in fatal_errors)
-            self.initialization_failed.emit(
-                f"Live2D OpenGL 渲染失败（{codes}），已自动切换静态立绘。")
-            return
+        if not getattr(self, "_visible_frame_confirmed", False):
+            probes = getattr(self, "_visibility_probe_count", 0) + 1
+            self._visibility_probe_count = probes
+            self._cache_framebuffer_alpha()
+            visible_pixels = sum(1 for value in self._alpha_mask if value)
+            if visible_pixels:
+                self._visible_frame_confirmed = True
+                LOGGER.info("Live2D visible frame ready: %s non-transparent pixels",
+                            visible_pixels)
+            elif probes == 10:
+                LOGGER.error("Live2D produced no visible pixels after %s frames", probes)
         self._maybe_cache_framebuffer_alpha()
 
     def _maybe_cache_framebuffer_alpha(self) -> None:
