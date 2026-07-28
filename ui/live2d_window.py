@@ -21,7 +21,7 @@ _GWL_EXSTYLE = -20
 _WS_EX_TRANSPARENT = 0x00000020
 
 
-def _create_live2d_canvas(canvas_type):
+def _create_live2d_canvas(canvas_type, qt_functions_provider=None):
     """Create a live2d-py Canvas with valid unallocated GL handles.
 
     live2d-py 0.7.0.4 uses ``-1`` sentinels, then passes them to OpenGL delete
@@ -36,11 +36,14 @@ def _create_live2d_canvas(canvas_type):
     # glGetIntegerv. Frozen PyOpenGL builds can marshal that scalar
     # incorrectly, so replace the private draw step with an int-safe adapter.
     canvas._Canvas__draw_on_canvas = lambda on_draw: _draw_live2d_on_canvas(
-        canvas, on_draw)
+        canvas,
+        on_draw,
+        qt_functions=(qt_functions_provider() if qt_functions_provider else None),
+    )
     return canvas
 
 
-def _draw_live2d_on_canvas(canvas, on_draw, gl=None) -> None:
+def _draw_live2d_on_canvas(canvas, on_draw, gl=None, qt_functions=None) -> None:
     """Draw via live2d-py's canvas while restoring Qt GL state with ints."""
     if gl is None:
         from OpenGL import GL as gl
@@ -50,7 +53,13 @@ def _draw_live2d_on_canvas(canvas, on_draw, gl=None) -> None:
     gl.glBindFramebuffer(gl.GL_FRAMEBUFFER, int(canvas._canvas_framebuffer))
     gl.glViewport(0, 0, int(canvas._width), int(canvas._height))
     on_draw()
-    gl.glBindFramebuffer(gl.GL_FRAMEBUFFER, old_fbo)
+    if qt_functions is None:
+        gl.glBindFramebuffer(gl.GL_FRAMEBUFFER, old_fbo)
+    else:
+        # The QOpenGLWidget FBO belongs to Qt. In frozen builds PyOpenGL's
+        # dispatcher cannot reliably bind that Qt-created name, even in the
+        # same current context, so restore it through Qt's own function table.
+        qt_functions.glBindFramebuffer(gl.GL_FRAMEBUFFER, old_fbo)
     gl.glViewport(*old_viewport)
 
 
@@ -160,7 +169,8 @@ class Live2DCanvas(QOpenGLWidget):
             self._model.SetAutoBreathEnable(True)
             self._load_model_expressions()
             self.set_expression(self._expression, force=True)
-            self._canvas = _create_live2d_canvas(Canvas)
+            self._canvas = _create_live2d_canvas(
+                Canvas, lambda: self.context().functions())
             self.set_rendering_enabled(True)
         except Exception as exc:
             self._model = None

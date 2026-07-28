@@ -1364,6 +1364,36 @@ def test_live2d_canvas_restores_qt_fbo_with_plain_python_integers():
     assert viewport_call[1:] == (int, int, int, int)
 
 
+def test_live2d_canvas_restores_qt_fbo_through_qt_functions():
+    import numpy as np
+    from ui.live2d_window import _draw_live2d_on_canvas
+
+    pyopengl_binds = []
+    qt_binds = []
+
+    class GL:
+        GL_FRAMEBUFFER = 0x8D40
+        GL_FRAMEBUFFER_BINDING = 0x8CA6
+        GL_VIEWPORT = 0x0BA2
+        def glBindVertexArray(self, _value): pass
+        def glGetIntegerv(self, name):
+            return np.int32(3) if name == self.GL_FRAMEBUFFER_BINDING else (0, 0, 720, 880)
+        def glBindFramebuffer(self, _target, value): pyopengl_binds.append(value)
+        def glViewport(self, *_values): pass
+
+    qt = type("QtFunctions", (), {
+        "glBindFramebuffer": lambda _self, _target, value: qt_binds.append(value),
+    })()
+    canvas = type("Canvas", (), {
+        "_canvas_framebuffer": 4, "_width": 720, "_height": 880,
+    })()
+
+    _draw_live2d_on_canvas(canvas, lambda: None, GL(), qt)
+
+    assert pyopengl_binds == [4]
+    assert qt_binds == [3]
+
+
 def test_live2d_interactive_point_uses_rendered_alpha():
     from PySide6.QtCore import QPoint
     from ui.live2d_window import Live2DWindow
