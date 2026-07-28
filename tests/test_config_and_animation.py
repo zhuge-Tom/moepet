@@ -1278,20 +1278,37 @@ def test_live2d_clears_stale_qt_gl_errors_before_pyopengl_draw():
     assert calls == ["get", "get", "get"]
 
 
-def test_live2d_draws_directly_into_qt_framebuffer():
-    from ui.live2d_window import _draw_live2d_direct
+def test_live2d_consumes_native_errors_before_restoring_qt_framebuffer():
+    from ui.live2d_window import _draw_live2d_on_canvas
 
     calls = []
-    live2d = type("Runtime", (), {
-        "clearBuffer": lambda _self: calls.append("clear"),
+
+    class GL:
+        GL_FRAMEBUFFER = 0x8D40
+        GL_FRAMEBUFFER_BINDING = 0x8CA6
+        GL_VIEWPORT = 0x0BA2
+        def glBindVertexArray(self, _value): calls.append("vao")
+        def glGetIntegerv(self, name):
+            return 3 if name == self.GL_FRAMEBUFFER_BINDING else (0, 0, 540, 660)
+        def glBindFramebuffer(self, _target, value): calls.append(("canvas-fbo", value))
+        def glViewport(self, *_values): calls.append("canvas-viewport")
+
+    errors = iter((1281, 0))
+    qt = type("QtFunctions", (), {
+        "glGetError": lambda _self: calls.append("consume-error") or next(errors),
+        "glBindFramebuffer": lambda _self, _target, value: calls.append(("qt-fbo", value)),
+        "glViewport": lambda _self, *_values: calls.append("qt-viewport"),
     })()
-    model = type("Model", (), {
-        "Draw": lambda _self: calls.append("draw"),
+    canvas = type("Canvas", (), {
+        "_canvas_framebuffer": 4, "_width": 540, "_height": 660,
     })()
 
-    _draw_live2d_direct(live2d, model)
+    drained = _draw_live2d_on_canvas(
+        canvas, lambda: calls.append("model-draw"), GL(), qt)
 
-    assert calls == ["clear", "draw"]
+    assert drained == (1281,)
+    assert calls.index("model-draw") < calls.index("consume-error")
+    assert calls.index("consume-error") < calls.index(("qt-fbo", 3))
 
 
 def test_live2d_interactive_point_uses_rendered_alpha():

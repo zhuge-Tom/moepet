@@ -32,10 +32,36 @@ def _clear_pending_gl_errors(functions, limit: int = 16) -> tuple[int, ...]:
     return tuple(errors)
 
 
-def _draw_live2d_direct(live2d, model) -> None:
-    """Draw into the framebuffer QOpenGLWidget already bound for paintGL."""
-    live2d.clearBuffer()
-    model.Draw()
+def _draw_live2d_on_canvas(canvas, on_draw, gl, qt_functions) -> tuple[int, ...]:
+    """Run Live2D's offscreen pass without leaking native GL errors to Qt."""
+    gl.glBindVertexArray(0)
+    old_fbo = int(gl.glGetIntegerv(gl.GL_FRAMEBUFFER_BINDING))
+    old_viewport = tuple(int(value) for value in gl.glGetIntegerv(gl.GL_VIEWPORT))
+    gl.glBindFramebuffer(gl.GL_FRAMEBUFFER, int(canvas._canvas_framebuffer))
+    gl.glViewport(0, 0, int(canvas._width), int(canvas._height))
+    on_draw()
+    # Cubism Native can leave a sticky error even after producing a valid
+    # frame. Consume it at the native/Qt boundary so PyOpenGL does not blame
+    # the following framebuffer restore and abort Canvas.Draw.
+    errors = _clear_pending_gl_errors(qt_functions)
+    qt_functions.glBindFramebuffer(gl.GL_FRAMEBUFFER, old_fbo)
+    qt_functions.glViewport(*old_viewport)
+    return errors
+
+
+def _create_live2d_canvas(canvas_type, qt_functions_provider):
+    """Create the premultiplying Canvas with a safe Qt-state restore step."""
+    canvas = canvas_type()
+    canvas._canvas_framebuffer = 0
+    canvas._canvas_texture = 0
+
+    def draw_on_canvas(on_draw):
+        from OpenGL import GL
+        return _draw_live2d_on_canvas(
+            canvas, on_draw, GL, qt_functions_provider())
+
+    canvas._Canvas__draw_on_canvas = draw_on_canvas
+    return canvas
 
 
 def _wav_has_signal(audio_path: str) -> bool:
@@ -106,6 +132,7 @@ class Live2DCanvas(QOpenGLWidget):
     def initializeGL(self) -> None:
         try:
             import live2d.v3 as live2d
+            from live2d.utils.canvas import Canvas
             global _runtime_initialized
             if not _runtime_initialized:
                 live2d.init()
@@ -118,6 +145,8 @@ class Live2DCanvas(QOpenGLWidget):
             self._model.SetAutoBreathEnable(True)
             self._load_model_expressions()
             self.set_expression(self._expression, force=True)
+            self._canvas = _create_live2d_canvas(
+                Canvas, lambda: self.context().functions())
             self.set_rendering_enabled(True)
         except Exception as exc:
             self._model = None
@@ -128,9 +157,11 @@ class Live2DCanvas(QOpenGLWidget):
             self._model.Resize(width, height)
             self._model.SetScale(self._scale)
             self._model.SetOffsetY(self._offset_y)
+        if self._canvas is not None:
+            self._canvas.SetSize(width, height)
 
     def paintGL(self) -> None:
-        if self._model is None:
+        if self._model is None or self._canvas is None:
             return
         import live2d.v3 as live2d
 
@@ -138,7 +169,7 @@ class Live2DCanvas(QOpenGLWidget):
         # A sticky error from Qt's FBO setup would otherwise be attributed to
         # live2d-py's first checked call and abort an otherwise valid frame.
         _clear_pending_gl_errors(self.context().functions())
-        _draw_live2d_direct(live2d, self._model)
+        self._canvas.Draw(lambda: (live2d.clearBuffer(), self._model.Draw()))
         self._maybe_cache_framebuffer_alpha()
 
     def _maybe_cache_framebuffer_alpha(self) -> None:
