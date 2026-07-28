@@ -171,14 +171,19 @@ class Live2DCanvas(QOpenGLWidget):
         _clear_pending_gl_errors(self.context().functions())
         self._canvas.Draw(lambda: (live2d.clearBuffer(), self._model.Draw()))
         native_errors = getattr(self._canvas, "_moepet_native_errors", ())
-        if native_errors:
+        # Cubism Native on the packaged Windows runtime can leave one isolated
+        # GL_INVALID_VALUE (1281) after a frame that rendered successfully.
+        # It has already been drained at the native/Qt boundary, so do not
+        # misclassify that known condition as a fatal renderer failure.
+        fatal_errors = tuple(error for error in native_errors if error != 1281)
+        if fatal_errors:
             # A failed Cubism offscreen pass can leave a fully transparent
             # window without raising until the next PyOpenGL call. Treat that
             # as renderer initialization failure so PetManager can replace the
             # window with the always-available static illustration.
             self._model = None
             self.set_rendering_enabled(False)
-            codes = ", ".join(str(code) for code in native_errors)
+            codes = ", ".join(str(code) for code in fatal_errors)
             self.initialization_failed.emit(
                 f"Live2D OpenGL 渲染失败（{codes}），已自动切换静态立绘。")
             return

@@ -774,7 +774,7 @@ class SettingsWindow(QDialog):
             "<p><b>2. 手动安装</b><br>从 Releases 下载 <code>moepet-sbv2-noir-v1.zip</code>，"
             "解压到项目根目录；解压后应出现 <code>vendor/style_bert_vits2</code>。</p>"
             "<p><b>3. 验证</b><br>关闭本窗口后重新打开配置引导检查状态，再点击“测试并播放语音”。"
-            "首次启动会在后台预热，之后聊天会先生成日文并低延迟朗读。</p>"
+            "首次启动会在后台预热，之后聊天会先生成完整日文，再连续流畅地朗读。</p>"
         )
         dialog = QDialog(self)
         dialog.setWindowTitle("Style-Bert-VITS2 ONNX 配置引导")
@@ -859,7 +859,7 @@ class SettingsWindow(QDialog):
         if self._tts_preview_audio.play(audio_path):
             provider_name = getattr(self, "_tts_preview_provider_name", "TTS")
             self._tts_preview_status.setText(
-                f"{provider_name} 测试成功并已播放。保存设置后，聊天回复会先转为日文再流式合成日语语音。")
+                f"{provider_name} 测试成功并已播放。保存设置后，聊天回复会先转为完整日文，再一次性合成连续语音。")
             self._tts_preview_status.setStyleSheet("color: #71d6bb; font-size: 12px;")
         else:
             self._on_tts_preview_failed("音频已生成，但 Windows 无法播放该文件")

@@ -14,7 +14,7 @@
 - Windows 透明区域鼠标穿透，只有人物实体区域接收点击。
 - 兼容 OpenAI Chat Completions API，可使用 DeepSeek、OpenAI、Ollama 等服务。
 - 默认使用本地 Style-Bert-VITS2 ONNX 日语语音（CPU 即可运行，无需 API Key），
-  流式自适应分段让回复在一秒左右开口；也支持 GPT-SoVITS 与 OpenAI 兼容 TTS。
+  整条回复一次性合成并连续播放，避免分段语音之间出现停顿；也支持 GPT-SoVITS 与 OpenAI 兼容 TTS。
 - 随机识图主动搭话：角色会不定期理解你屏幕上正在做的事，
   像旅伴一样主动开启一段可以顺着聊下去的对话（可关闭）。
 - 语音输入与图像理解内置免费云端预设（SiliconFlow SenseVoiceSmall、
