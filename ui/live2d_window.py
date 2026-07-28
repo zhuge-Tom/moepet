@@ -17,9 +17,6 @@ _runtime_initialized = False
 _PURSED_MOUTH_FORM = 1.0
 _SMILE_MOUTH_LAYER = 1.0
 _PURSED_MOUTH_LAYER = 1.0
-_WM_NCHITTEST = 0x0084
-_HTTRANSPARENT = -1
-_HTCLIENT = 1
 _GWL_EXSTYLE = -20
 _WS_EX_TRANSPARENT = 0x00000020
 
@@ -79,25 +76,6 @@ def _set_native_mouse_transparent(hwnd: int, enabled: bool) -> None:
     if updated != style:
         set_style(int(hwnd), _GWL_EXSTYLE, updated)
 
-
-def _native_hit_test_position(message):
-    """Return the global cursor position for a Windows WM_NCHITTEST message."""
-    try:
-        from ctypes import POINTER, Structure, c_void_p, cast
-        from ctypes.wintypes import HWND, UINT, WPARAM, LPARAM, DWORD, POINT
-
-        class MSG(Structure):
-            _fields_ = [
-                ("hwnd", HWND), ("message", UINT), ("wParam", WPARAM),
-                ("lParam", LPARAM), ("time", DWORD), ("pt", POINT),
-            ]
-
-        msg = cast(c_void_p(message), POINTER(MSG)).contents
-        if msg.message == _WM_NCHITTEST:
-            return QPoint(msg.pt.x, msg.pt.y)
-    except (OSError, TypeError, ValueError):
-        pass
-    return None
 
 class Live2DCanvas(QOpenGLWidget):
     """Transparent OpenGL surface that owns one Cubism 3 model instance."""
@@ -227,22 +205,6 @@ class Live2DCanvas(QOpenGLWidget):
             return 0
         gl_y = height - 1 - y
         return self._alpha_mask[gl_y * width + x]
-
-    def nativeEvent(self, event_type, message):
-        """Let desktop clicks pass through transparent model padding.
-
-        On Windows the native OpenGL child receives hit tests before the
-        top-level pet window, so handling only Live2DWindow is insufficient.
-        """
-        if bytes(event_type) in {b"windows_generic_MSG", b"windows_dispatcher_MSG"}:
-            global_pos = _native_hit_test_position(message)
-            owner = self.window()
-            if (global_pos is not None and
-                    hasattr(owner, "_native_hit_test_result")):
-                return True, owner._native_hit_test_result()
-        # Do not call QOpenGLWidget.nativeEvent here. On Windows that can
-        # synchronously re-enter this override while Qt is binding its FBO.
-        return False, 0
 
     def timerEvent(self, event) -> None:
         if event.timerId() != self._render_timer_id:
@@ -580,31 +542,6 @@ class Live2DWindow(PetWindow):
         transparent = self._should_pass_pointer_through(global_pos)
         self._set_native_pointer_passthrough(transparent)
         return transparent
-
-    def _native_hit_test_result(self) -> int:
-        """Answer WM_NCHITTEST without mutating native window state.
-
-        Changing WS_EX_TRANSPARENT while Windows is resolving a hit test can
-        synchronously dispatch more native messages.  In a QOpenGLWidget this
-        may re-enter Qt while it is restoring its framebuffer and make
-        live2d-py's OpenGL error checker raise GL_INVALID_VALUE.  The cursor
-        timer owns style synchronisation; this callback only reads the cached
-        alpha mask.
-        """
-        return (
-            _HTTRANSPARENT
-            if self._should_pass_pointer_through(QCursor.pos())
-            else _HTCLIENT
-        )
-
-    def nativeEvent(self, event_type, message):
-        """Pass pointer input through the transparent Live2D artboard on Windows."""
-        if bytes(event_type) in {b"windows_generic_MSG", b"windows_dispatcher_MSG"}:
-            if _native_hit_test_position(message) is not None:
-                return True, self._native_hit_test_result()
-        # Returning "unhandled" is the native-event contract. Delegating to
-        # the QWidget base can synchronously re-enter paintGL on Windows.
-        return False, 0
 
     def mouseDoubleClickEvent(self, event) -> None:
         """Only the rendered Live2D body, not its transparent window, opens chat."""

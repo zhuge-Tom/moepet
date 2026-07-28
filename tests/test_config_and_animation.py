@@ -1258,30 +1258,11 @@ def test_live2d_pointer_passthrough_keeps_gl_canvas_non_native(monkeypatch):
     assert calls == [(101, True), (101, False)]
 
 
-def test_live2d_native_hit_test_does_not_mutate_window_style(monkeypatch):
-    import ui.live2d_window as live2d_window_module
-    from PySide6.QtCore import QPoint
-    from ui.live2d_window import Live2DWindow
-
-    seen = []
-    monkeypatch.setattr(live2d_window_module.QCursor, "pos", lambda: QPoint(101, 101))
-    window = type("Window", (), {
-        "_should_pass_pointer_through": lambda _self, point: seen.append(point) or True,
-        "_set_native_pointer_passthrough": lambda *_args: (_ for _ in ()).throw(
-            AssertionError("WM_NCHITTEST must not mutate WS_EX_TRANSPARENT")),
-    })()
-
-    assert Live2DWindow._native_hit_test_result(window) == -1
-    assert seen == [QPoint(101, 101)]
-
-
-def test_live2d_native_event_does_not_reenter_qt_for_unhandled_messages():
+def test_live2d_does_not_override_native_event_during_gl_rendering():
     from ui.live2d_window import Live2DCanvas, Live2DWindow
 
-    # Calling the unbound overrides with a plain object also proves neither
-    # path delegates to a Qt base implementation for an unhandled message.
-    assert Live2DCanvas.nativeEvent(object(), b"unrelated_event", None) == (False, 0)
-    assert Live2DWindow.nativeEvent(object(), b"unrelated_event", None) == (False, 0)
+    assert "nativeEvent" not in Live2DCanvas.__dict__
+    assert "nativeEvent" not in Live2DWindow.__dict__
 
 
 def test_live2d_canvas_uses_zero_for_unallocated_gl_handles():
