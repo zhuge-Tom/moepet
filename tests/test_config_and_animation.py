@@ -1265,20 +1265,6 @@ def test_live2d_does_not_override_native_event_during_gl_rendering():
     assert "nativeEvent" not in Live2DWindow.__dict__
 
 
-def test_live2d_canvas_uses_zero_for_unallocated_gl_handles():
-    from ui.live2d_window import _create_live2d_canvas
-
-    class RuntimeCanvas:
-        def __init__(self):
-            self._canvas_framebuffer = -1
-            self._canvas_texture = -1
-
-    canvas = _create_live2d_canvas(RuntimeCanvas)
-
-    assert canvas._canvas_framebuffer == 0
-    assert canvas._canvas_texture == 0
-
-
 def test_live2d_clears_stale_qt_gl_errors_before_pyopengl_draw():
     from ui.live2d_window import _clear_pending_gl_errors
 
@@ -1292,106 +1278,20 @@ def test_live2d_clears_stale_qt_gl_errors_before_pyopengl_draw():
     assert calls == ["get", "get", "get"]
 
 
-def test_live2d_recreates_canvas_framebuffer_in_current_paint_context():
-    from ui.live2d_window import _ensure_live2d_canvas_framebuffer
-
-    class Canvas:
-        _canvas_framebuffer = 3
-        _canvas_texture = 4
-        sizes = []
-
-        def SetSize(self, width, height):
-            self.sizes.append((width, height))
-            self._canvas_framebuffer = 8
-            self._canvas_texture = 9
-
-    gl = type("GL", (), {"glIsFramebuffer": lambda _self, handle: False})()
-    canvas = Canvas()
-
-    assert _ensure_live2d_canvas_framebuffer(canvas, 720, 880, gl)
-    assert canvas.sizes == [(720, 880)]
-    assert (canvas._canvas_framebuffer, canvas._canvas_texture) == (8, 9)
-
-
-def test_live2d_keeps_canvas_framebuffer_valid_in_current_context():
-    from ui.live2d_window import _ensure_live2d_canvas_framebuffer
-
-    canvas = type("Canvas", (), {
-        "_canvas_framebuffer": 3,
-        "SetSize": lambda *_args: (_ for _ in ()).throw(
-            AssertionError("valid framebuffer must not be recreated")),
-    })()
-    gl = type("GL", (), {"glIsFramebuffer": lambda _self, handle: handle == 3})()
-
-    assert not _ensure_live2d_canvas_framebuffer(canvas, 720, 880, gl)
-
-
-def test_live2d_canvas_restores_qt_fbo_with_plain_python_integers():
-    import numpy as np
-    from ui.live2d_window import _draw_live2d_on_canvas
+def test_live2d_draws_directly_into_qt_framebuffer():
+    from ui.live2d_window import _draw_live2d_direct
 
     calls = []
-
-    class GL:
-        GL_FRAMEBUFFER = 0x8D40
-        GL_FRAMEBUFFER_BINDING = 0x8CA6
-        GL_VIEWPORT = 0x0BA2
-
-        def glBindVertexArray(self, value): calls.append(("vao", value))
-        def glGetIntegerv(self, name):
-            if name == self.GL_FRAMEBUFFER_BINDING:
-                return np.int32(3)
-            return np.array([0, 0, 720, 880], dtype=np.int32)
-        def glBindFramebuffer(self, target, value):
-            calls.append(("fbo", type(value), value))
-        def glViewport(self, *values): calls.append(("viewport", *(type(v) for v in values)))
-
-    canvas = type("Canvas", (), {
-        "_canvas_framebuffer": np.uint32(4),
-        "_width": 720,
-        "_height": 880,
+    live2d = type("Runtime", (), {
+        "clearBuffer": lambda _self: calls.append("clear"),
     })()
-    drawn = []
-
-    _draw_live2d_on_canvas(canvas, lambda: drawn.append(True), GL())
-
-    assert drawn == [True]
-    assert [call for call in calls if call[0] == "fbo"] == [
-        ("fbo", int, 4),
-        ("fbo", int, 3),
-    ]
-    viewport_call = next(call for call in calls if call[0] == "viewport")
-    assert viewport_call[1:] == (int, int, int, int)
-
-
-def test_live2d_canvas_restores_qt_fbo_through_qt_functions():
-    import numpy as np
-    from ui.live2d_window import _draw_live2d_on_canvas
-
-    pyopengl_binds = []
-    qt_binds = []
-
-    class GL:
-        GL_FRAMEBUFFER = 0x8D40
-        GL_FRAMEBUFFER_BINDING = 0x8CA6
-        GL_VIEWPORT = 0x0BA2
-        def glBindVertexArray(self, _value): pass
-        def glGetIntegerv(self, name):
-            return np.int32(3) if name == self.GL_FRAMEBUFFER_BINDING else (0, 0, 720, 880)
-        def glBindFramebuffer(self, _target, value): pyopengl_binds.append(value)
-        def glViewport(self, *_values): pass
-
-    qt = type("QtFunctions", (), {
-        "glBindFramebuffer": lambda _self, _target, value: qt_binds.append(value),
-    })()
-    canvas = type("Canvas", (), {
-        "_canvas_framebuffer": 4, "_width": 720, "_height": 880,
+    model = type("Model", (), {
+        "Draw": lambda _self: calls.append("draw"),
     })()
 
-    _draw_live2d_on_canvas(canvas, lambda: None, GL(), qt)
+    _draw_live2d_direct(live2d, model)
 
-    assert pyopengl_binds == [4]
-    assert qt_binds == [3]
+    assert calls == ["clear", "draw"]
 
 
 def test_live2d_interactive_point_uses_rendered_alpha():

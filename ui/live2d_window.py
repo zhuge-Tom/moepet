@@ -21,48 +21,6 @@ _GWL_EXSTYLE = -20
 _WS_EX_TRANSPARENT = 0x00000020
 
 
-def _create_live2d_canvas(canvas_type, qt_functions_provider=None):
-    """Create a live2d-py Canvas with valid unallocated GL handles.
-
-    live2d-py 0.7.0.4 uses ``-1`` sentinels, then passes them to OpenGL delete
-    calls during the first resize. OpenGL reserves zero for "no object";
-    normalising the sentinels prevents a deferred GL_INVALID_VALUE from being
-    reported by the next framebuffer bind.
-    """
-    canvas = canvas_type()
-    canvas._canvas_framebuffer = 0
-    canvas._canvas_texture = 0
-    # live2d-py restores Qt's FBO using numpy.int32 values returned by
-    # glGetIntegerv. Frozen PyOpenGL builds can marshal that scalar
-    # incorrectly, so replace the private draw step with an int-safe adapter.
-    canvas._Canvas__draw_on_canvas = lambda on_draw: _draw_live2d_on_canvas(
-        canvas,
-        on_draw,
-        qt_functions=(qt_functions_provider() if qt_functions_provider else None),
-    )
-    return canvas
-
-
-def _draw_live2d_on_canvas(canvas, on_draw, gl=None, qt_functions=None) -> None:
-    """Draw via live2d-py's canvas while restoring Qt GL state with ints."""
-    if gl is None:
-        from OpenGL import GL as gl
-    gl.glBindVertexArray(0)
-    old_fbo = int(gl.glGetIntegerv(gl.GL_FRAMEBUFFER_BINDING))
-    old_viewport = tuple(int(value) for value in gl.glGetIntegerv(gl.GL_VIEWPORT))
-    gl.glBindFramebuffer(gl.GL_FRAMEBUFFER, int(canvas._canvas_framebuffer))
-    gl.glViewport(0, 0, int(canvas._width), int(canvas._height))
-    on_draw()
-    if qt_functions is None:
-        gl.glBindFramebuffer(gl.GL_FRAMEBUFFER, old_fbo)
-    else:
-        # The QOpenGLWidget FBO belongs to Qt. In frozen builds PyOpenGL's
-        # dispatcher cannot reliably bind that Qt-created name, even in the
-        # same current context, so restore it through Qt's own function table.
-        qt_functions.glBindFramebuffer(gl.GL_FRAMEBUFFER, old_fbo)
-    gl.glViewport(*old_viewport)
-
-
 def _clear_pending_gl_errors(functions, limit: int = 16) -> tuple[int, ...]:
     """Drain errors left by Qt before PyOpenGL starts checked operations."""
     errors = []
@@ -74,17 +32,10 @@ def _clear_pending_gl_errors(functions, limit: int = 16) -> tuple[int, ...]:
     return tuple(errors)
 
 
-def _ensure_live2d_canvas_framebuffer(canvas, width: int, height: int, gl) -> bool:
-    """Recreate a Canvas FBO when Qt has switched OpenGL contexts."""
-    handle = int(getattr(canvas, "_canvas_framebuffer", 0))
-    if handle > 0 and bool(gl.glIsFramebuffer(handle)):
-        return False
-    # The old names belong to another context. Do not ask the current context
-    # to delete them; zero is the OpenGL-defined no-object handle.
-    canvas._canvas_framebuffer = 0
-    canvas._canvas_texture = 0
-    canvas.SetSize(max(1, int(width)), max(1, int(height)))
-    return True
+def _draw_live2d_direct(live2d, model) -> None:
+    """Draw into the framebuffer QOpenGLWidget already bound for paintGL."""
+    live2d.clearBuffer()
+    model.Draw()
 
 
 def _wav_has_signal(audio_path: str) -> bool:
@@ -155,8 +106,6 @@ class Live2DCanvas(QOpenGLWidget):
     def initializeGL(self) -> None:
         try:
             import live2d.v3 as live2d
-            from live2d.utils.canvas import Canvas
-
             global _runtime_initialized
             if not _runtime_initialized:
                 live2d.init()
@@ -169,8 +118,6 @@ class Live2DCanvas(QOpenGLWidget):
             self._model.SetAutoBreathEnable(True)
             self._load_model_expressions()
             self.set_expression(self._expression, force=True)
-            self._canvas = _create_live2d_canvas(
-                Canvas, lambda: self.context().functions())
             self.set_rendering_enabled(True)
         except Exception as exc:
             self._model = None
@@ -181,11 +128,9 @@ class Live2DCanvas(QOpenGLWidget):
             self._model.Resize(width, height)
             self._model.SetScale(self._scale)
             self._model.SetOffsetY(self._offset_y)
-        if self._canvas is not None:
-            self._canvas.SetSize(width, height)
 
     def paintGL(self) -> None:
-        if self._model is None or self._canvas is None:
+        if self._model is None:
             return
         import live2d.v3 as live2d
 
@@ -193,15 +138,7 @@ class Live2DCanvas(QOpenGLWidget):
         # A sticky error from Qt's FBO setup would otherwise be attributed to
         # live2d-py's first checked call and abort an otherwise valid frame.
         _clear_pending_gl_errors(self.context().functions())
-        from OpenGL import GL
-        pixel_ratio = self.devicePixelRatioF()
-        _ensure_live2d_canvas_framebuffer(
-            self._canvas,
-            round(self.width() * pixel_ratio),
-            round(self.height() * pixel_ratio),
-            GL,
-        )
-        self._canvas.Draw(lambda: (live2d.clearBuffer(), self._model.Draw()))
+        _draw_live2d_direct(live2d, self._model)
         self._maybe_cache_framebuffer_alpha()
 
     def _maybe_cache_framebuffer_alpha(self) -> None:
